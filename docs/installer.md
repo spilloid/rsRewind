@@ -1,17 +1,15 @@
 # MSI installer
 
-**Status: design only.** `installer/rsrewind.wxs` is a real WiX v5 source file, but it has **not
-yet been built, installed, upgraded, or uninstalled on a real machine**. Nothing in this document
-describes verified behavior — it describes the intended design, written so it can be checked off
-piece by piece once someone actually runs `wix build` against it and tests the result. Until that
-happens, treat every claim below as "intended," not "proven."
+**Status: MSI builds with WiX 5.0.2 from a signed EXE.** `installer/rsrewind.wxs` has not yet
+been installed, upgraded, or uninstalled on a real machine. The install behavior below is
+intended design until those checks are done.
 
 ## Toolchain
 
-[WiX Toolset](https://wixtoolset.org/) v5 (or v6), installed as a .NET global tool:
+[WiX Toolset](https://wixtoolset.org/) v5, installed as a .NET global tool:
 
 ```powershell
-dotnet tool install --global wix
+dotnet tool install --global wix --version 5.0.2
 ```
 
 Build locally (once a real `dist\rsrewind.exe` exists — see `.github/workflows/release.yml` for
@@ -124,6 +122,6 @@ Tracked here explicitly rather than left implicit:
   purpose-built wizard; the `StartAtLogin` feature toggle described above requires command-line
   `ADDLOCAL`/`REMOVE` until a real UI sequence exists.
 - **No Windows App Runtime chaining**, per the section above.
-- **No code signing applied yet** to the MSI itself — see `.github/workflows/release.yml`, which
-  is written to sign the MSI as part of a release but will fail closed (refuse to publish) until
-  this repository's signing identity is actually configured.
+- **No released MSI has been signed yet.** The `release` GitHub environment now has a
+  repository-specific signing identity. `.github/workflows/release.yml` signs and verifies the
+  MSI before publishing, and fails closed if signing does not work.

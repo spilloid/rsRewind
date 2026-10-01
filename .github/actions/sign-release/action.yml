@@ -1,20 +1,11 @@
 name: Sign and verify release files
 description: >
   Signs release files with Azure Artifact Signing, then fails unless every verified file carries
-  a valid, timestamped signature from the expected certificate profile. Adapted from the pattern
-  used in spoolsmith's `.github/actions/sign-release` (see docs/code-signing notes referenced
-  from CLAUDE.md): sign between build and package, fail closed, verify with
-  Get-AuthenticodeSignature rather than SignTool (SignTool ships with the Windows SDK and is not
-  present on a stock runner by default). Unlike spoolsmith's version, verification is inline here
-  rather than delegating to a repo script, since rsRewind has no such script yet -- this keeps
-  the action self-contained.
+  a valid, timestamped signature from the expected certificate profile. The action signs
+  between build and package, then verifies with Get-AuthenticodeSignature.
 
-  STATUS: written against the documented Azure Artifact Signing / azure/artifact-signing-action
-  contract, but has never been run for this repository -- no signing account, certificate
-  profile, app registration or federated credential has been created for rsRewind yet. See
-  release.yml's "Check release tag and signing configuration" step, which fails closed with a
-  clear message if the inputs below are not actually configured as repository/environment
-  secrets and variables.
+  The release environment is provisioned by scripts/setup-signing.ps1. The release workflow
+  checks its configuration before calling this action.
 
 inputs:
   client-id:
@@ -55,7 +46,7 @@ runs:
   using: composite
   steps:
     # Needs `id-token: write` and `environment: release` on the calling job for the OIDC exchange
-    # to present the right subject -- see docs/code-signing notes referenced from CLAUDE.md.
+    # to present the right subject -- see docs/code-signing.md.
     - name: Azure login
       uses: azure/login@v3
       with:

@@ -2,10 +2,8 @@
 <!--
   rsRewind MSI installer source, WiX Toolset v5/v6 syntax.
 
-  STATUS: written as a design artifact per docs/installer.md. It has NOT been built or tested
-  against a real `wix build` invocation, has not been installed, upgraded, or uninstalled on a
-  real machine, and has not been exercised against a real signed payload. Treat everything here
-  as a starting point for that verification work, not as proof the installer works.
+  STATUS: builds with WiX 5.0.2 from a signed EXE, but has not been installed, upgraded,
+  or uninstalled on a real machine. See docs/installer.md.
 
   Design (see docs/installer.md for the full rationale):
     - Per-user install, no admin rights required: %LOCALAPPDATA%\Programs\rsRewind.
@@ -72,7 +70,7 @@
       <Directory Id="ApplicationProgramsFolder" Name="rsRewind" />
     </StandardDirectory>
 
-    <Feature Id="Application" Title="rsRewind" Level="1" Absent="disallow">
+    <Feature Id="Application" Title="rsRewind" Level="1" AllowAbsent="no">
       <ComponentGroupRef Id="ApplicationComponents" />
       <ComponentRef Id="ApplicationShortcut" />
     </Feature>
@@ -92,10 +90,10 @@
         <File Id="RsRewindExeFile" Source="$(var.SourceDir)\rsrewind.exe" KeyPath="yes" />
       </Component>
       <Component Id="LicenseFile" Guid="*">
-        <File Id="LicenseFileFile" Source="..\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+        <File Id="LicenseFileFile" Source="LICENSE" Name="LICENSE.txt" KeyPath="yes" />
       </Component>
       <Component Id="ReadmeFile" Guid="*">
-        <File Id="ReadmeFileFile" Source="..\README.md" Name="README.md" KeyPath="yes" />
+        <File Id="ReadmeFileFile" Source="README.md" Name="README.md" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 

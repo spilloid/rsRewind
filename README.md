@@ -22,7 +22,7 @@ Do not install this on a system where you would be upset by:
 - a recorder that captures continuously, including things you forgot were on screen;
 - a prerelease bug losing or corrupting your recorded history;
 - data stored **unencrypted at rest** (see [Privacy and data handling](#privacy-and-data-handling));
-- no code-signed binaries yet (see [`docs/code-signing` plan](#building-from-source)).
+- no published code-signed binaries yet (see [code signing](docs/code-signing.md)).
 
 See `ROADMAP.md` for what "done" looks like at each version, and `docs/dev-process.md` for how
 this repository's AI-assisted implementation work is reviewed before it ships.
