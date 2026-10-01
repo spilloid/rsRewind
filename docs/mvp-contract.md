@@ -212,3 +212,59 @@ reactor's own bootstrap shows the install prompt; the CLI must keep working rega
 the brief: search box top, recent/day list left, results center, selected screenshot
 (`Image` with `EncodedImage` WebP bytes) + timestamp/app/title/OCR text right. All data through
 `rsrewind-query` on `spawn_background`; no SQL in the UI crate.
+
+## Review amendments (2026-09-30, after Astra ultra review of aa2c5e7)
+
+The review (`docs/reviews/2026-09-30-astra-ultra-mvp.md`) found the contract itself wrong in
+several places. These amendments supersede the sections above where they conflict. Finding
+numbers refer to that review. Every fix lands with a test that fails on aa2c5e7.
+
+**Identity (F1).** `visual_states` and `events` ids are never reused (`INTEGER PRIMARY KEY
+AUTOINCREMENT`). Schema v1 is unreleased, so `0001_initial.sql` is edited in place rather than
+migrated. OCR results are saved against `(id, media_path)`: if the row's path differs, the result
+is discarded.
+
+**Privacy provenance (F2, F4, F21).** A frame may be stored only if the windows on its monitor
+were checked *both before and after* the frame was taken and both checks allowed it, and the
+frame was produced after the most recent excluded check on that monitor (frames carry their WGC
+capture time; a monitor's "clear since" mark is reset by any exclusion). Any check that cannot be
+completed (enumeration failure, unreadable process, title read error while title rules exist,
+idle query failure) is treated as excluded for that tick: **unknown means do not record.**
+Subject attribution uses window identity (HWND), not process id.
+
+**Pause is a barrier (F3).** `set_control` increments a control generation. The recorder writes
+the generation it has applied into its heartbeat after the tick that read it finishes. `rsrewind
+pause` waits (bounded, ~3 s) for that acknowledgement before saying "Paused"; if the recorder is
+running and does not acknowledge, it says so instead of claiming success.
+
+**Deletion is a lifecycle, not a row delete (F5–F8, F22).**
+- `delete_range` records a durable *deletion fence* (since, until). Inserting a visual state or
+  observation whose time falls inside any fence fails with a typed error; the writer then removes
+  the file it wrote. Fences older than the retention horizon may be pruned.
+- Deleting history also removes `windows` and `applications` rows no longer referenced by any
+  event, and writers drop their caches when told (`StorageError` / feedback).
+- SQLite `secure_delete` is on, FTS5 `secure-delete` is on, and a deletion ends with
+  `wal_checkpoint(TRUNCATE)`. Pre-migration backups are not rewritten; `forget` names any that
+  exist so the user can remove them.
+- Media files are recognised by name (timestamp + monitor) as well as by row: deletion and
+  retention also remove unreferenced media files in their time range, and stale temp files.
+- Size retention counts the database, its WAL and every file under `media/`, not only live rows.
+
+**Writer feedback (F9, F12).** Capture treats a frame as persisted only after the persist thread
+acknowledges the commit; failures and invalidations (deletion, retention, fences) flow back and
+force a re-persist of the current picture. A frame that changed but could not be queued stays
+dirty until it is stored. Maintenance (retention) runs on a timer, not only when jobs arrive.
+
+**Paths (F10).** Stored media paths must start with `media/`; no component of the resolved path
+may be a reparse point (symlink/junction).
+
+**Query semantics (F17–F20).** `at(t)` returns the observation covering `t` (latest start among
+covering spans), else the nearest earlier one. Timeline paging uses a `(started_at, event_id)`
+cursor. Search time filters match any observation span of a visual state that overlaps the range,
+and the reported time/app/window come from the earliest *matching* observation. Multi-statement
+reads (`visual_detail`) run in one read transaction.
+
+**Smaller (F11, F13–F16).** The capture probe dumps pixels only with an explicit flag. WGC
+delivery keeps a timestamp high-water mark across both drain paths. Console close/logoff waits
+(bounded) for shutdown to finish. The GDI test helper validates dimensions. Backup destinations are
+reserved exclusively before the backup is written.
