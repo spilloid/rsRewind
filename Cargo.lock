@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-capture"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rsrewind-core",
  "thiserror",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "serde",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-daemon"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "rsrewind-capture",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-ocr"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rsrewind-core",
  "thiserror",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-query"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "rsrewind-core",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-storage"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "rsrewind-core",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-ui"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "rsrewind-core",

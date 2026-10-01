@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-10-01
+
 The MVP bootstrap: the architecture contract and the shared domain-type foundation the rest of
 the implementation is built against. No end-user-facing functionality ships yet — the
 `rsrewind.exe` binary is currently a placeholder.
