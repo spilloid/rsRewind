@@ -181,7 +181,9 @@ pub struct OcrBlock {
 pub enum CaptureState {
     Recording,
     /// `until` is `None` for an indefinite pause that only `resume` ends.
-    Paused { until: Option<Timestamp> },
+    Paused {
+        until: Option<Timestamp>,
+    },
     Error,
     Stopped,
 }
@@ -223,7 +225,9 @@ mod tests {
             width: 2,
             height: 2,
             stride: 12,
-            pixels: vec![1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0],
+            pixels: vec![
+                1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 0, 0, 0, 0,
+            ],
         };
         assert!(frame.is_well_formed());
         let packed = frame.into_packed();
@@ -250,7 +254,10 @@ mod tests {
         let until = Timestamp(1_000);
         let paused = CaptureState::Paused { until: Some(until) };
         assert_eq!(paused.effective_at(Timestamp(999)), paused);
-        assert_eq!(paused.effective_at(Timestamp(1_000)), CaptureState::Recording);
+        assert_eq!(
+            paused.effective_at(Timestamp(1_000)),
+            CaptureState::Recording
+        );
         let indefinite = CaptureState::Paused { until: None };
         assert_eq!(indefinite.effective_at(Timestamp(i64::MAX)), indefinite);
     }
