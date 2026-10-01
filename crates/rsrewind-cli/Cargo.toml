@@ -1,5 +1,6 @@
 [package]
 name = "rsrewind-cli"
+description = "rsrewind.exe: recorder, search and diagnostics command line"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 rsrewind-core.workspace = true
+chrono.workspace = true
 
 [lints]
 workspace = true

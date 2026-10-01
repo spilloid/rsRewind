@@ -1,1 +1,3 @@
-//! Placeholder: implemented in the MVP bootstrap (see docs/mvp-contract.md).
+//! Recorder orchestration: capture -> change detection -> storage -> OCR.
+
+pub mod plan;
