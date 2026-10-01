@@ -1,13 +1,8 @@
 # Release pipeline for rsRewind.
 #
-# STATUS: this workflow has never actually run. No Azure Artifact Signing account, certificate
-# profile, app registration, federated credential, or `release` GitHub environment has been set
-# up for this repository yet -- see .github/actions/sign-release and CLAUDE.md. The signing-
-# configuration check below is written to FAIL CLOSED (refuse to publish an unsigned release)
-# the first time this runs for real, rather than silently falling back to shipping unsigned
-# binaries. TODO (orchestrator / whoever sets up releases first): run the equivalent of
-# spoolsmith's scripts/setup-signing.ps1 for this repository before the first real tag push, or
-# this workflow will simply fail at "Check release signing configuration" every time.
+# Signing uses rsRewind's release environment and dedicated Azure OIDC identity. Re-run
+# scripts/setup-signing.ps1 if the profile or environment configuration needs repair.
+# The configuration check fails closed so a real release cannot publish unsigned binaries.
 #
 # `workflow_dispatch` defaults to `dry_run: true` specifically so this can be exercised (build,
 # package, MSI) without accidentally trying to sign or publish anything real.
@@ -51,10 +46,8 @@ jobs:
     name: Build release binary
     needs: test
     runs-on: windows-latest
-    # The OIDC subject for a job in an environment is
-    # repo:<org>/<repo>:environment:release whatever triggered it, so one federated credential
-    # (once configured) covers both a tag push and a manual workflow_dispatch -- see
-    # spoolsmith/docs/code-signing.md's "The OIDC subject" section, which this is adapted from.
+    # The federated credential trusts the release environment's OIDC subject for both
+    # tag pushes and manual runs. See docs/code-signing.md.
     environment: release
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -95,8 +88,7 @@ jobs:
       # Fails before anything is signed or published rather than part-way through, and refuses
       # to fall back to an unsigned release if signing is misconfigured -- unless this is an
       # explicit dry run, in which case it warns and continues with an unsigned build that is
-      # never published. Modeled on spoolsmith's release.yml "Check release tag and signing
-      # configuration" step.
+      # never published.
       - name: Check release signing configuration
         id: signcheck
         shell: pwsh
@@ -181,7 +173,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install WiX
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version 5.0.2
 
       - name: Build MSI
         shell: pwsh
@@ -189,9 +181,10 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
+          $productVersion = $env:VERSION -replace '-dryrun$', ''
           wix build installer\rsrewind.wxs `
-            -d ProductVersion=$env:VERSION `
-            -d SourceDir=payload `
+            -d ProductVersion=$productVersion `
+            -d SourceDir=payload\dist `
             -o "out\rsrewind-v$env:VERSION-x64.msi"
 
       - name: Check MSI signing configuration
@@ -308,7 +301,7 @@ jobs:
         run: sha256sum --check --strict SHA256SUMS.txt
       # Release notes come from the matching CHANGELOG.md section, so the notes are written once,
       # reviewed in a PR, and cannot drift from what the tag contains.
-      # Published as a prerelease first, deliberately -- see spoolsmith/docs/code-signing.md's
+      # Published as a prerelease first -- see docs/code-signing.md's
       # "First signed release" account: verify the public assets (checksum + Authenticode
       # signature, downloaded unauthenticated as a user would) before manually promoting to
       # Latest. A failure between publish and that manual verification leaves a prerelease to
