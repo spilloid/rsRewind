@@ -142,17 +142,19 @@ fn reject_reparse_points(data: &DataDir, path: &Path, relative: &str) -> Result<
 }
 
 pub(crate) fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        // FILE_ATTRIBUTE_REPARSE_POINT: junctions and every other reparse tag.
-        const REPARSE_POINT: u32 = 0x400;
-        return metadata.file_attributes() & REPARSE_POINT != 0;
-    }
-    #[cfg(not(windows))]
+    metadata.file_type().is_symlink() || has_reparse_attribute(metadata)
+}
+
+/// FILE_ATTRIBUTE_REPARSE_POINT: junctions and every other reparse tag.
+#[cfg(windows)]
+fn has_reparse_attribute(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn has_reparse_attribute(_: &std::fs::Metadata) -> bool {
     false
 }
 
