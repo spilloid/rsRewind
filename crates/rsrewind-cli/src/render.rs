@@ -31,7 +31,8 @@ pub fn search_hits(hits: &[SearchHit]) -> String {
             "Window: {}",
             hit.window_title.as_deref().unwrap_or("(unknown)")
         );
-        let _ = writeln!(out, "\"...{}...\"", one_line(&hit.snippet));
+        // The query layer's snippet already carries its own `…` where it was cut.
+        let _ = writeln!(out, "\"{}\"", one_line(&hit.snippet));
         let _ = writeln!(
             out,
             "Image: {}  (id {})",
@@ -111,7 +112,7 @@ mod tests {
         assert!(text.contains("Application: Teams\n"), "{text}");
         assert!(text.contains("Window: Jonathan Redmon\n"), "{text}");
         assert!(
-            text.contains("\"...TAP should work once [Web] Sign-In is enabled...\""),
+            text.contains("\"…TAP should work once [Web] Sign-In is enabled…\""),
             "{text}"
         );
         assert!(text.contains("(id 7)"), "{text}");

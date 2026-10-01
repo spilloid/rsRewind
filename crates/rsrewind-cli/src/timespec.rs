@@ -4,7 +4,7 @@
 //! - `2026-09-30 14:32`, `2026-09-30 14:32:05`, `2026-09-30T14:32`, `2026-09-30`
 //! - RFC 3339 with an explicit offset: `2026-09-30T14:32:00Z`
 //! - `today`, `yesterday` (local midnight), `now`
-//! - relative durations back from now: `15m`, `2h`, `3d`, `1w`
+//! - relative durations back from now: `30s`, `15m`, `2h`, `3d`, `1w`
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rsrewind_core::Timestamp;
@@ -48,7 +48,7 @@ pub fn parse_timespec(input: &str, now: DateTime<Local>) -> Result<Timestamp, St
     }
 
     Err(format!(
-        "could not understand time '{input}'. Try '2026-09-30 14:32', 'today', 'yesterday', '2h' or '3d'."
+        "could not understand time '{input}'. Try '2026-09-30 14:32', 'today', 'yesterday', '30s', '2h' or '3d'."
     ))
 }
 
@@ -59,6 +59,7 @@ fn relative_millis(text: &str) -> Option<i64> {
         return None;
     }
     let scale: i64 = match unit {
+        's' => 1_000,
         'm' => 60_000,
         'h' => 3_600_000,
         'd' => 86_400_000,
@@ -143,6 +144,10 @@ mod tests {
         assert_eq!(
             parse_timespec("2h", now()),
             Ok(n.saturating_sub_millis(7_200_000))
+        );
+        assert_eq!(
+            parse_timespec("30s", now()),
+            Ok(n.saturating_sub_millis(30_000))
         );
         assert_eq!(
             parse_timespec("15m", now()),

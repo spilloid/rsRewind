@@ -1,5 +1,6 @@
 [package]
 name = "rsrewind-daemon"
+description = "rsRewind recorder: capture -> change detection -> storage -> OCR"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,20 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
+rsrewind-storage.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+rsrewind-capture.workspace = true
+rsrewind-ocr.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+] }
 
 [lints]
 workspace = true

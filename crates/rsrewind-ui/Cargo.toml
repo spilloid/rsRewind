@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
+anyhow.workspace = true
 
 [lints]
 workspace = true
