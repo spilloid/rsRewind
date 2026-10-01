@@ -22,5 +22,5 @@ pub use event::{
 pub use ids::{ApplicationId, EventId, MonitorId, SessionId, VisualStateId, WindowId};
 pub use paths::DataDir;
 pub use privacy::{PrivacyDecision, PrivacyPolicy};
-pub use search::{SearchHit, SearchQuery, TimelineEntry, VisualDetail};
+pub use search::{SearchHit, SearchQuery, TimelineCursor, TimelineEntry, VisualDetail};
 pub use time::Timestamp;

@@ -442,7 +442,10 @@ fn open_query(data: &DataDir) -> Result<QueryDb> {
 fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
     let since =
         timespec::parse_timespec(since, chrono::Local::now()).map_err(anyhow::Error::msg)?;
-    let until = Timestamp::now().saturating_add_millis(60_000);
+    // The deletion fence covers [since, until): anything the recorder captured up to now is
+    // refused if it is still queued. Padding `until` into the future would make the recorder drop
+    // frames it is entitled to keep, so it is exactly "now" (+1 ms for the exclusive bound).
+    let until = Timestamp::now().saturating_add_millis(1);
     if !yes {
         println!(
             "This permanently deletes everything recorded since {since}: screenshots, recognized text and window history.\nRun again with --yes to delete."
@@ -457,6 +460,26 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
         report.visual_states_deleted,
         human_bytes(report.bytes_freed)
     );
+    if report.orphan_files_deleted > 0 {
+        println!(
+            "Also removed {} leftover screenshot files that had no database entry.",
+            report.orphan_files_deleted
+        );
+    }
+    if !report.wal_truncated {
+        println!(
+            "Note: the database's write-ahead log could not be cleared while another process was reading it; deleted pages are overwritten, and the log is cleared at the next checkpoint."
+        );
+    }
+    if !report.backups_surviving.is_empty() {
+        println!(
+            "Note: {} database backup(s) made before a schema upgrade still exist and may contain this history. They are never deleted automatically; remove them yourself if you want them gone:",
+            report.backups_surviving.len()
+        );
+        for backup in &report.backups_surviving {
+            println!("  {backup}");
+        }
+    }
     for error in &report.file_errors {
         eprintln!("could not delete {error}");
     }

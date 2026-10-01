@@ -3,7 +3,7 @@
 //! These serialize to the CLI's JSON output, which is an integration surface for scripts and
 //! agents: add fields freely, but do not rename or remove them without a version bump.
 
-use crate::{OcrBlock, Timestamp, VisualStateId};
+use crate::{EventId, OcrBlock, Timestamp, VisualStateId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +42,8 @@ pub struct SearchHit {
 /// One row of the recent-history / timeline view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineEntry {
+    /// The observation event this row is. With `started_at` it forms the paging cursor.
+    pub event_id: EventId,
     pub visual_state_id: VisualStateId,
     pub started_at: Timestamp,
     pub ended_at: Timestamp,
@@ -50,6 +52,24 @@ pub struct TimelineEntry {
     pub monitor: Option<String>,
     pub media_path: String,
     pub ocr_status: String,
+}
+
+impl TimelineEntry {
+    /// The cursor that resumes a newest-first listing just after this entry.
+    pub fn cursor(&self) -> TimelineCursor {
+        TimelineCursor {
+            started_at: self.started_at,
+            event_id: self.event_id,
+        }
+    }
+}
+
+/// Position in the newest-first timeline: `(started_at, event_id)` sorts totally even when several
+/// monitors share a tick timestamp, so paging by it never skips or repeats an observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCursor {
+    pub started_at: Timestamp,
+    pub event_id: EventId,
 }
 
 /// Everything known about one visual state, for the detail pane.

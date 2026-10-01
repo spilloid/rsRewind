@@ -81,7 +81,7 @@ impl Fixture {
         let id = self.store.insert_visual_state(&NewVisualState {
             monitor,
             captured_at: Timestamp(at),
-            media_path: relative,
+            media_path: relative.clone(),
             width: 8,
             height: 4,
             byte_size: bytes.len() as u64,
@@ -103,7 +103,7 @@ impl Fixture {
                     line_index: i as u32,
                 })
                 .collect();
-            self.store.save_ocr(id, &blocks, "test", 3)?;
+            self.store.save_ocr(id, &relative, &blocks, "test", 3)?;
         }
         Ok(id)
     }
@@ -388,7 +388,7 @@ fn title_filter_is_a_unicode_case_insensitive_substring() -> TestResult {
 }
 
 #[test]
-fn time_filters_use_the_first_observation() -> TestResult {
+fn time_filters_match_any_observation_that_overlaps_the_range() -> TestResult {
     let s = standard()?;
     let db = s.f.query()?;
     let between = |since: Option<i64>, until: Option<i64>| -> Result<Vec<_>, QueryError> {
@@ -403,7 +403,15 @@ fn time_filters_use_the_first_observation() -> TestResult {
             .map(|h| h.visual_state_id)
             .collect())
     };
-    assert_eq!(between(Some(T0 + 30_000), None)?, vec![s.sheet]);
+    // `sync` was first seen at T0 but is on screen again at T0+4min, so it is part of that range;
+    // its reported time is the earliest observation that matches the range.
+    assert_eq!(between(Some(T0 + 30_000), None)?, vec![s.sheet, s.sync]);
+    let hits = db.search(&SearchQuery {
+        text: "budget".into(),
+        since: Some(Timestamp(T0 + 30_000)),
+        ..SearchQuery::default()
+    })?;
+    assert_eq!(hits[1].timestamp, Timestamp(T0 + 4 * MIN));
     assert_eq!(between(None, Some(T0 + 30_000))?, vec![s.sync]);
     assert_eq!(
         between(Some(T0), Some(T0))?,
@@ -480,7 +488,7 @@ fn recent_is_newest_first_and_pages() -> TestResult {
     assert_eq!(all[3].application.as_deref(), Some("Code.exe"));
     assert!(Path::new(&all[0].media_path).is_file());
 
-    let page = db.recent(2, Some(all[1].started_at))?;
+    let page = db.recent(2, Some(all[1].cursor()))?;
     let page_ids: Vec<_> = page.iter().map(|e| e.visual_state_id).collect();
     assert_eq!(page_ids, vec![s.chat, s.code]);
     Ok(())
@@ -554,5 +562,164 @@ fn deleted_history_disappears_from_queries() -> TestResult {
     assert_eq!(search(&db, "budget")?, vec![s.sync]);
     assert!(search(&db, "spreadsheet")?.is_empty());
     assert_eq!(db.visual_detail(s.sheet)?, None);
+    Ok(())
+}
+
+/// Observes `id` with a huge gap allowance so two calls make one long span.
+fn span(
+    f: &Fixture,
+    m: MonitorId,
+    id: VisualStateId,
+    app: &str,
+    title: &str,
+    from: i64,
+    to: i64,
+) -> Fallible<()> {
+    let application = f.store.upsert_application(
+        &ApplicationContext {
+            process_name: app.into(),
+            exe_path: None,
+        },
+        Timestamp(from),
+    )?;
+    let window = f.store.upsert_window(
+        application,
+        &WindowContext {
+            title: title.into(),
+            class_name: None,
+        },
+        Timestamp(from),
+    )?;
+    for at in [from, to] {
+        f.store.record_observation(&Observation {
+            session: f.session,
+            monitor: m,
+            visual_state: id,
+            application: Some(application),
+            window: Some(window),
+            at: Timestamp(at),
+            max_gap_ms: i64::MAX / 4,
+        })?;
+    }
+    Ok(())
+}
+
+#[test]
+fn search_finds_a_state_that_was_on_screen_during_the_range() -> TestResult {
+    let mut f = Fixture::new()?;
+    let m1 = f.m1;
+    let id = f.screen(m1, T0, "a.exe", "doc", &["steady words"])?;
+    // One continuous observation 09:00-10:00 (an hour).
+    span(&f, m1, id, "a.exe", "doc", T0, T0 + 60 * MIN)?;
+    let db = f.query()?;
+    let found = |since: i64, until: Option<i64>| -> Result<usize, QueryError> {
+        Ok(db
+            .search(&SearchQuery {
+                text: "steady".into(),
+                since: Some(Timestamp(since)),
+                until: until.map(Timestamp),
+                ..SearchQuery::default()
+            })?
+            .len())
+    };
+    assert_eq!(found(T0 + 30 * MIN, None)?, 1, "since inside the span");
+    assert_eq!(
+        found(T0 + 10 * MIN, Some(T0 + 20 * MIN))?,
+        1,
+        "range inside the span"
+    );
+    assert_eq!(found(T0 + 61 * MIN, None)?, 0, "after the span ended");
+    Ok(())
+}
+
+#[test]
+fn search_reports_context_from_the_matching_observation() -> TestResult {
+    let mut f = Fixture::new()?;
+    let m1 = f.m1;
+    let id = f.screen(m1, T0, "mail.exe", "Inbox", &["shared screen text"])?;
+    // The same pixels are later on screen under another application.
+    span(
+        &f,
+        m1,
+        id,
+        "chat.exe",
+        "Team chat",
+        T0 + 10 * MIN,
+        T0 + 20 * MIN,
+    )?;
+    let db = f.query()?;
+    let hits = db.search(&SearchQuery {
+        text: "shared".into(),
+        application: Some("chat".into()),
+        ..SearchQuery::default()
+    })?;
+    assert_eq!(
+        hits.len(),
+        1,
+        "a later observation's application must match"
+    );
+    assert_eq!(hits[0].application.as_deref(), Some("chat.exe"));
+    assert_eq!(hits[0].window_title.as_deref(), Some("Team chat"));
+    assert_eq!(hits[0].timestamp, Timestamp(T0 + 10 * MIN));
+    let title = db.search(&SearchQuery {
+        text: "shared".into(),
+        title_contains: Some("inbox".into()),
+        ..SearchQuery::default()
+    })?;
+    assert_eq!(title[0].application.as_deref(), Some("mail.exe"));
+    Ok(())
+}
+
+#[test]
+fn at_finds_a_long_span_buried_under_many_short_events() -> TestResult {
+    let mut f = Fixture::new()?;
+    let (m1, m2) = (f.m1, f.m2);
+    let long = f.screen(m1, T0, "a.exe", "long", &["long"])?;
+    span(&f, m1, long, "a.exe", "long", T0, T0 + 10 * MIN)?;
+    for i in 0..70i64 {
+        f.screen(
+            m2,
+            T0 + 10_000 + i * 1_000,
+            "b.exe",
+            &format!("flicker {i}"),
+            &[],
+        )?;
+    }
+    let db = f.query()?;
+    let hit = db
+        .at(Timestamp(T0 + 5 * MIN))?
+        .ok_or("nothing at T0+5min")?;
+    assert_eq!(hit.visual_state_id, long);
+    Ok(())
+}
+
+#[test]
+fn paging_never_skips_observations_that_share_a_timestamp() -> TestResult {
+    let mut f = Fixture::new()?;
+    let (m1, m2) = (f.m1, f.m2);
+    // Two monitors observed on the same tick, twice.
+    let ids = [
+        f.screen(m1, T0, "a.exe", "one", &[])?,
+        f.screen(m2, T0, "b.exe", "two", &[])?,
+        f.screen(m1, T0 + MIN, "a.exe", "three", &[])?,
+        f.screen(m2, T0 + MIN, "b.exe", "four", &[])?,
+    ];
+    let db = f.query()?;
+    let full = db.recent(50, None)?;
+    assert_eq!(full.len(), 4);
+    let mut paged = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = db.recent(1, cursor)?;
+        let Some(last) = page.last() else { break };
+        cursor = Some(last.cursor());
+        paged.extend(page);
+    }
+    assert_eq!(
+        paged, full,
+        "one-at-a-time paging must equal the full listing"
+    );
+    let seen: std::collections::BTreeSet<_> = paged.iter().map(|e| e.visual_state_id).collect();
+    assert_eq!(seen, ids.iter().copied().collect());
     Ok(())
 }
