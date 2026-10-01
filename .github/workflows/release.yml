@@ -1,0 +1,317 @@
+# Release pipeline for rsRewind.
+#
+# STATUS: this workflow has never actually run. No Azure Artifact Signing account, certificate
+# profile, app registration, federated credential, or `release` GitHub environment has been set
+# up for this repository yet -- see .github/actions/sign-release and CLAUDE.md. The signing-
+# configuration check below is written to FAIL CLOSED (refuse to publish an unsigned release)
+# the first time this runs for real, rather than silently falling back to shipping unsigned
+# binaries. TODO (orchestrator / whoever sets up releases first): run the equivalent of
+# spoolsmith's scripts/setup-signing.ps1 for this repository before the first real tag push, or
+# this workflow will simply fail at "Check release signing configuration" every time.
+#
+# `workflow_dispatch` defaults to `dry_run: true` specifically so this can be exercised (build,
+# package, MSI) without accidentally trying to sign or publish anything real.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Build and upload artifacts to this run only -- never publish a release, and never hard-fail
+          just because signing isn't configured yet (a real tag push always hard-fails on that).
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  # Required for the OIDC federated credential the signing step authenticates with.
+  id-token: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+
+  build:
+    name: Build release binary
+    needs: test
+    runs-on: windows-latest
+    # The OIDC subject for a job in an environment is
+    # repo:<org>/<repo>:environment:release whatever triggered it, so one federated credential
+    # (once configured) covers both a tag push and a manual workflow_dispatch -- see
+    # spoolsmith/docs/code-signing.md's "The OIDC subject" section, which this is adapted from.
+    environment: release
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Determine version and dry-run mode
+        id: meta
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            if ('${{ github.ref_name }}' -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+              throw "Invalid tag: ${{ github.ref_name }}"
+            }
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+            $dryRun = $false
+          } else {
+            $version = '0.0.0-dryrun'
+            $dryRun = '${{ inputs.dry_run }}' -ne 'false'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "dry_run=$($dryRun.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --workspace --release --target x86_64-pc-windows-msvc
+
+      - name: Stage binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\rsrewind.exe dist\rsrewind.exe
+
+      # Fails before anything is signed or published rather than part-way through, and refuses
+      # to fall back to an unsigned release if signing is misconfigured -- unless this is an
+      # explicit dry run, in which case it warns and continues with an unsigned build that is
+      # never published. Modeled on spoolsmith's release.yml "Check release tag and signing
+      # configuration" step.
+      - name: Check release signing configuration
+        id: signcheck
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ steps.meta.outputs.dry_run }}
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $missing = @('SIGNING_ENDPOINT', 'SIGNING_ACCOUNT', 'SIGNING_PROFILE',
+                       'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID') |
+            Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) {
+            if ($env:DRY_RUN -eq 'true') {
+              Write-Warning ("Code signing is not configured; missing: $($missing -join ', '). " +
+                "dry_run=true: continuing with an UNSIGNED build, uploaded to this run only. " +
+                "No release will be published.")
+              "configured=false" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Error ("Code signing is not configured; missing: $($missing -join ', '). " +
+                "Set them under Settings > Environments > release. See .github/actions/sign-release " +
+                "and CLAUDE.md. Releases are never published unsigned. Re-run as workflow_dispatch " +
+                "with dry_run=true to build without publishing or requiring signing.")
+              exit 1
+            }
+          } else {
+            "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Sign and verify binary
+        if: steps.signcheck.outputs.configured == 'true'
+        uses: ./.github/actions/sign-release
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+          expected-subject: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
+          folder: dist
+          filter: exe
+          verify: dist/rsrewind.exe
+
+      # Zipped after the signing step so the published SHA-256 covers the signed binary, not a
+      # pre-signature snapshot of it.
+      - name: Package zip
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          $zipName = "rsrewind-v$env:VERSION-windows-amd64.zip"
+          Compress-Archive -Path dist\rsrewind.exe, LICENSE, README.md -DestinationPath $zipName
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-payload
+          path: |
+            dist/rsrewind.exe
+            rsrewind-v*.zip
+          if-no-files-found: error
+
+  # Builds the MSI from the (possibly-signed) binary above, signs the MSI itself with the same
+  # profile, and uploads it. Never rebuilds or re-signs the EXE -- the MSI packages exactly the
+  # file that came out of the `build` job.
+  msi:
+    name: Build and sign MSI
+    needs: build
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
+          path: payload
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install WiX
+        run: dotnet tool install --global wix
+
+      - name: Build MSI
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          wix build installer\rsrewind.wxs `
+            -d ProductVersion=$env:VERSION `
+            -d SourceDir=payload `
+            -o "out\rsrewind-v$env:VERSION-x64.msi"
+
+      - name: Check MSI signing configuration
+        id: signcheck
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ needs.build.outputs.dry_run }}
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $missing = @('SIGNING_ENDPOINT', 'SIGNING_ACCOUNT', 'SIGNING_PROFILE',
+                       'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID') |
+            Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) {
+            if ($env:DRY_RUN -eq 'true') {
+              Write-Warning ("Code signing is not configured; missing: $($missing -join ', '). " +
+                "dry_run=true: continuing with an UNSIGNED MSI, uploaded to this run only.")
+              "configured=false" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Error ("Code signing is not configured; missing: $($missing -join ', '). " +
+                "Releases are never published unsigned.")
+              exit 1
+            }
+          } else {
+            "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Sign and verify MSI
+        if: steps.signcheck.outputs.configured == 'true'
+        uses: ./.github/actions/sign-release
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+          expected-subject: ${{ vars.SIGNING_EXPECTED_SUBJECT }}
+          folder: out
+          filter: msi
+          verify: out/rsrewind-v${{ needs.build.outputs.version }}-x64.msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi-payload
+          path: out/*.msi
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums
+    needs: [build, msi]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
+          path: payload
+      - uses: actions/download-artifact@v4
+        with:
+          name: msi-payload
+          path: payload
+      - name: Write SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          Set-Location payload
+          $files = Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.msi' }
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($f.Name)"
+          }
+          $lines | Out-File -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: payload/SHA256SUMS.txt
+          if-no-files-found: error
+
+  # Publishes everything together, only after every file is built, signed (or explicitly
+  # dry-run-unsigned) and checksummed. A failure anywhere above attaches nothing to a release,
+  # and a dry run never reaches this job at all.
+  publish:
+    name: Publish GitHub Release (prerelease)
+    needs: [build, msi, checksums]
+    if: needs.build.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: msi-payload
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: assets
+      - name: Verify checksums before publishing
+        working-directory: assets
+        run: sha256sum --check --strict SHA256SUMS.txt
+      # Published as a prerelease first, deliberately -- see spoolsmith/docs/code-signing.md's
+      # "First signed release" account: verify the public assets (checksum + Authenticode
+      # signature, downloaded unauthenticated as a user would) before manually promoting to
+      # Latest. A failure between publish and that manual verification leaves a prerelease to
+      # fix and re-run, never a broken "Latest".
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            assets/*.zip assets/*.msi assets/SHA256SUMS.txt \
+            --title "v$VERSION" \
+            --prerelease \
+            --notes "Automated release build. Verify the downloaded assets (SHA256SUMS.txt plus each file's Authenticode signature) before promoting this release to Latest."

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  rsRewind MSI installer source, WiX Toolset v5/v6 syntax.
+
+  STATUS: written as a design artifact per docs/installer.md. It has NOT been built or tested
+  against a real `wix build` invocation, has not been installed, upgraded, or uninstalled on a
+  real machine, and has not been exercised against a real signed payload. Treat everything here
+  as a starting point for that verification work, not as proof the installer works.
+
+  Design (see docs/installer.md for the full rationale):
+    - Per-user install, no admin rights required: %LOCALAPPDATA%\Programs\rsRewind.
+    - Start Menu shortcut, launching `rsrewind.exe ui`.
+    - Optional startup registration (HKCU Run -> `rsrewind.exe start`), modeled as a separate,
+      not-installed-by-default MSI feature (StartAtLogin) rather than a UI checkbox, since no
+      custom installer UI has been built yet.
+    - MajorUpgrade with version-based upgrade/downgrade handling.
+    - Uninstall removes the installed program files and shortcuts only. It deliberately does NOT
+      touch %LOCALAPPDATA%\rsRewind (the data directory: config.toml, recall.db, media\, logs\,
+      backups\, models\) — see PRIVACY.md and docs/installer.md. Deleting recorded history is a
+      separate, explicit action (`rsrewind purge`, not yet implemented), never an MSI side effect.
+    - Windows App Runtime 2.4 is NOT bundled or checked by this .wxs yet — see docs/installer.md
+      for the two options under consideration (a WiX Burn bundle EXE that chains the redistributable,
+      or a launch-time detect-and-prompt inside rsrewind-ui itself, which the UI crate's design
+      already allows for per docs/mvp-contract.md's rsrewind-ui section).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef ProductVersion?>
+  <?define ProductVersion="0.1.0"?>
+  <?endif?>
+
+  <?ifndef SourceDir?>
+  <?define SourceDir="dist"?>
+  <?endif?>
+
+  <!--
+    Fixed for the lifetime of the product so MajorUpgrade can find prior installs across
+    versions. Generated once (uuid4) for this repository; never regenerate it.
+  -->
+  <?ifndef UpgradeCode?>
+  <?define UpgradeCode="269482AF-5A5D-4F35-B1B2-76EE09A72583"?>
+  <?endif?>
+
+  <Package Name="rsRewind"
+           Manufacturer="Joseph Spillers"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="$(var.UpgradeCode)"
+           Scope="perUser"
+           Language="1033">
+
+    <SummaryInformation Description="rsRewind: local-first Windows screen-history recorder" />
+
+    <!--
+      A newer-or-equal already-installed version blocks a downgrade install outright, rather than
+      silently reinstalling older files over newer ones. A same-or-older installed version is
+      upgraded in place (old files removed, new files installed) before the new files are laid
+      down, per RemoveExistingProducts scheduling below.
+    -->
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of rsRewind is already installed. Uninstall it first if you need to downgrade." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Per-user install root: %LOCALAPPDATA%\Programs\rsRewind -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="APPDIR" Name="rsRewind" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Per-user Start Menu, redirected automatically by Windows Installer for Scope="perUser". -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="rsRewind" />
+    </StandardDirectory>
+
+    <Feature Id="Application" Title="rsRewind" Level="1" Absent="disallow">
+      <ComponentGroupRef Id="ApplicationComponents" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+
+    <!--
+      Not installed by default (Level="1000" is MSI's standard idiom for "present in the feature
+      tree but not selected unless explicitly requested"). No installer UI currently exposes a
+      checkbox for this; see docs/installer.md. Toggle it today via, e.g.,
+      `msiexec /i rsrewind.msi ADDLOCAL=Application,StartAtLogin`.
+    -->
+    <Feature Id="StartAtLogin" Title="Start rsRewind at sign-in" Level="1000">
+      <ComponentRef Id="StartupRegistration" />
+    </Feature>
+
+    <ComponentGroup Id="ApplicationComponents" Directory="APPDIR">
+      <Component Id="RsRewindExe" Guid="*">
+        <File Id="RsRewindExeFile" Source="$(var.SourceDir)\rsrewind.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseFile" Guid="*">
+        <File Id="LicenseFileFile" Source="..\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="ReadmeFile" Guid="*">
+        <File Id="ReadmeFileFile" Source="..\README.md" Name="README.md" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="ApplicationShortcut" Directory="ApplicationProgramsFolder" Guid="*">
+      <Shortcut Id="ApplicationStartMenuShortcut"
+                Name="rsRewind"
+                Description="Browse and search your rsRewind screen history"
+                Target="[APPDIR]rsrewind.exe"
+                Arguments="ui"
+                WorkingDirectory="APPDIR" />
+      <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+      <!--
+        Per-user components conventionally key off a registry value rather than the shortcut
+        file itself, so Windows Installer can tell this component is "installed for this user"
+        even though nothing under APPDIR belongs to it.
+      -->
+      <RegistryValue Root="HKCU"
+                      Key="Software\rsRewind"
+                      Name="StartMenuShortcutInstalled"
+                      Type="integer"
+                      Value="1"
+                      KeyPath="yes" />
+    </Component>
+
+    <!--
+      `rsrewind.exe start` spawns the recorder detached with no visible console window (see
+      README.md's CLI command table / docs/mvp-contract.md's rsrewind-cli section); this just
+      arranges for that command to run once at sign-in, exactly as if the user typed it.
+    -->
+    <Component Id="StartupRegistration" Directory="APPDIR" Guid="*">
+      <RegistryValue Root="HKCU"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                      Name="rsRewind"
+                      Type="string"
+                      Value="&quot;[APPDIR]rsrewind.exe&quot; start"
+                      KeyPath="yes" />
+    </Component>
+
+  </Package>
+</Wix>
