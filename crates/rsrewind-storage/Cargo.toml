@@ -1,5 +1,6 @@
 [package]
 name = "rsrewind-storage"
+description = "SQLite schema, migrations, writes, retention and WebP media for rsRewind"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,16 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
+rusqlite = { workspace = true, features = ["backup"] }
+webp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

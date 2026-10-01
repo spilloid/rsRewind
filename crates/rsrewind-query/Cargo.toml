@@ -1,5 +1,6 @@
 [package]
 name = "rsrewind-query"
+description = "Read-only search and timeline queries over the rsRewind database"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,15 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
+rsrewind-storage.workspace = true
+rusqlite = { workspace = true, features = ["functions"] }
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
