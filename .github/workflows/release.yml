@@ -285,6 +285,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # First, so its workspace clean-up cannot touch the artifacts downloaded below. Only
+      # CHANGELOG.md is needed: the release notes are cut from it.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           name: release-payload
@@ -300,11 +306,41 @@ jobs:
       - name: Verify checksums before publishing
         working-directory: assets
         run: sha256sum --check --strict SHA256SUMS.txt
+      # Release notes come from the matching CHANGELOG.md section, so the notes are written once,
+      # reviewed in a PR, and cannot drift from what the tag contains.
       # Published as a prerelease first, deliberately -- see spoolsmith/docs/code-signing.md's
       # "First signed release" account: verify the public assets (checksum + Authenticode
       # signature, downloaded unauthenticated as a user would) before manually promoting to
       # Latest. A failure between publish and that manual verification leaves a prerelease to
       # fix and re-run, never a broken "Latest".
+      - name: Write release notes
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { exit }
+            on { print }
+          ' CHANGELOG.md > section.md
+          if [ ! -s section.md ]; then
+            echo "No CHANGELOG.md section for $VERSION" >&2
+            exit 1
+          fi
+          {
+            echo "# rsRewind v$VERSION"
+            echo
+            cat section.md
+            echo "---"
+            echo
+            echo "**Verify before use:** every file is listed in \`SHA256SUMS.txt\` (check with"
+            echo "\`Get-FileHash <file> -Algorithm SHA256\`) and the executable and MSI carry an"
+            echo "Authenticode signature. This is a pre-release; it is promoted to Latest by hand after"
+            echo "the published assets are verified."
+            echo
+            echo "Everything stays on your machine: rsRewind has no cloud component and no network"
+            echo "code in the recording path. Privacy policy: [PRIVACY.md](https://github.com/${{ github.repository }}/blob/v$VERSION/PRIVACY.md)."
+          } > notes.md
       - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,6 +348,6 @@ jobs:
         run: |
           gh release create "v$VERSION" \
             assets/*.zip assets/*.msi assets/SHA256SUMS.txt \
-            --title "v$VERSION" \
+            --title "rsRewind v$VERSION" \
             --prerelease \
-            --notes "Automated release build. Verify the downloaded assets (SHA256SUMS.txt plus each file's Authenticode signature) before promoting this release to Latest."
+            --notes-file notes.md
