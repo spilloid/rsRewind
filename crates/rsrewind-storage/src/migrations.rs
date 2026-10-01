@@ -104,6 +104,20 @@ pub(crate) fn migrate(
         });
     }
 
+    // One migrator at a time across processes: the version re-check, the backup and the
+    // migration are one critical section, so a late process cannot back up an already-migrated
+    // database under the old version's name.
+    let _lock = MigrationLock::acquire(data)?;
+    let from = current_version(conn)?;
+    let pending: Vec<&Migration> = migrations.iter().filter(|m| m.version > from).collect();
+    if pending.is_empty() {
+        return Ok(MigrationOutcome {
+            from,
+            to: from,
+            backup: None,
+        });
+    }
+
     let backup = if has_user_objects(conn)? {
         Some(backup_database(conn, data, from)?)
     } else {
@@ -161,19 +175,32 @@ fn backup_database(conn: &Connection, data: &DataDir, from: u32) -> Result<PathB
     std::fs::create_dir_all(&dir)
         .map_err(|e| StorageError::BackupFailed(format!("{}: {e}", dir.display())))?;
     let stamp = Timestamp::now().to_utc().format("%Y%m%dT%H%M%S%3fZ");
-    let mut path = dir.join(format!("recall-v{from}-{stamp}.db"));
+    // Reserve the name atomically (create_new) so no other process can pick it too; the backup
+    // API then fills the empty file we own instead of overwriting someone else's backup.
     let mut attempt = 1;
-    // Never write into an existing file: the backup API would overwrite an older backup.
-    while path.exists() {
-        attempt += 1;
-        if attempt > 100 {
-            return Err(StorageError::BackupFailed(format!(
-                "no free backup file name in {}",
-                dir.display()
-            )));
+    let path = loop {
+        let candidate = if attempt == 1 {
+            dir.join(format!("recall-v{from}-{stamp}.db"))
+        } else {
+            dir.join(format!("recall-v{from}-{stamp}-{attempt}.db"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => break candidate,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => {
+                attempt += 1;
+            }
+            Err(e) => {
+                return Err(StorageError::BackupFailed(format!(
+                    "{}: {e}",
+                    candidate.display()
+                )));
+            }
         }
-        path = dir.join(format!("recall-v{from}-{stamp}-{attempt}.db"));
-    }
+    };
     if let Err(error) = conn.backup(rusqlite::MAIN_DB, &path, None) {
         // A partial copy is worse than none: it looks like a backup but is not one.
         let _ = std::fs::remove_file(&path);
@@ -184,4 +211,59 @@ fn backup_database(conn: &Connection, data: &DataDir, from: u32) -> Result<PathB
     }
     tracing::info!(from, path = %path.display(), "backed up database before migrating");
     Ok(path)
+}
+
+/// An exclusive lock file in `backups/` serialising migrations across processes. A lock older than
+/// [`STALE_LOCK`] belongs to a crashed migrator and is taken over.
+struct MigrationLock(PathBuf);
+
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(120);
+
+impl MigrationLock {
+    fn acquire(data: &DataDir) -> Result<Self> {
+        let dir = data.backups();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| StorageError::BackupFailed(format!("{}: {e}", dir.display())))?;
+        let path = dir.join(".migrate.lock");
+        let started = std::time::Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > STALE_LOCK);
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                    } else if started.elapsed() > LOCK_WAIT {
+                        return Err(StorageError::BackupFailed(format!(
+                            "another process holds the migration lock {}",
+                            path.display()
+                        )));
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+                Err(e) => {
+                    return Err(StorageError::BackupFailed(format!(
+                        "{}: {e}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for MigrationLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }

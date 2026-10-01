@@ -1,4 +1,4 @@
--- Schema v1. Timestamps are INTEGER unix milliseconds UTC. Media paths are relative to the data
+-- Schema v1 (still unreleased, so edited in place after the 2026-09-30 review). Timestamps are INTEGER unix milliseconds UTC. Media paths are relative to the data
 -- root with forward slashes. This file is embedded in the binary and must never change once
 -- released: schema changes go in a new numbered migration.
 
@@ -23,7 +23,7 @@ CREATE TABLE monitors (
 );
 
 CREATE TABLE applications (
-    id            INTEGER PRIMARY KEY,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
     process_name  TEXT NOT NULL UNIQUE COLLATE NOCASE,
     exe_path      TEXT,
     first_seen_at INTEGER NOT NULL
@@ -32,7 +32,7 @@ CREATE TABLE applications (
 -- NULL class_name values are distinct under UNIQUE, so the store looks windows up with `IS`
 -- inside an IMMEDIATE transaction instead of relying on this constraint alone.
 CREATE TABLE windows (
-    id             INTEGER PRIMARY KEY,
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
     application_id INTEGER NOT NULL REFERENCES applications (id),
     title          TEXT NOT NULL,
     class_name     TEXT,
@@ -41,7 +41,7 @@ CREATE TABLE windows (
 );
 
 CREATE TABLE visual_states (
-    id          INTEGER PRIMARY KEY,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
     monitor_id  INTEGER NOT NULL REFERENCES monitors (id),
     captured_at INTEGER NOT NULL,
     media_path  TEXT NOT NULL UNIQUE,
@@ -57,7 +57,7 @@ CREATE TABLE visual_states (
 );
 
 CREATE TABLE events (
-    id              INTEGER PRIMARY KEY,
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id      INTEGER NOT NULL REFERENCES sessions (id),
     kind            TEXT NOT NULL,
     started_at      INTEGER NOT NULL,
@@ -82,9 +82,24 @@ CREATE TABLE ocr_blocks (
     confidence      REAL
 );
 
+-- AUTOINCREMENT on visual_states/events/windows/applications: ids are never reused, so a cached id
+-- held by a writer or the OCR worker can never silently point at a different row after deletion.
 -- rowid = visual_states.id. Maintained by the store (save_ocr / deletes), not by triggers, so a
 -- visual state has exactly one FTS row holding all of its lines joined by '\n'.
 CREATE VIRTUAL TABLE ocr_fts USING fts5 (text, tokenize = 'unicode61 remove_diacritics 2');
+
+-- Deleted FTS rows must not linger in the index's shadow tables (persisted in ocr_fts_config).
+INSERT INTO ocr_fts (ocr_fts, rank) VALUES ('secure-delete', 1);
+
+-- A forgotten interval. Writers refuse to store a state or observation inside any fence, so a
+-- frame that was queued or encoding while `forget` ran cannot recreate the history it erased.
+CREATE TABLE deletion_fences (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    since      INTEGER NOT NULL,
+    until      INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    CHECK (until > since)
+);
 
 CREATE TABLE control (
     id           INTEGER PRIMARY KEY CHECK (id = 1),

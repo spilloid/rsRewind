@@ -108,8 +108,52 @@ pub fn resolve_media_path(data: &DataDir, relative: &str) -> Result<PathBuf> {
     if relative.contains('\\') {
         return Err(StorageError::InvalidMediaPath(relative.to_owned()));
     }
-    data.resolve_media(relative)
-        .ok_or_else(|| StorageError::InvalidMediaPath(relative.to_owned()))
+    let path = data
+        .resolve_media(relative)
+        .ok_or_else(|| StorageError::InvalidMediaPath(relative.to_owned()))?;
+    reject_reparse_points(data, &path, relative)?;
+    Ok(path)
+}
+
+/// Fails if any existing component of `path` below the data root is a symlink or junction.
+///
+/// A lexically clean `media/link/x.webp` is still outside the data folder when `link` points
+/// elsewhere. The root itself may legitimately be a link (history on another drive), so only the
+/// components under it are checked. This is check-then-use: it stops tampered rows and stray
+/// links, not an attacker racing the recorder, who already runs as this user.
+fn reject_reparse_points(data: &DataDir, path: &Path, relative: &str) -> Result<()> {
+    let Ok(below_root) = path.strip_prefix(data.root()) else {
+        return Err(StorageError::InvalidMediaPath(relative.to_owned()));
+    };
+    let mut current = data.root().to_path_buf();
+    for component in below_root.components() {
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if is_reparse_point(&metadata) => {
+                return Err(StorageError::InvalidMediaPath(relative.to_owned()));
+            }
+            Ok(_) => {}
+            // Nothing exists from here down yet; there is nothing to follow.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(StorageError::io(&current, e)),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT: junctions and every other reparse tag.
+        const REPARSE_POINT: u32 = 0x400;
+        return metadata.file_attributes() & REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn temp_path(parent: &Path, destination: &Path) -> PathBuf {

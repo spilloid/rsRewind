@@ -130,6 +130,15 @@ impl Fixture {
         Ok((app, window))
     }
 
+    /// The stored relative media path of a visual state (what an OCR job carries).
+    fn rel(&self, id: VisualStateId) -> rusqlite::Result<String> {
+        self.store.conn().query_row(
+            "SELECT media_path FROM visual_states WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+    }
+
     fn count(&self, sql: &str) -> rusqlite::Result<i64> {
         self.store.conn().query_row(sql, [], |row| row.get(0))
     }
@@ -639,8 +648,12 @@ fn pending_ocr_is_oldest_first_and_skips_disabled() -> TestResult {
     assert_eq!((pending[0].width, pending[0].height), (16, 8));
     assert_eq!(f.store.next_pending_ocr(1)?.len(), 1);
 
-    f.store
-        .mark_ocr(early, OcrStatus::Failed, Some("engine exploded"))?;
+    f.store.mark_ocr(
+        early,
+        &f.rel(early)?,
+        OcrStatus::Failed,
+        Some("engine exploded"),
+    )?;
     assert_eq!(
         f.store
             .next_pending_ocr(10)?
@@ -650,7 +663,8 @@ fn pending_ocr_is_oldest_first_and_skips_disabled() -> TestResult {
         vec![late]
     );
     assert!(matches!(
-        f.store.mark_ocr(VisualStateId(999), OcrStatus::Done, None),
+        f.store
+            .mark_ocr(VisualStateId(999), "media/none.webp", OcrStatus::Done, None),
         Err(StorageError::VisualStateMissing(_))
     ));
 
@@ -676,6 +690,7 @@ fn fts5_is_available_and_save_ocr_is_atomic_and_replaces() -> TestResult {
     let other = f.persist(f.monitor, T0 + 1, 2)?;
     f.store.save_ocr(
         vs,
+        &f.rel(vs)?,
         &[
             block("quarterly budget review", 1),
             block("Café meeting notes", 0),
@@ -683,8 +698,13 @@ fn fts5_is_available_and_save_ocr_is_atomic_and_replaces() -> TestResult {
         "test-engine",
         42,
     )?;
-    f.store
-        .save_ocr(other, &[block("unrelated words", 0)], "test-engine", 7)?;
+    f.store.save_ocr(
+        other,
+        &f.rel(other)?,
+        &[block("unrelated words", 0)],
+        "test-engine",
+        7,
+    )?;
 
     assert_eq!(fts_matches(&f.store, "budget")?, vec![vs.0]);
     assert_eq!(
@@ -716,7 +736,7 @@ fn fts5_is_available_and_save_ocr_is_atomic_and_replaces() -> TestResult {
 
     // Re-running OCR replaces, never accumulates.
     f.store
-        .save_ocr(vs, &[block("rewritten", 0)], "test-engine", 1)?;
+        .save_ocr(vs, &f.rel(vs)?, &[block("rewritten", 0)], "test-engine", 1)?;
     assert!(fts_matches(&f.store, "budget")?.is_empty());
     assert_eq!(fts_matches(&f.store, "rewritten")?, vec![vs.0]);
     assert_eq!(
@@ -729,8 +749,13 @@ fn fts5_is_available_and_save_ocr_is_atomic_and_replaces() -> TestResult {
     assert_eq!(f.count("SELECT COUNT(*) FROM ocr_fts")?, 2);
 
     assert!(matches!(
-        f.store
-            .save_ocr(VisualStateId(9_999), &[block("x", 0)], "e", 1),
+        f.store.save_ocr(
+            VisualStateId(9_999),
+            "media/none.webp",
+            &[block("x", 0)],
+            "e",
+            1
+        ),
         Err(StorageError::VisualStateMissing(_))
     ));
     assert_eq!(f.count("SELECT COUNT(*) FROM ocr_fts")?, 2);
@@ -792,11 +817,21 @@ fn delete_range_removes_rows_fts_and_files_but_keeps_shared_states() -> TestResu
     let inside = f.persist(f.monitor, T0 + 20_000, 2)?;
     let outside = f.persist(f.monitor, T0 + 100_000, 3)?;
     f.store
-        .save_ocr(shared, &[block("shared words", 0)], "e", 1)?;
-    f.store
-        .save_ocr(inside, &[block("password hunter2", 0)], "e", 1)?;
-    f.store
-        .save_ocr(outside, &[block("later words", 0)], "e", 1)?;
+        .save_ocr(shared, &f.rel(shared)?, &[block("shared words", 0)], "e", 1)?;
+    f.store.save_ocr(
+        inside,
+        &f.rel(inside)?,
+        &[block("password hunter2", 0)],
+        "e",
+        1,
+    )?;
+    f.store.save_ocr(
+        outside,
+        &f.rel(outside)?,
+        &[block("later words", 0)],
+        "e",
+        1,
+    )?;
     let shared_early = f.observe(f.monitor, shared, Some(win), T0)?;
     let inside_event = f.observe(f.monitor, inside, Some(win), T0 + 20_000)?;
     let shared_late = f.observe(f.monitor, shared, Some(win), T0 + 90_000)?;
@@ -905,7 +940,11 @@ fn retention_by_size_removes_oldest_first() -> TestResult {
         ids.push(vs);
     }
     let stats = f.store.stats()?;
-    let live_db = f.store.live_db_bytes()?;
+    // Checkpoint so the WAL does not count; every byte of the footprint is then file content.
+    f.store
+        .conn()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    let footprint = f.store.disk_bytes()?;
     assert_eq!(stats.visual_states, 6);
     // Room for the database plus a bit less than three images: the three oldest must go.
     let sizes: Vec<i64> = {
@@ -916,8 +955,8 @@ fn retention_by_size_removes_oldest_first() -> TestResult {
         stmt.query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?
     };
-    let keep: i64 = sizes[3..].iter().sum();
-    let cap = live_db + keep as u64;
+    let dropped: i64 = sizes[..3].iter().sum();
+    let cap = footprint - dropped as u64;
     let report = f.store.apply_retention(0, cap, Timestamp(T0 + 3_600_000))?;
     assert!(report.visual_states_deleted >= 3, "{report:?}");
     let remaining: Vec<i64> = {
@@ -934,7 +973,7 @@ fn retention_by_size_removes_oldest_first() -> TestResult {
         .map(|v| v.0)
         .collect();
     assert_eq!(remaining, expected);
-    assert!(f.store.live_db_bytes()? + f.store.media_bytes()? <= cap);
+    assert!(f.store.disk_bytes()? <= cap);
     Ok(())
 }
 
@@ -947,7 +986,8 @@ fn stats_and_orphans() -> TestResult {
     let b = f.persist(f.monitor, T0 + 1_000, 2)?;
     f.observe(f.monitor, a, None, T0)?;
     f.observe(f.monitor, b, None, T0 + 1_000)?;
-    f.store.save_ocr(a, &[block("hello", 0)], "e", 1)?;
+    f.store
+        .save_ocr(a, &f.rel(a)?, &[block("hello", 0)], "e", 1)?;
 
     let stats = f.store.stats()?;
     assert_eq!(stats.sessions, 1);
@@ -1082,5 +1122,356 @@ fn exclusive_write_never_overwrites_and_leaves_no_temp_files() -> TestResult {
             .join("escape.webp")
             .exists()
     );
+    Ok(())
+}
+
+// ----- review regressions (F1, F6, F7, F8, F10, F16, F22) ----------------------------------------
+
+/// Every byte of the database and its WAL, concatenated.
+fn raw_db_bytes(data: &DataDir) -> Vec<u8> {
+    let mut all = std::fs::read(data.database()).unwrap_or_default();
+    let mut wal = data.database().into_os_string();
+    wal.push("-wal");
+    all.extend(std::fs::read(wal).unwrap_or_default());
+    all
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+#[test]
+fn ids_are_never_reused_after_deletion() -> TestResult {
+    let f = fixture()?;
+    let first = f.persist(f.monitor, T0, 1)?;
+    let event = f.observe(f.monitor, first, None, T0)?;
+    f.store
+        .delete_range(Timestamp(T0 - 1), Timestamp(T0 + 1_000))?;
+    // The fence would refuse a new write at T0, so write after it.
+    let second = f.persist(f.monitor, T0 + 60_000, 2)?;
+    let second_event = f.observe(f.monitor, second, None, T0 + 60_000)?;
+    assert!(second.0 > first.0, "visual state id {} reused", second.0);
+    assert!(second_event > event, "event id {second_event} reused");
+    Ok(())
+}
+
+#[test]
+fn deleting_history_removes_window_titles_and_applications() -> TestResult {
+    let f = fixture()?;
+    let secret = f.window("vault.exe", "Quarterly layoffs - vault")?;
+    let kept = f.window("code.exe", "main.rs")?;
+    let gone = f.persist(f.monitor, T0, 1)?;
+    f.observe(f.monitor, gone, Some(secret), T0)?;
+    let stays = f.persist(f.monitor, T0 + 600_000, 2)?;
+    f.observe(f.monitor, stays, Some(kept), T0 + 600_000)?;
+
+    f.store
+        .delete_range(Timestamp(T0 - 1), Timestamp(T0 + 1_000))?;
+    assert_eq!(f.count("SELECT COUNT(*) FROM windows")?, 1);
+    assert_eq!(f.count("SELECT COUNT(*) FROM applications")?, 1);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM windows WHERE title LIKE '%layoffs%'")?,
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn forgotten_text_is_gone_from_the_database_file_and_wal() -> TestResult {
+    let f = fixture()?;
+    let win = f.window("vault.exe", "zqxwtitlemarker")?;
+    let vs = f.persist(f.monitor, T0, 1)?;
+    f.observe(f.monitor, vs, Some(win), T0)?;
+    f.store.save_ocr(
+        vs,
+        &f.rel(vs)?,
+        &[block("zqxwocrmarker is secret", 0)],
+        "e",
+        1,
+    )?;
+    // Checkpoint so the marker is in the main file as well as the WAL.
+    f.store
+        .conn()
+        .execute_batch("PRAGMA wal_checkpoint(FULL)")?;
+    let before = raw_db_bytes(&f.data);
+    assert!(contains(&before, "zqxwocrmarker"), "fixture is vacuous");
+    assert!(contains(&before, "zqxwtitlemarker"), "fixture is vacuous");
+
+    f.store
+        .delete_range(Timestamp(T0 - 1), Timestamp(T0 + 1_000))?;
+    let after = raw_db_bytes(&f.data);
+    assert!(!contains(&after, "zqxwocrmarker"), "OCR text survived");
+    assert!(
+        !contains(&after, "zqxwtitlemarker"),
+        "window title survived"
+    );
+    Ok(())
+}
+
+#[test]
+fn orphan_media_files_in_the_range_are_deleted_with_it() -> TestResult {
+    let f = fixture()?;
+    // A crash after the file was published but before its row was inserted.
+    let bytes = encode_webp(&frame(16, 8, 9), 80)?;
+    let relative = media_relative_path(Timestamp(T0 + 10_000), f.monitor);
+    let orphan = write_webp_exclusive(&f.data, &relative, &bytes)?;
+    let outside = write_webp_exclusive(
+        &f.data,
+        &media_relative_path(Timestamp(T0 + 900_000), f.monitor),
+        &bytes,
+    )?;
+    f.store
+        .delete_range(Timestamp(T0), Timestamp(T0 + 60_000))?;
+    assert!(!orphan.exists(), "orphan pixels survived forget");
+    assert!(outside.exists(), "a file outside the range must stay");
+    Ok(())
+}
+
+#[test]
+fn media_paths_must_live_under_media_and_not_cross_links() -> TestResult {
+    let f = fixture()?;
+    for bad in [
+        "config.toml",
+        "recall.db",
+        "logs/x.log",
+        "backups/a.db",
+        "media",
+    ] {
+        assert!(
+            crate::media::resolve_media_path(&f.data, bad).is_err(),
+            "{bad} accepted"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let outside = tempfile::tempdir()?;
+        std::fs::create_dir_all(f.data.media_root())?;
+        std::os::unix::fs::symlink(outside.path(), f.data.media_root().join("link"))?;
+        assert!(crate::media::resolve_media_path(&f.data, "media/link/secret.webp").is_err());
+        let bytes = encode_webp(&frame(16, 8, 1), 80)?;
+        assert!(write_webp_exclusive(&f.data, "media/link/x.webp", &bytes).is_err());
+        assert!(!outside.path().join("x.webp").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn concurrent_migrations_keep_one_correct_backup() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("rsRewind"));
+    {
+        let store = Store::open(&data)?;
+        store.begin_session(Timestamp(T0), "host", "0.1.0")?;
+    }
+    let both = [MIGRATIONS[0], TEST_V2];
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| Store::open_with_migrations(&data, &both, false).map(|(_, o)| o))
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join()).collect()
+    });
+    for result in results {
+        result.map_err(|_| "thread panicked")??;
+    }
+    let backups: Vec<_> = std::fs::read_dir(data.backups())?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<_, _>>()?;
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    // The backup is the pre-migration copy: no v2 table in it.
+    let backup = Connection::open(&backups[0])?;
+    let has_extra: bool = backup.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'test_extra')",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(
+        !has_extra,
+        "backup was taken after another process migrated"
+    );
+    Ok(())
+}
+
+#[test]
+fn size_retention_counts_wal_and_orphan_media() -> TestResult {
+    let f = fixture()?;
+    let a = f.persist(f.monitor, T0, 1)?;
+    f.observe(f.monitor, a, None, T0)?;
+    let bytes = encode_webp(&frame(64, 64, 7), 80)?;
+    let orphan = write_webp_exclusive(
+        &f.data,
+        &media_relative_path(Timestamp(T0 - 600_000), f.monitor),
+        &bytes,
+    )?;
+    // Cap leaves room for the live rows but not for the orphan's bytes on disk.
+    f.store
+        .conn()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    // Room for everything the rows account for, but not for the orphan's bytes on disk.
+    let cap = f.store.disk_bytes()? - bytes.len() as u64 / 2;
+    f.store.apply_retention(0, cap, Timestamp(T0 + 3_600_000))?;
+    assert!(!orphan.exists(), "orphan counted nowhere, deleted nowhere");
+    Ok(())
+}
+
+#[test]
+fn a_forget_fences_its_interval_against_queued_writes() -> TestResult {
+    let f = fixture()?;
+    let queued = f.persist(f.monitor, T0 + 5_000, 1)?;
+    // The user forgets [T0, T0+60s) while a frame captured at T0+30s is still queued.
+    f.store
+        .delete_range(Timestamp(T0), Timestamp(T0 + 60_000))?;
+
+    let bytes = encode_webp(&frame(16, 8, 2), 80)?;
+    let relative = media_relative_path(Timestamp(T0 + 30_000), f.monitor);
+    write_webp_exclusive(&f.data, &relative, &bytes)?;
+    let state = NewVisualState {
+        monitor: f.monitor,
+        captured_at: Timestamp(T0 + 30_000),
+        media_path: relative,
+        width: 16,
+        height: 8,
+        byte_size: bytes.len() as u64,
+        fingerprint: None,
+        ocr_enabled: true,
+    };
+    match f.store.insert_visual_state(&state) {
+        Err(StorageError::Fenced { since, until, .. }) => {
+            assert_eq!((since, until), (T0, T0 + 60_000));
+        }
+        other => panic!("expected Fenced, got {other:?}"),
+    }
+    assert_eq!(f.count("SELECT COUNT(*) FROM visual_states")?, 0);
+    // The queued state was deleted by forget; extending it is refused too, not turned into an FK
+    // error or a resurrected row.
+    match f.observe(f.monitor, queued, None, T0 + 30_000) {
+        Err(StorageError::Fenced { .. }) => {}
+        other => panic!("expected Fenced, got {other:?}"),
+    }
+    // Outside the interval nothing is refused.
+    let later = f.persist(f.monitor, T0 + 60_000, 3)?;
+    f.observe(f.monitor, later, None, T0 + 60_000)?;
+    Ok(())
+}
+
+#[test]
+fn spent_fences_are_pruned_by_retention() -> TestResult {
+    let f = fixture()?;
+    f.store.delete_range(Timestamp(T0), Timestamp(T0 + 1_000))?;
+    assert_eq!(f.count("SELECT COUNT(*) FROM deletion_fences")?, 1);
+    let day = 86_400_000;
+    f.store.apply_retention(7, 0, Timestamp(T0 + 30 * day))?;
+    assert_eq!(f.count("SELECT COUNT(*) FROM deletion_fences")?, 0);
+    Ok(())
+}
+
+#[test]
+fn ocr_from_a_deleted_state_cannot_attach_to_a_later_one() -> TestResult {
+    let f = fixture()?;
+    let doomed = f.persist(f.monitor, T0, 1)?;
+    f.observe(f.monitor, doomed, None, T0)?;
+    let job_path = f.rel(doomed)?; // what the OCR worker started from
+    f.store.delete_range(Timestamp(T0 - 1), Timestamp(T0 + 1))?;
+    let replacement = f.persist(f.monitor, T0 + 120_000, 2)?;
+    f.observe(f.monitor, replacement, None, T0 + 120_000)?;
+
+    match f
+        .store
+        .save_ocr(doomed, &job_path, &[block("forgotten secret", 0)], "e", 1)
+    {
+        Err(StorageError::VisualStateMissing(_)) => {}
+        other => panic!("expected the stale result to be discarded, got {other:?}"),
+    }
+    // Same id, wrong path (a row replaced under a reused id, or a tampered row) is refused too.
+    match f.store.save_ocr(
+        replacement,
+        &job_path,
+        &[block("forgotten secret", 0)],
+        "e",
+        1,
+    ) {
+        Err(StorageError::VisualStateMissing(_)) => {}
+        other => panic!("expected a path mismatch to be refused, got {other:?}"),
+    }
+    assert!(
+        f.store
+            .mark_ocr(replacement, &job_path, OcrStatus::Failed, None)
+            .is_err()
+    );
+    assert!(fts_matches(&f.store, "secret")?.is_empty());
+    assert_eq!(f.count("SELECT COUNT(*) FROM ocr_blocks")?, 0);
+    f.store.save_ocr(
+        replacement,
+        &f.rel(replacement)?,
+        &[block("fine", 0)],
+        "e",
+        1,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn a_cached_window_that_was_deleted_is_a_typed_error() -> TestResult {
+    let f = fixture()?;
+    let win = f.window("vault.exe", "private")?;
+    let old = f.persist(f.monitor, T0, 1)?;
+    f.observe(f.monitor, old, Some(win), T0)?;
+    f.store.delete_range(Timestamp(T0 - 1), Timestamp(T0 + 1))?;
+    let new = f.persist(f.monitor, T0 + 120_000, 2)?;
+    match f.observe(f.monitor, new, Some(win), T0 + 120_000) {
+        Err(StorageError::ContextMissing) => {}
+        other => panic!("expected ContextMissing, got {other:?}"),
+    }
+    // Looking the window up again re-creates it under a *new* id.
+    let again = f.window("vault.exe", "private")?;
+    assert_ne!(again.1, win.1);
+    Ok(())
+}
+
+#[test]
+fn stale_temp_files_and_foreign_files_are_handled_correctly() -> TestResult {
+    let f = fixture()?;
+    let dir = f.data.media_root().join("2026").join("09").join("30");
+    std::fs::create_dir_all(&dir)?;
+    let stamp = media_relative_path(Timestamp(T0 + 1_000), f.monitor);
+    let name = stamp.rsplit('/').next().ok_or("name")?;
+    let fresh = dir.join(format!(".{name}.1.1.tmp"));
+    std::fs::write(&fresh, b"x")?;
+    let foreign = dir.join("notes.txt");
+    std::fs::write(&foreign, b"x")?;
+    let stale = dir.join(format!(".{name}.2.2.tmp"));
+    let file = std::fs::File::create(&stale)?;
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(600))?;
+    drop(file);
+    f.store
+        .delete_range(Timestamp(T0), Timestamp(T0 + 60_000))?;
+    // A temp file this young may belong to a write still in flight (which the fence will refuse
+    // when it publishes); files that are not rsRewind media are never touched.
+    assert!(fresh.exists());
+    assert!(foreign.exists());
+    assert!(
+        !stale.exists(),
+        "a crashed writer's temp file must be swept"
+    );
+    Ok(())
+}
+
+#[test]
+fn forget_names_surviving_backups_and_truncates_the_wal() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("rsRewind"));
+    {
+        let s = Store::open(&data)?;
+        s.begin_session(Timestamp(T0), "h", "v")?;
+    }
+    let both = [MIGRATIONS[0], TEST_V2];
+    let (store, outcome) = Store::open_with_migrations(&data, &both, false)?;
+    let backup = outcome.backup.ok_or("no backup")?;
+    let report = store.delete_range(Timestamp(T0), Timestamp(T0 + 1))?;
+    assert_eq!(report.backups_surviving, vec![backup.display().to_string()]);
+    assert!(report.wal_truncated);
     Ok(())
 }

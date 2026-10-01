@@ -50,6 +50,17 @@ pub enum StorageError {
     #[error("visual state {0} does not exist")]
     VisualStateMissing(VisualStateId),
 
+    /// The write falls inside an interval the user deleted (`forget`). The caller must discard
+    /// what it wrote (media file), drop any cached ids for the frame, and may store the current
+    /// picture again later: only the *captured_at* inside the fence is refused.
+    #[error("refused: time {at} is inside a deleted interval [{since}, {until})")]
+    Fenced { at: i64, since: i64, until: i64 },
+
+    /// An application/window id the writer cached no longer exists (deleted with its history).
+    /// Drop the writer's caches and upsert again.
+    #[error("the application or window context no longer exists; re-resolve it")]
+    ContextMissing,
+
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 

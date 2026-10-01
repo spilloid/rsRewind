@@ -60,8 +60,11 @@ pub fn run(
                 .and_then(|frame| engine.recognize(&frame).map_err(|e| e.to_string()));
             match outcome {
                 Ok(output) => {
+                    // The result is bound to the exact file it was computed from: if the row was
+                    // deleted (or its id now names another image) the text is discarded.
                     match store.save_ocr(
                         item.id,
+                        &item.relative_path,
                         &output.blocks,
                         "windows.media.ocr",
                         output.elapsed_ms,
@@ -71,7 +74,7 @@ pub fn run(
                             counters::add(&counters.ocr_ms_total, output.elapsed_ms);
                             tracing::debug!(id = %item.id, lines = output.blocks.len(), ms = output.elapsed_ms, "ocr done");
                         }
-                        // Deleted while we were reading it: nothing to index.
+                        // Deleted or replaced while we were reading it: nothing to index.
                         Err(StorageError::VisualStateMissing(_)) => {}
                         Err(error) => tracing::warn!(id = %item.id, %error, "could not save OCR"),
                     }
@@ -80,7 +83,12 @@ pub fn run(
                     counters::bump(&counters.ocr_failed);
                     // The message names the failure (I/O, decode, WinRT HRESULT), never the text.
                     tracing::warn!(id = %item.id, error = %message, "OCR failed");
-                    if let Err(error) = store.mark_ocr(item.id, OcrStatus::Failed, Some(&message)) {
+                    if let Err(error) = store.mark_ocr(
+                        item.id,
+                        &item.relative_path,
+                        OcrStatus::Failed,
+                        Some(&message),
+                    ) {
                         tracing::warn!(id = %item.id, %error, "could not mark OCR failure");
                     }
                 }

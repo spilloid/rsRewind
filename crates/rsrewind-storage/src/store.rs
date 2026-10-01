@@ -1,4 +1,4 @@
-use crate::media::resolve_media_path;
+use crate::media::{self, resolve_media_path};
 use crate::migrations::{self, MIGRATIONS, Migration, MigrationOutcome};
 use crate::{Result, StorageError};
 use rsrewind_core::{
@@ -46,6 +46,9 @@ pub struct Observation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingOcr {
     pub id: VisualStateId,
+    /// The stored relative path. Hand it back to `save_ocr`/`mark_ocr`: a result is accepted only
+    /// if the row still names this exact file.
+    pub relative_path: String,
     /// Absolute path of the image.
     pub media_path: PathBuf,
     pub width: u32,
@@ -103,6 +106,14 @@ pub struct DeleteReport {
     pub bytes_freed: u64,
     /// Files that could not be deleted (path: error). Reported, never fatal.
     pub file_errors: Vec<String>,
+    /// Image files that had no database row (a crash between write and insert) and were swept.
+    pub orphan_files_deleted: u64,
+    /// `false` if the WAL could not be truncated (another connection was mid-read), so deleted
+    /// pages may still sit in `recall.db-wal` until the next checkpoint.
+    pub wal_truncated: bool,
+    /// Pre-migration database backups still on disk. They hold history as it was when they were
+    /// taken and are never rewritten; only `forget` (an explicit user action) reports them.
+    pub backups_surviving: Vec<String>,
 }
 
 impl DeleteReport {
@@ -113,6 +124,9 @@ impl DeleteReport {
         self.files_missing += other.files_missing;
         self.bytes_freed += other.bytes_freed;
         self.file_errors.extend(other.file_errors);
+        self.orphan_files_deleted += other.orphan_files_deleted;
+        self.wal_truncated = other.wal_truncated;
+        self.backups_surviving.extend(other.backups_surviving);
     }
 }
 
@@ -163,6 +177,15 @@ impl Selection {
             }
             Self::EndedBefore(cutoff) => ("ended_at < ?1", vec![cutoff]),
             Self::StartedAtOrBefore(cutoff) => ("started_at <= ?1", vec![cutoff]),
+        }
+    }
+
+    /// Whether a file named for capture time `ts` and without a row belongs to this pass.
+    fn includes_capture(self, ts: i64) -> bool {
+        match self {
+            Self::Overlapping { since, until } => ts >= since && ts < until,
+            Self::EndedBefore(cutoff) => ts < cutoff,
+            Self::StartedAtOrBefore(cutoff) => ts <= cutoff,
         }
     }
 
@@ -370,7 +393,9 @@ impl Store {
         } else {
             OcrStatus::Skipped
         };
-        self.conn.execute(
+        let tx = self.immediate()?;
+        refuse_if_fenced(&tx, state.captured_at.0)?;
+        tx.execute(
             "INSERT INTO visual_states
                  (monitor_id, captured_at, media_path, width, height, byte_size, fingerprint,
                   ocr_status)
@@ -387,7 +412,9 @@ impl Store {
                 status.as_str()
             ],
         )?;
-        Ok(VisualStateId(self.conn.last_insert_rowid()))
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(VisualStateId(id))
     }
 
     /// Extends the session's latest observation on this monitor if nothing changed and the gap is
@@ -400,6 +427,7 @@ impl Store {
         }
         let at = observation.at.0;
         let tx = self.immediate()?;
+        refuse_if_fenced(&tx, at)?;
         // A concurrent delete_range / retention may have removed the state the recorder is still
         // holding on to; a typed error lets it re-persist the frame instead of failing on an FK.
         let visual_exists: bool = tx.query_row(
@@ -409,6 +437,28 @@ impl Store {
         )?;
         if !visual_exists {
             return Err(StorageError::VisualStateMissing(observation.visual_state));
+        }
+        // Retention / delete_range remove windows and applications nothing references any more; a
+        // writer that cached one of those ids is told to look it up again.
+        if let Some(application) = observation.application {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM applications WHERE id = ?1)",
+                [application.0],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(StorageError::ContextMissing);
+            }
+        }
+        if let Some(window) = observation.window {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM windows WHERE id = ?1)",
+                [window.0],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(StorageError::ContextMissing);
+            }
         }
         let last = tx
             .query_row(
@@ -513,6 +563,7 @@ impl Store {
             match resolve_media_path(&self.data, &relative) {
                 Ok(media_path) => pending.push(PendingOcr {
                     id: VisualStateId(id),
+                    relative_path: relative,
                     media_path,
                     width,
                     height,
@@ -521,6 +572,7 @@ impl Store {
                     tracing::warn!(visual_state = id, "unsafe media path; marking OCR failed");
                     self.mark_ocr(
                         VisualStateId(id),
+                        &relative,
                         OcrStatus::Failed,
                         Some("unsafe media path"),
                     )?;
@@ -531,9 +583,14 @@ impl Store {
     }
 
     /// Replaces the OCR result of one visual state atomically: blocks, FTS row and status.
+    ///
+    /// `expected_media_path` is the path the OCR job was started from. If the row has been deleted,
+    /// or its id now names a different image, the result is discarded with
+    /// [`StorageError::VisualStateMissing`]: OCR text must never attach to the wrong screenshot.
     pub fn save_ocr(
         &self,
         id: VisualStateId,
+        expected_media_path: &str,
         blocks: &[OcrBlock],
         engine: &str,
         elapsed_ms: u64,
@@ -548,12 +605,14 @@ impl Store {
         let elapsed_ms = i64::try_from(elapsed_ms).unwrap_or(i64::MAX);
 
         let tx = self.immediate()?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM visual_states WHERE id = ?1)",
-            [id.0],
-            |row| row.get(0),
-        )?;
-        if !exists {
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT media_path FROM visual_states WHERE id = ?1",
+                [id.0],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.as_deref() != Some(expected_media_path) {
             // Usually: retention or delete_range removed it while OCR was running.
             return Err(StorageError::VisualStateMissing(id));
         }
@@ -593,15 +652,18 @@ impl Store {
         Ok(())
     }
 
+    /// Like [`Store::save_ocr`], the update applies only if the row still names `expected_media_path`.
     pub fn mark_ocr(
         &self,
         id: VisualStateId,
+        expected_media_path: &str,
         status: OcrStatus,
         error: Option<&str>,
     ) -> Result<()> {
         let changed = self.conn.execute(
-            "UPDATE visual_states SET ocr_status = ?2, ocr_error = ?3 WHERE id = ?1",
-            params![id.0, status.as_str(), error],
+            "UPDATE visual_states SET ocr_status = ?2, ocr_error = ?3
+             WHERE id = ?1 AND media_path = ?4",
+            params![id.0, status.as_str(), error, expected_media_path],
         )?;
         if changed == 0 {
             return Err(StorageError::VisualStateMissing(id));
@@ -702,14 +764,32 @@ impl Store {
         if until.0 <= since.0 {
             return Ok(DeleteReport::default());
         }
-        self.delete_selection(Selection::Overlapping {
+        let mut report = self.delete_selection(Selection::Overlapping {
             since: since.0,
             until: until.0,
-        })
+        })?;
+        report.backups_surviving = self.surviving_backups();
+        Ok(report)
+    }
+
+    /// Pre-migration backups that still exist. Deleting history never rewrites them.
+    pub fn surviving_backups(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(self.data.backups()) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "db"))
+            .map(|path| path.display().to_string())
+            .collect();
+        names.sort();
+        names
     }
 
     /// Age then size retention, oldest first. `retention_days == 0` / `max_bytes == 0` disable
-    /// the respective rule. Size counts live database pages plus stored image bytes.
+    /// the respective rule. Size is the real disk footprint: `recall.db`, its WAL and every file
+    /// under `media/` (including orphans and temp files), so a cap is a cap on bytes on disk.
     pub fn apply_retention(
         &self,
         retention_days: u32,
@@ -720,6 +800,9 @@ impl Store {
         if retention_days > 0 {
             let cutoff = now.saturating_sub_millis(i64::from(retention_days) * 86_400_000);
             report.absorb(self.delete_selection(Selection::EndedBefore(cutoff.0))?);
+            // Nothing older than the horizon can still be in flight, so its fences are spent.
+            self.conn
+                .execute("DELETE FROM deletion_fences WHERE until < ?1", [cutoff.0])?;
         }
         if max_bytes > 0 {
             report.absorb(self.enforce_size(max_bytes, now)?);
@@ -739,9 +822,17 @@ impl Store {
     fn enforce_size(&self, max_bytes: u64, now: Timestamp) -> Result<DeleteReport> {
         let mut report = DeleteReport::default();
         loop {
-            let total = self.live_db_bytes()?.saturating_add(self.media_bytes()?);
+            let mut total = self.disk_bytes()?;
             if total <= max_bytes {
                 break;
+            }
+            // Deleted rows leave free pages inside a file that never shrinks by itself; give that
+            // space back before deciding more history has to go.
+            if self.reclaim_db_space()? {
+                total = self.disk_bytes()?;
+                if total <= max_bytes {
+                    break;
+                }
             }
             let excess = total - max_bytes;
             // Walk the oldest events, counting each visual state's bytes once, until enough would
@@ -794,6 +885,14 @@ impl Store {
         let mut report = DeleteReport::default();
         let mut doomed_files: Vec<String> = Vec::new();
         let tx = self.immediate()?;
+        if let Selection::Overlapping { since, until } = selection {
+            // In the same transaction as the deletion: from the moment this commits, no writer can
+            // put anything back into the interval, whatever it had queued.
+            tx.execute(
+                "INSERT INTO deletion_fences (since, until, created_at) VALUES (?1, ?2, ?3)",
+                params![since, until, Timestamp::now().0],
+            )?;
+        }
         {
             let (event_where, event_params) = selection.event_clause();
             let mut candidates: BTreeSet<i64> = {
@@ -848,6 +947,19 @@ impl Store {
                 report.bytes_freed += u64::try_from(size).unwrap_or(0);
                 doomed_files.push(path);
             }
+            drop((still_used, details, delete_fts, delete_state));
+            // Titles and process names of history that no longer exists are history too.
+            tx.execute(
+                "DELETE FROM windows
+                 WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.window_id = windows.id)",
+                [],
+            )?;
+            tx.execute(
+                "DELETE FROM applications
+                 WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.application_id = applications.id)
+                   AND NOT EXISTS (SELECT 1 FROM windows w WHERE w.application_id = applications.id)",
+                [],
+            )?;
         }
         tx.commit()?;
 
@@ -868,7 +980,115 @@ impl Store {
                 }
             }
         }
+        self.sweep_orphan_media(selection, &mut report);
+        // Make the deletion physical: SQLite's page contents were zeroed by secure_delete, and the
+        // WAL (which keeps earlier versions of pages) is truncated.
+        report.wal_truncated = self.truncate_wal();
         Ok(report)
+    }
+
+    /// `PRAGMA wal_checkpoint(TRUNCATE)`; `false` if a concurrent reader prevented it.
+    fn truncate_wal(&self) -> bool {
+        match self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                row.get::<_, i64>(0)
+            }) {
+            Ok(busy) => busy == 0,
+            Err(error) => {
+                tracing::warn!(%error, "WAL checkpoint failed");
+                false
+            }
+        }
+    }
+
+    /// Truncates the WAL and rebuilds the file if it holds free pages. `true` if it tried to
+    /// shrink the database.
+    fn reclaim_db_space(&self) -> Result<bool> {
+        self.truncate_wal();
+        let free: i64 = self
+            .conn
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+        if free == 0 {
+            return Ok(false);
+        }
+        if let Err(error) = self.conn.execute_batch("VACUUM") {
+            // Busy (another connection mid-transaction) or out of temp space: retention still
+            // proceeds by deleting history; the next pass tries again.
+            tracing::warn!(%error, "could not compact the database");
+            return Ok(false);
+        }
+        self.truncate_wal();
+        Ok(true)
+    }
+
+    /// Deletes image files under `media/` that no row points at but whose *name* (capture time and
+    /// monitor) places them in this pass: leftovers of a crash between file write and row insert,
+    /// or between a committed delete and its unlink. Stale temp files (older than a minute, so an
+    /// in-flight write is never clobbered) go with them.
+    fn sweep_orphan_media(&self, selection: Selection, report: &mut DeleteReport) {
+        let Ok(mut lookup) = self
+            .conn
+            .prepare("SELECT EXISTS (SELECT 1 FROM visual_states WHERE media_path = ?1)")
+        else {
+            return;
+        };
+        let mut stack = vec![self.data.media_root()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if metadata.is_dir() {
+                    // Never descend through a junction/symlink out of the data folder.
+                    if !media::is_reparse_point(&metadata) {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if !metadata.is_file() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let Some((captured_at, is_temp)) = capture_time_from_name(name) else {
+                    continue;
+                };
+                if !selection.includes_capture(captured_at) {
+                    continue;
+                }
+                if is_temp {
+                    let old_enough = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > Duration::from_secs(60));
+                    if !old_enough {
+                        continue;
+                    }
+                } else {
+                    let Some(relative) = relative_media_path(self.data.root(), &path) else {
+                        continue;
+                    };
+                    match lookup.query_row([relative], |row| row.get::<_, bool>(0)) {
+                        Ok(false) => {}
+                        _ => continue,
+                    }
+                }
+                match std::fs::remove_file(&path) {
+                    Ok(()) => report.orphan_files_deleted += 1,
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "could not delete orphan media");
+                        report.file_errors.push(format!("{}: {e}", path.display()));
+                    }
+                }
+            }
+        }
     }
 
     // ----- diagnostics -------------------------------------------------------------------------
@@ -907,14 +1127,30 @@ impl Store {
         Ok(u64::try_from(n).unwrap_or(0))
     }
 
-    /// Database bytes actually in use (free pages excluded: they are reused, not grown).
-    pub(crate) fn live_db_bytes(&self) -> Result<u64> {
-        let pages: i64 = self.conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
-        let free: i64 = self
-            .conn
-            .query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
-        let size: i64 = self.conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
-        Ok(u64::try_from((pages - free).max(0) * size).unwrap_or(0))
+    /// Bytes on disk: `recall.db`, its WAL, and every file under `media/` whether or not a row
+    /// points at it. This, not the live row count, is what a size cap has to bound.
+    pub fn disk_bytes(&self) -> Result<u64> {
+        let db = self.data.database();
+        let mut total = file_len(&db).saturating_add(file_len(&wal_path(&db)));
+        let mut stack = vec![self.data.media_root()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if metadata.is_dir() {
+                    if !media::is_reparse_point(&metadata) {
+                        stack.push(entry.path());
+                    }
+                } else {
+                    total = total.saturating_add(metadata.len());
+                }
+            }
+        }
+        Ok(total)
     }
 
     /// `PRAGMA quick_check`. An empty vector means the database is healthy.
@@ -1008,6 +1244,9 @@ fn configure_write_connection(conn: &Connection) -> Result<()> {
     }
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    // Deleted content is zeroed in place instead of lingering in freed pages. (FTS5's own
+    // secure-delete flag is persisted by the schema.) Per-connection, so every writer sets it.
+    conn.pragma_update(None, "secure_delete", "ON")?;
     Ok(())
 }
 
@@ -1030,6 +1269,37 @@ fn state_from_parts(state: &str, until: Option<i64>) -> Result<CaptureState> {
         "stopped" => CaptureState::Stopped,
         other => return Err(StorageError::Corrupt(format!("capture state {other:?}"))),
     })
+}
+
+fn refuse_if_fenced(tx: &Transaction<'_>, at: i64) -> Result<()> {
+    let fence: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT since, until FROM deletion_fences WHERE since <= ?1 AND ?1 < until LIMIT 1",
+            [at],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match fence {
+        Some((since, until)) => Err(StorageError::Fenced { at, since, until }),
+        None => Ok(()),
+    }
+}
+
+/// Capture time (ms) encoded in a media file name, and whether it is a writer's temp file.
+/// `20260930T201404123Z_m2.webp` and `.20260930T201404123Z_m2.webp.1234.5.tmp`; anything else is
+/// not ours and `None`.
+fn capture_time_from_name(name: &str) -> Option<(i64, bool)> {
+    let is_temp = name.starts_with('.') && name.ends_with(".tmp");
+    if !is_temp && !name.ends_with(".webp") {
+        return None;
+    }
+    let core = name.strip_prefix('.').unwrap_or(name);
+    let stamp = core.get(..18)?;
+    if core.as_bytes().get(18) != Some(&b'Z') {
+        return None;
+    }
+    let parsed = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%3f").ok()?;
+    Some((parsed.and_utc().timestamp_millis(), is_temp))
 }
 
 fn file_len(path: &Path) -> u64 {

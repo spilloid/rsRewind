@@ -72,21 +72,34 @@ impl DataDir {
         self.root.join("models")
     }
 
-    /// Resolves a stored relative media path. Rejects anything that could escape the data root
-    /// (absolute paths, `..`, drive prefixes): the database is user-editable, the filesystem
-    /// outside this folder is not ours to read or delete.
+    /// Resolves a stored relative media path. Rejects anything that could escape the media
+    /// subtree (absolute paths, `..`, drive prefixes) and anything that is not *under* `media/`:
+    /// the database is user-editable, and a tampered row naming `config.toml` or `recall.db` must
+    /// never be readable, writable or deletable through this path.
+    ///
+    /// This is a lexical check. Reparse points (symlinks, junctions) inside `media/` are rejected
+    /// by `rsrewind_storage::media::resolve_media_path`, which also touches the filesystem.
     pub fn resolve_media(&self, relative: &str) -> Option<PathBuf> {
         if relative.is_empty() || relative.contains(':') || relative.starts_with(['/', '\\']) {
             return None;
         }
         let mut path = self.root.clone();
+        let mut depth = 0usize;
         for part in relative.split(['/', '\\']) {
             match part {
                 "" | "." | ".." => return None,
-                part => path.push(part),
+                part => {
+                    // The first component must be exactly `media` (case-insensitive: NTFS).
+                    if depth == 0 && !part.eq_ignore_ascii_case("media") {
+                        return None;
+                    }
+                    path.push(part);
+                    depth += 1;
+                }
             }
         }
-        Some(path)
+        // `media` alone is the directory, not a file.
+        (depth >= 2).then_some(path)
     }
 }
 
@@ -156,9 +169,17 @@ mod tests {
         let data = DataDir::new(r"C:\data\rsRewind");
         assert_eq!(
             data.resolve_media("media/2026/09/30/a.webp"),
-            Some(PathBuf::from(r"C:\data\rsRewind\media\2026\09\30\a.webp"))
+            Some(
+                ["media", "2026", "09", "30", "a.webp"]
+                    .iter()
+                    .fold(data.root().to_path_buf(), |p, part| p.join(part))
+            )
         );
         for bad in [
+            "config.toml",
+            "recall.db",
+            "logs/x.log",
+            "media",
             "",
             "../x.webp",
             "media/../../x",
