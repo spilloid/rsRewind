@@ -1,0 +1,130 @@
+name: Sign and verify release files
+description: >
+  Signs release files with Azure Artifact Signing, then fails unless every verified file carries
+  a valid, timestamped signature from the expected certificate profile. Adapted from the pattern
+  used in spoolsmith's `.github/actions/sign-release` (see docs/code-signing notes referenced
+  from CLAUDE.md): sign between build and package, fail closed, verify with
+  Get-AuthenticodeSignature rather than SignTool (SignTool ships with the Windows SDK and is not
+  present on a stock runner by default). Unlike spoolsmith's version, verification is inline here
+  rather than delegating to a repo script, since rsRewind has no such script yet -- this keeps
+  the action self-contained.
+
+  STATUS: written against the documented Azure Artifact Signing / azure/artifact-signing-action
+  contract, but has never been run for this repository -- no signing account, certificate
+  profile, app registration or federated credential has been created for rsRewind yet. See
+  release.yml's "Check release tag and signing configuration" step, which fails closed with a
+  clear message if the inputs below are not actually configured as repository/environment
+  secrets and variables.
+
+inputs:
+  client-id:
+    description: Client ID of the app registration trusted by the federated credential.
+    required: true
+  tenant-id:
+    description: Azure tenant ID.
+    required: true
+  subscription-id:
+    description: Azure subscription ID.
+    required: true
+  endpoint:
+    description: Regional Artifact Signing endpoint; must match the account's region.
+    required: true
+  account:
+    description: Artifact Signing account name.
+    required: true
+  profile:
+    description: Certificate profile name.
+    required: true
+  expected-subject:
+    description: Substring the signer certificate's subject must contain. Empty skips the check.
+    required: false
+    default: ''
+  folder:
+    description: Folder whose files are signed, relative to the workspace.
+    required: false
+    default: dist
+  filter:
+    description: File extension to sign in that folder, e.g. exe or msi.
+    required: false
+    default: exe
+  verify:
+    description: Files (relative to the workspace) that must verify afterwards, comma-separated.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Needs `id-token: write` and `environment: release` on the calling job for the OIDC exchange
+    # to present the right subject -- see docs/code-signing notes referenced from CLAUDE.md.
+    - name: Azure login
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: Sign files
+      uses: azure/artifact-signing-action@v2
+      with:
+        endpoint: ${{ inputs.endpoint }}
+        signing-account-name: ${{ inputs.account }}
+        certificate-profile-name: ${{ inputs.profile }}
+        files-folder: ${{ github.workspace }}\${{ inputs.folder }}
+        files-folder-filter: ${{ inputs.filter }}
+        file-digest: SHA256
+        # Artifact Signing certificates are valid for three days; without this countersignature
+        # the release would stop verifying within days of being published.
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+        # azure/login leaves an authenticated Azure CLI session; it does not export AZURE_*
+        # variables or a token file, so the CLI credential is the only one that can succeed here.
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-cli-credential: false
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+
+    - name: Verify signatures
+      shell: pwsh
+      env:
+        EXPECTED_SUBJECT: ${{ inputs.expected-subject }}
+        VERIFY_FILES: ${{ inputs.verify }}
+      run: |
+        $files = @($env:VERIFY_FILES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if (-not $files) { throw 'sign-release: no files named in the verify input' }
+
+        $failed = $false
+        foreach ($file in $files) {
+          if (-not (Test-Path $file)) {
+            Write-Error "sign-release: $file does not exist"
+            $failed = $true
+            continue
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $file
+          if ($sig.Status -ne 'Valid') {
+            Write-Error "sign-release: $file signature status is $($sig.Status), not Valid"
+            $failed = $true
+            continue
+          }
+          if (-not $sig.TimeStamperCertificate) {
+            Write-Error "sign-release: $file has a valid signature but no RFC 3161 timestamp -- it will stop verifying once the signing certificate expires (3 days)"
+            $failed = $true
+            continue
+          }
+          $subject = $sig.SignerCertificate.Subject
+          if ($env:EXPECTED_SUBJECT -and -not $subject.Contains($env:EXPECTED_SUBJECT)) {
+            Write-Error "sign-release: $file was signed by '$subject', which does not contain the expected subject '$($env:EXPECTED_SUBJECT)' -- signed by the wrong certificate profile?"
+            $failed = $true
+            continue
+          }
+          Write-Host "sign-release: $file OK -- $subject, timestamped by $($sig.TimeStamperCertificate.Subject)"
+        }
+
+        if ($failed) {
+          throw 'sign-release: one or more files failed signature verification; refusing to continue'
+        }
