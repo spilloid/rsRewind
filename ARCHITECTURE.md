@@ -136,9 +136,10 @@ new kind later never means renumbering values already written to disk.
 
 SQLite via `rusqlite` (bundled, FTS5 enabled). One `Store` is one connection; the daemon opens
 two (persist thread, OCR thread). On open: `journal_mode=WAL`, `synchronous=NORMAL`,
-`foreign_keys=ON`, `busy_timeout=5000`.
+`foreign_keys=ON`, `secure_delete=ON`, `busy_timeout=5000`.
 
-Schema v1 (timestamps are `INTEGER` Unix milliseconds UTC; media paths are stored relative to the
+Schema v1 (`applications`, `windows`, `visual_states` and `events` use `AUTOINCREMENT`, so ids are
+never reused; timestamps are `INTEGER` Unix milliseconds UTC; media paths are stored relative to the
 data root, forward slashes only):
 
 ```
@@ -147,6 +148,8 @@ monitors(id, device_name UNIQUE, width, height, left, top, dpi, primary_monitor,
 applications(id, process_name UNIQUE COLLATE NOCASE, exe_path NULL, first_seen_at)
 windows(id, application_id FK, title, class_name NULL, first_seen_at,
         UNIQUE(application_id, title, class_name))
+deletion_fences(id, since, until, created_at)  -- written by delete_range; writers refuse
+                                               -- states/observations inside a fence
 visual_states(id, monitor_id FK, captured_at, media_path UNIQUE, width, height, byte_size,
               fingerprint INTEGER, ocr_status TEXT CHECK in (pending, done, failed, skipped),
               ocr_error NULL, ocr_engine NULL, ocr_ms NULL)
@@ -154,7 +157,8 @@ events(id, session_id FK, kind TEXT, started_at, ended_at, monitor_id NULL FK,
        visual_state_id NULL FK, application_id NULL FK, window_id NULL FK, metadata_json NULL)
 ocr_blocks(id, visual_state_id FK ON DELETE CASCADE, line_index, text, x, y, width, height,
            confidence NULL)
-ocr_fts  = fts5(text, tokenize='unicode61 remove_diacritics 2')  -- rowid = visual_states.id
+ocr_fts  = fts5(text, tokenize='unicode61 remove_diacritics 2')  -- rowid = visual_states.id,
+                                                                  -- fts5 secure-delete on
 control(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT, paused_until NULL, updated_at)
 recorder_status(id CHECK(id=1), pid, started_at, heartbeat_at, state, counters_json)
 settings(key PRIMARY KEY, value)
@@ -168,19 +172,24 @@ folder can be moved, backed up, or restored on another drive letter without rewr
 database. `DataDir::resolve_media` (in `rsrewind-core`) is the one place a stored relative path is
 turned back into an absolute one, and it refuses anything that could escape the data root
 (absolute paths, drive letters, `..`, leading slashes) — the database is treated as
-user-editable, untrusted input for this purpose.
+user-editable, untrusted input for this purpose. A stored path must also start with `media/`, and
+`rsrewind_storage::media::resolve_media_path` additionally rejects any existing component that is a
+symlink or junction (check-then-use: it stops tampered rows and stray links, not a racing local
+attacker).
 
 **File-before-row write ordering.** When a new visual state is captured, the WebP file is written
 first (`write_webp_exclusive`: write to a temp file, then rename — never overwrite an existing
 file), and only after that succeeds is the database row inserted. A crash between the two leaves
-at worst an orphan file with no row pointing at it (found and reported by `find_orphans`), never a
+at worst an orphan file with no row pointing at it (reported by `find_orphans`; `delete_range` and
+retention sweep orphans in their range by file name), never a
 row pointing at a file that was never written. The reverse ordering would risk a row referencing
 pixels that don't exist, which is a worse failure mode for a tool whose whole point is "the
 screenshot that this row claims exists."
 
 **Backup before migration.** Opening a database that has existing data and pending migrations
 triggers a SQLite online-backup-API copy to `backups/recall-v{from}-{utc}.db` *before* the
-migration runs; if the backup fails, the migration is refused rather than attempted blind. Opening
+migration runs (under an exclusive `backups/.migrate.lock`, with the backup name reserved by
+`create_new`, so concurrent processes cannot overwrite each other's backup); if the backup fails, the migration is refused rather than attempted blind. Opening
 a database whose recorded schema version is newer than the binary understands is also refused
 outright, rather than guessing.
 

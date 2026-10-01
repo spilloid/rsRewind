@@ -54,3 +54,23 @@ those parallel units.
 **Status after bootstrap:** unfilled — see `ROADMAP.md`'s "Status after bootstrap" section, which
 carries the same TODO placeholders for the orchestrator to reconcile once all parallel units are
 in.
+
+
+### 2026-10-01 — Astra remediation, Unit A (storage/query), session hand-over
+
+Orchestration notes: the previous session ended before any remediation commit was pushed
+(`origin/feat/mvp-bootstrap` was still `906ce21`); nothing from Units A/B/C survived, so A was
+redone here. This session ran on Linux, so only the portable crates (core/storage/query) could be
+built and tested; Units B and C were deliberately not started and are briefed in
+`docs/remediation-status.md`.
+
+| Unit | Scope | Tier routed | Model | Outcome | Notes |
+|---|---|---|---|---|---|
+| A | storage + query + core paths (F1, F5s, F6–F8, F10, F16–F20, F22) | Opus-tier work (migrations, deletion/erasure, schema) done by the orchestrator session itself | Sonnet 5.5 | 7 + 6 regression tests written first and confirmed red on `906ce21`; all green; clippy clean on the three crates | **Not yet adversarially reviewed.** Mutation-checked two tests (FTS secure-delete, read transaction); one first mutation was invalid (same connection shares the transaction) and was redone. |
+| B | capture/recorder (F2–F4, F9, F11–F15, F21) | Opus (concurrency, unsafe, security) | — | **not started** | needs Windows to build and verify |
+| C | WinUI viewer | Sonnet | — | **not started** | needs Windows |
+
+Defects noted along the way: the CLI's `forget` padded the fence `until` by 60 s into the future,
+which with a real fence would have dropped a minute of legitimate frames (fixed); a
+`resolve_media_path` test compared `/` against `\` separators and failed on non-Windows (made
+portable).

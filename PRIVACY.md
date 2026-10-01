@@ -78,17 +78,35 @@ the only way to stop capture, and it is always visible that you did it (or didn'
 
 ## How deletion works
 
-Deleting a time range (`delete_range`, exposed via the CLI as a delete-recent action) removes, in
-one transaction: the `events` rows in that range, any `visual_states` no longer referenced by any
-remaining event (and their `ocr_blocks` and full-text index rows), and finally the backing WebP
-image files on disk. A visual state still referenced by an event outside the deleted range (for
-example, an unchanged screen whose observation span straddles the boundary) is preserved, not
-deleted out from under a surviving row. A failed file deletion is reported back rather than
-treated as fatal, so a locked or already-missing file doesn't abort an otherwise-successful
-deletion of everything else.
+Deleting a time range (`delete_range`, exposed as `rsrewind forget`) runs, in one transaction: it
+records a durable **deletion fence** for the range, deletes the `events` rows in it, any
+`visual_states` no longer referenced by any remaining event (and their `ocr_blocks` and full-text
+index rows), and any `windows` / `applications` rows (window titles, process names) that no
+remaining event references. After the commit it deletes the backing WebP files, then sweeps
+*orphan* image files — files with no database row, such as the leftovers of a crash between a file
+write and its row insert, recognised by the capture time in their file name — and stale temp files
+from the same range. Finally it truncates the SQLite write-ahead log.
+
+- **Fence.** Until a fence is pruned (retention does that once it passes the retention horizon),
+  the store refuses to insert a screenshot or observation whose capture time falls inside the
+  range (`StorageError::Fenced`). A frame that was queued or still being encoded when you ran
+  `forget` therefore cannot bring the forgotten moment back.
+- **Stale OCR.** OCR results are saved against the screenshot's id *and* file path, and ids are
+  never reused, so a result computed for a deleted screenshot cannot attach to another one.
+- **Physical erasure inside `recall.db`.** `secure_delete` and FTS5's `secure-delete` are on, so
+  deleted pages and index entries are zeroed rather than left in free pages, and the WAL (which
+  keeps earlier page versions) is checkpoint-truncated. If another process is reading at that
+  moment the truncation is skipped, `forget` says so, and the next checkpoint finishes it.
+- **Backups are not rewritten.** `backupsecall-v{N}-*.db` copies, made before a schema
+  upgrade, contain history as it was then. `forget` lists any that exist; deleting them is your
+  decision. Uninstalling never removes them either.
+- A failed file deletion is reported back rather than treated as fatal, so a locked or
+  already-missing file doesn't abort an otherwise-successful deletion.
 
 Retention (`apply_retention`, `storage.retention_days` / `storage.max_size_gb`) runs the same
-underlying deletion path automatically, oldest-first, on a schedule — see `ARCHITECTURE.md`.
+deletion path (without a fence) oldest-first. The size cap bounds the real disk footprint:
+`recall.db`, its WAL and every file under `media/`, orphans included; the database is compacted
+before more history is deleted.
 
 ## Encryption — current state: none
 
@@ -139,7 +157,8 @@ Not implemented yet; tracked here so the gap is explicit rather than silent:
   rules match on window title text, which is simple and predictable but not foolproof (a browser
   that doesn't put that text in its title window, or a renamed/localized build, would not match).
 - **A delete-recent UI** in the WinUI 3 desktop app, not just the CLI/storage-layer capability.
-- **Secure-delete limits on SSDs** — `delete_range` and retention currently delete files through
+- **Secure-delete limits on SSDs** — inside `recall.db` deleted content is overwritten (see "How
+  deletion works"), but `delete_range` and retention delete screenshot files through
   the normal filesystem delete path. On an SSD, a normal delete does not guarantee the underlying
   flash cells are immediately or securely overwritten (wear-leveling and TRIM behavior are outside
   rsRewind's control); a genuinely secure-delete guarantee is not currently made and is tracked

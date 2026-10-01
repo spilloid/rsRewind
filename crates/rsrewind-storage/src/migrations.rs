@@ -217,8 +217,8 @@ fn backup_database(conn: &Connection, data: &DataDir, from: u32) -> Result<PathB
 /// [`STALE_LOCK`] belongs to a crashed migrator and is taken over.
 struct MigrationLock(PathBuf);
 
-const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(120);
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(600);
 
 impl MigrationLock {
     fn acquire(data: &DataDir) -> Result<Self> {

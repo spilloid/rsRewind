@@ -10,6 +10,16 @@ The MVP bootstrap: the architecture contract and the shared domain-type foundati
 the implementation is built against. No end-user-facing functionality ships yet — the
 `rsrewind.exe` binary is currently a placeholder.
 
+### Fixed (Astra review, storage/query — recorder fixes still open)
+
+- Storage/query findings F1, F5 (storage side), F6, F7, F8, F10, F16–F20, F22: ids never reused;
+  deletion fences; deletion also removes window titles and applications, orphan media and stale
+  temp files, and is physical inside `recall.db` (secure_delete, FTS5 secure-delete, WAL
+  truncate); media paths confined to `media/` without symlinks/junctions; serialised migrations
+  with exclusive backup names; size retention counts the real disk footprint; `at()`, timeline
+  paging (`TimelineCursor`), search time-range semantics and `visual_detail` snapshots corrected.
+  See `docs/remediation-status.md`.
+
 ### Added
 
 - `docs/mvp-contract.md` — the orchestrator's architecture contract for the first vertical slice,

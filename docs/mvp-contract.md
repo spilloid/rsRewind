@@ -268,3 +268,13 @@ reads (`visual_detail`) run in one read transaction.
 delivery keeps a timestamp high-water mark across both drain paths. Console close/logoff waits
 (bounded) for shutdown to finish. The GDI test helper validates dimensions. Backup destinations are
 reserved exclusively before the backup is written.
+
+### Implemented API for the Review amendments (storage/query, 2026-10-01)
+
+Authoritative signatures and the open items for the recorder are in
+`docs/remediation-status.md`. In short: `save_ocr`/`mark_ocr` take the expected media path;
+inserts and observations fail with `StorageError::Fenced` inside a deletion fence and with
+`StorageError::ContextMissing` for a deleted cached application/window; `DeleteReport` reports
+orphan files, WAL truncation and surviving backups; `QueryDb::recent` pages by `TimelineCursor`
+(`TimelineEntry` gains `event_id`). The recorder-side amendments (privacy provenance, fail-closed,
+pause barrier, writer feedback) are **not yet implemented**.
