@@ -8,8 +8,10 @@
 use crate::{ApplicationContext, WindowContext};
 use serde::{Deserialize, Serialize};
 
+// `deny_unknown_fields` is load-bearing: a misspelled key here would otherwise be silently ignored
+// and the user's exclusion would never apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PrivacyPolicy {
     pub excluded_processes: Vec<String>,
     pub excluded_title_patterns: Vec<String>,
@@ -20,7 +22,9 @@ pub enum PrivacyDecision {
     Allow,
     /// Do not persist pixels. `rule` names the matching rule (safe to log: it is user config, not
     /// captured content).
-    Exclude { rule: String },
+    Exclude {
+        rule: String,
+    },
 }
 
 impl PrivacyDecision {
@@ -45,13 +49,9 @@ impl PrivacyPolicy {
             ]
             .map(String::from)
             .to_vec(),
-            excluded_title_patterns: [
-                "*InPrivate*",
-                "*Incognito*",
-                "*Private Browsing*",
-            ]
-            .map(String::from)
-            .to_vec(),
+            excluded_title_patterns: ["*InPrivate*", "*Incognito*", "*Private Browsing*"]
+                .map(String::from)
+                .to_vec(),
         }
     }
 
@@ -60,27 +60,25 @@ impl PrivacyPolicy {
         application: Option<&ApplicationContext>,
         window: Option<&WindowContext>,
     ) -> PrivacyDecision {
-        if let Some(app) = application {
-            if let Some(rule) = self
+        if let Some(app) = application
+            && let Some(rule) = self
                 .excluded_processes
                 .iter()
                 .find(|rule| rule.trim().eq_ignore_ascii_case(app.process_name.trim()))
-            {
-                return PrivacyDecision::Exclude {
-                    rule: format!("process:{rule}"),
-                };
-            }
+        {
+            return PrivacyDecision::Exclude {
+                rule: format!("process:{rule}"),
+            };
         }
-        if let Some(window) = window {
-            if let Some(rule) = self
+        if let Some(window) = window
+            && let Some(rule) = self
                 .excluded_title_patterns
                 .iter()
                 .find(|pattern| glob_matches(pattern, &window.title))
-            {
-                return PrivacyDecision::Exclude {
-                    rule: format!("title:{rule}"),
-                };
-            }
+        {
+            return PrivacyDecision::Exclude {
+                rule: format!("title:{rule}"),
+            };
         }
         PrivacyDecision::Allow
     }
@@ -142,14 +140,29 @@ mod tests {
             excluded_processes: vec!["1Password.exe".into()],
             ..Default::default()
         };
-        assert!(policy.evaluate(Some(&app("1PASSWORD.EXE")), None).is_excluded());
-        assert!(!policy.evaluate(Some(&app("1Password.exe.bak")), None).is_excluded());
-        assert!(!policy.evaluate(Some(&app("Not1Password.exe")), None).is_excluded());
+        assert!(
+            policy
+                .evaluate(Some(&app("1PASSWORD.EXE")), None)
+                .is_excluded()
+        );
+        assert!(
+            !policy
+                .evaluate(Some(&app("1Password.exe.bak")), None)
+                .is_excluded()
+        );
+        assert!(
+            !policy
+                .evaluate(Some(&app("Not1Password.exe")), None)
+                .is_excluded()
+        );
     }
 
     #[test]
     fn title_globs() {
-        assert!(glob_matches("*InPrivate*", "New tab - [InPrivate] - Microsoft Edge"));
+        assert!(glob_matches(
+            "*InPrivate*",
+            "New tab - [InPrivate] - Microsoft Edge"
+        ));
         assert!(glob_matches("*inprivate*", "x INPRIVATE y"));
         assert!(glob_matches("Bank*", "Bank of Example"));
         assert!(!glob_matches("Bank*", "My Bank"));

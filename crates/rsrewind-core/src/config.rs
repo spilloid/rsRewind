@@ -158,7 +158,7 @@ impl Config {
         if c.image_quality > 100 {
             return Err("capture.image_quality must be 0-100".into());
         }
-        if !(self.storage.max_size_gb >= 0.0) {
+        if !self.storage.max_size_gb.is_finite() || self.storage.max_size_gb < 0.0 {
             return Err("storage.max_size_gb must be >= 0".into());
         }
         Ok(())
@@ -177,7 +177,9 @@ mod tests {
     #[test]
     fn partial_file_keeps_other_defaults() {
         let config = Config::parse("[capture]\nimage_quality = 60\n").ok();
-        let config = config.as_ref().map(|c| (c.capture.image_quality, c.capture.fps_candidate));
+        let config = config
+            .as_ref()
+            .map(|c| (c.capture.image_quality, c.capture.fps_candidate));
         assert_eq!(config, Some((60, 1.0)));
     }
 
@@ -205,7 +207,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_is_defaults_but_bad_file_is_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn missing_file_is_defaults_but_bad_file_is_error()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("config.toml");
         assert_eq!(Config::load_or_default(&path)?, Config::default());
