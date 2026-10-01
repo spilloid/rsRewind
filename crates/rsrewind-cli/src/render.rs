@@ -111,11 +111,23 @@ mod tests {
         let text = search_hits(&[hit()]);
         assert!(text.contains("Application: Teams\n"), "{text}");
         assert!(text.contains("Window: Jonathan Redmon\n"), "{text}");
+        // Newlines in the snippet collapse to spaces; the renderer adds no ellipses of its own.
         assert!(
-            text.contains("\"…TAP should work once [Web] Sign-In is enabled…\""),
+            text.contains("\"TAP should work once [Web] Sign-In is enabled\"\n"),
             "{text}"
         );
         assert!(text.contains("(id 7)"), "{text}");
+    }
+
+    #[test]
+    fn snippet_ellipses_come_from_the_query_layer_and_pass_through() {
+        let mut cut = hit();
+        cut.snippet = "…TAP should work once\n[Web] Sign-In is enabled…".into();
+        let text = search_hits(&[cut]);
+        assert!(
+            text.contains("\"…TAP should work once [Web] Sign-In is enabled…\"\n"),
+            "{text}"
+        );
     }
 
     #[test]
