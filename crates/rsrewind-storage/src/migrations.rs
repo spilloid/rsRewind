@@ -25,8 +25,9 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
     sql: include_str!("sql/0001_initial.sql"),
 }];
 
-/// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 1;
+/// The schema version this build writes and expects. Defined in `rsrewind-core` so the read side
+/// can check it without depending on this crate; the assertion below keeps the two in lockstep.
+pub use rsrewind_core::SCHEMA_VERSION;
 
 const _: () = assert!(MIGRATIONS[MIGRATIONS.len() - 1].version == SCHEMA_VERSION);
 

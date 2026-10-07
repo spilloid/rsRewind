@@ -133,6 +133,9 @@ fn collect(data: &DataDir) -> Vec<Check> {
         }
     };
     if let Some(store) = &store {
+        checks.push(replication_check(data, store, config.as_ref()));
+    }
+    if let Some(store) = &store {
         match store.integrity_check() {
             Ok(problems) if problems.is_empty() => checks.push(check(
                 "database",
@@ -324,4 +327,57 @@ fn free_bytes(path: &std::path::Path) -> Option<u64> {
     // `free` is a valid out-pointer.
     unsafe { GetDiskFreeSpaceExW(&path, Some(&mut free), None, None) }.ok()?;
     Some(free)
+}
+
+/// Sealed-segment backlog and whether history could be deleted before it is exported.
+fn replication_check(data: &DataDir, store: &Store, config: Option<&Config>) -> Check {
+    const NAME: &str = "replication";
+    let (status, scan) = match (
+        store.export_status(),
+        rsrewind_storage::scan_outbox(&data.outbox()),
+    ) {
+        (Ok(status), Ok(scan)) => (status, scan),
+        (Err(e), _) => return check(NAME, Level::Warn, e.to_string()),
+        (_, Err(e)) => return check(NAME, Level::Warn, e.to_string()),
+    };
+    if status.cut_ms == 0 && scan.segments.is_empty() && scan.unreadable.is_empty() {
+        return check(
+            NAME,
+            Level::Ok,
+            "not exporting (run `rsrewind export` to seal history for another machine)",
+        );
+    }
+    if !scan.unreadable.is_empty() {
+        return check(
+            NAME,
+            Level::Warn,
+            format!(
+                "{} outbox file(s) do not verify and will not import",
+                scan.unreadable.len()
+            ),
+        );
+    }
+    let bytes: u64 = scan.segments.iter().map(|s| s.bytes).sum();
+    let lag_days = (Timestamp::now().0 - status.cut_ms).max(0) / 86_400_000;
+    if let Some(config) = config {
+        let keep = i64::from(config.storage.retention_days);
+        if keep > 0 && lag_days * 2 >= keep && status.cut_ms > 0 {
+            return check(
+                NAME,
+                Level::Warn,
+                format!(
+                    "last export covered history up to {lag_days} day(s) ago and retention keeps {keep}; run `rsrewind export` before retention deletes unexported history"
+                ),
+            );
+        }
+    }
+    check(
+        NAME,
+        Level::Ok,
+        format!(
+            "{} sealed segment(s) in the outbox ({}); exported through {lag_days} day(s) ago",
+            scan.segments.len(),
+            super::human_bytes(bytes)
+        ),
+    )
 }

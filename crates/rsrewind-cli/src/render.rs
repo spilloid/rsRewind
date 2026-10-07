@@ -24,12 +24,12 @@ pub fn search_hits(hits: &[SearchHit]) -> String {
         let _ = writeln!(
             out,
             "Application: {}",
-            display_app(hit.application.as_deref())
+            plain(display_app(hit.application.as_deref()))
         );
         let _ = writeln!(
             out,
             "Window: {}",
-            hit.window_title.as_deref().unwrap_or("(unknown)")
+            plain(hit.window_title.as_deref().unwrap_or("(unknown)"))
         );
         // The query layer's snippet already carries its own `…` where it was cut.
         let _ = writeln!(out, "\"{}\"", one_line(&hit.snippet));
@@ -54,8 +54,8 @@ pub fn timeline(entries: &[TimelineEntry]) -> String {
             "{}  {:>5}s  {:<24}  {}  [id {}, ocr {}]",
             entry.started_at,
             span_secs,
-            truncate(display_app(entry.application.as_deref()), 24),
-            truncate(entry.window_title.as_deref().unwrap_or(""), 60),
+            truncate(&plain(display_app(entry.application.as_deref())), 24),
+            truncate(&plain(entry.window_title.as_deref().unwrap_or("")), 60),
             entry.visual_state_id,
             entry.ocr_status,
         );
@@ -75,7 +75,16 @@ pub fn display_app(process_name: Option<&str>) -> &str {
 }
 
 fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    plain(&text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Replaces control characters (ESC and friends) with `?` before text goes to a terminal. Window
+/// titles, process names, labels and OCR text come from whatever was on a screen, possibly a remote
+/// one, and must not be able to drive the terminal that prints them.
+pub fn plain(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -103,6 +112,7 @@ mod tests {
             snippet: "TAP should work once\n[Web] Sign-In is enabled".into(),
             media_path: r"C:\x\media\a.webp".into(),
             rank: -1.0,
+            source: None,
         }
     }
 
@@ -134,6 +144,17 @@ mod tests {
     fn empty_results_say_so() {
         assert_eq!(search_hits(&[]), "No matches.\n");
         assert_eq!(timeline(&[]), "Nothing recorded yet.\n");
+    }
+
+    #[test]
+    fn terminal_control_characters_never_reach_the_output() {
+        let mut hostile = hit();
+        hostile.window_title = Some("\u{1b}]0;pwned\u{7}title".into());
+        hostile.application = Some("a\u{1b}[2Jb.exe".into());
+        hostile.snippet = "x\u{1b}[31mred\u{9b}".into();
+        let out = search_hits(&[hostile]);
+        assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "{out:?}");
+        assert!(out.contains("title"));
     }
 
     #[test]

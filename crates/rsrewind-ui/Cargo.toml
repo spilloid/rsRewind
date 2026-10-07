@@ -1,14 +1,30 @@
 [package]
 name = "rsrewind-ui"
+description = "The rsRewind window: Iced chrome and a wgpu rewind viewport, reading history through rsrewind-query"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# CLAUDE.md: first-party dependencies are rsrewind-core and rsrewind-query only, never capture,
+# storage, OCR or the daemon, even transitively (rsrewind-query/tests/ui_boundary.rs).
 [dependencies]
 rsrewind-core.workspace = true
+rsrewind-query.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
+iced = { workspace = true, features = [
+    "wgpu",
+    "image-without-codecs",
+    "thread-pool",
+    "crisp",
+    "web-colors",
+] }
+
+# Nothing in this crate is Windows-specific; Linux needs a windowing backend selected explicitly.
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { workspace = true, features = ["x11", "wayland", "linux-theme-detection"] }
 
 [lints]
 workspace = true

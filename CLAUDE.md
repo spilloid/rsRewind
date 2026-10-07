@@ -20,6 +20,10 @@ out of scope for an ordinary PR and needs a design discussion first, not a code 
 - No Tauri, Electron, or any browser runtime.
 - No Python, no Docker.
 - No required network service, no cloud dependency.
+- Replication between installations is **file-based** (`rsrewind export` / `import` of `.rsseg`
+  segments; see `docs/design/distributed.md`). Moving the files is the operator's job. A built-in
+  transport would need an explicit, narrowly worded amendment of this list; do not add one
+  incidentally.
 - No listening socket, no local HTTP server (control/status go through SQLite tables — see
   `ARCHITECTURE.md`'s process model — never a pipe or socket).
 - No telemetry, no "phone home," no network client code anywhere in the recording path.
@@ -49,7 +53,8 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 "the UI crashing cannot stop recording" true by construction rather than by convention.
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
-`status`, `pause`, `resume`, `search`, `recent`, `doctor`, `ui`, `data-dir`) — not separate
+`status`, `pause`, `resume`, `search`, `recent`, `forget`, `export`, `import`, `sources`,
+`doctor`, `ui`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 
 **No `unwrap()`/`expect()` in runtime code.** Tests may use `?` with `Box<dyn Error>`. A justified
@@ -82,14 +87,16 @@ installed — it usually is, just not exported.
 
 ```
 crates/rsrewind-core/      shared domain types, config, paths, privacy rules — implemented
-crates/rsrewind-capture/   Windows capture, change detection — not yet implemented
-crates/rsrewind-storage/   SQLite schema, migrations, media I/O — not yet implemented
-crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — not yet implemented
-crates/rsrewind-query/     read-only search/timeline queries — not yet implemented
-crates/rsrewind-daemon/    recorder orchestration, threading model — not yet implemented
-crates/rsrewind-cli/       rsrewind.exe, clap subcommands — placeholder main.rs only
-crates/rsrewind-ui/        WinUI 3 desktop UI (windows-reactor) — not yet implemented
+crates/rsrewind-segment/   sealed history segment file format (replication unit) — implemented
+crates/rsrewind-storage/   SQLite schema, migrations, media I/O, segment export/import — implemented
+crates/rsrewind-query/     read-only search/timeline queries + cross-source history facade — implemented
+crates/rsrewind-capture/   Windows capture, change detection — code present, Windows-only, unverified
+crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — code present, Windows-only, unverified
+crates/rsrewind-daemon/    recorder orchestration, threading model — code present, Windows-only; Unit B open
+crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows-only)
+crates/rsrewind-ui/        desktop UI: Iced chrome + custom wgpu rewind viewport — implemented; Windows-verified on synthetic history only
 docs/mvp-contract.md       the orchestrator's pre-implementation contract for the first slice
+docs/design/distributed.md probe / central-instance architecture, options, threat model, stages
 docs/dev-process.md        STD-001 log: routing decisions and outcomes for this repo
 docs/standards.md          company standards (STD-001..008) adoption status for this repo
 docs/installer.md          MSI installer design and status

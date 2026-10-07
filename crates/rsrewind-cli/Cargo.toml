@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 rsrewind-core.workspace = true
 rsrewind-storage.workspace = true
+rsrewind-segment.workspace = true
 rsrewind-query.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -30,6 +31,9 @@ rsrewind-capture.workspace = true
 rsrewind-ocr.workspace = true
 rsrewind-ui.workspace = true
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

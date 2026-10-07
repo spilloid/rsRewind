@@ -1,7 +1,7 @@
 //! Screenshot files: lossy WebP encode/decode and crash-safe, never-overwriting writes.
 
 use crate::{Result, StorageError};
-use rsrewind_core::{BgraFrame, DataDir};
+use rsrewind_core::{BgraFrame, DataDir, MediaPathError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,6 +75,13 @@ pub fn decode_webp(bytes: &[u8]) -> Result<BgraFrame> {
     })
 }
 
+/// Width and height from a still WebP's header, without decoding the pixels. `None` for anything
+/// that is not a single still WebP image (garbage, truncated headers, animations).
+pub fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let features = webp::BitstreamFeatures::new(bytes)?;
+    (!features.has_animation()).then(|| (features.width(), features.height()))
+}
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Writes `bytes` to the media file at `relative` (forward slashes, inside the data root).
@@ -103,60 +110,17 @@ pub fn write_webp_exclusive(data: &DataDir, relative: &str, bytes: &[u8]) -> Res
 }
 
 /// Maps a stored relative media path to an absolute path, rejecting anything unsafe.
-pub fn resolve_media_path(data: &DataDir, relative: &str) -> Result<PathBuf> {
-    // Stored paths use forward slashes only; a backslash means someone else wrote this value.
-    if relative.contains('\\') {
-        return Err(StorageError::InvalidMediaPath(relative.to_owned()));
-    }
-    let path = data
-        .resolve_media(relative)
-        .ok_or_else(|| StorageError::InvalidMediaPath(relative.to_owned()))?;
-    reject_reparse_points(data, &path, relative)?;
-    Ok(path)
-}
-
-/// Fails if any existing component of `path` below the data root is a symlink or junction.
 ///
-/// A lexically clean `media/link/x.webp` is still outside the data folder when `link` points
-/// elsewhere. The root itself may legitimately be a link (history on another drive), so only the
-/// components under it are checked. This is check-then-use: it stops tampered rows and stray
-/// links, not an attacker racing the recorder, who already runs as this user.
-fn reject_reparse_points(data: &DataDir, path: &Path, relative: &str) -> Result<()> {
-    let Ok(below_root) = path.strip_prefix(data.root()) else {
-        return Err(StorageError::InvalidMediaPath(relative.to_owned()));
-    };
-    let mut current = data.root().to_path_buf();
-    for component in below_root.components() {
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if is_reparse_point(&metadata) => {
-                return Err(StorageError::InvalidMediaPath(relative.to_owned()));
-            }
-            Ok(_) => {}
-            // Nothing exists from here down yet; there is nothing to follow.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(StorageError::io(&current, e)),
-        }
-    }
-    Ok(())
+/// The rules live in [`DataDir::resolve_media_checked`] (`rsrewind-core`), shared with the read
+/// side; this wrapper only maps the error into [`StorageError`].
+pub fn resolve_media_path(data: &DataDir, relative: &str) -> Result<PathBuf> {
+    data.resolve_media_checked(relative).map_err(|e| match e {
+        MediaPathError::Unsafe(path) => StorageError::InvalidMediaPath(path),
+        MediaPathError::Io { path, source } => StorageError::io(path, source),
+    })
 }
 
-pub(crate) fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink() || has_reparse_attribute(metadata)
-}
-
-/// FILE_ATTRIBUTE_REPARSE_POINT: junctions and every other reparse tag.
-#[cfg(windows)]
-fn has_reparse_attribute(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn has_reparse_attribute(_: &std::fs::Metadata) -> bool {
-    false
-}
+pub(crate) use rsrewind_core::paths::is_reparse_point;
 
 fn temp_path(parent: &Path, destination: &Path) -> PathBuf {
     let name = destination

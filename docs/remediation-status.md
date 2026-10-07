@@ -100,7 +100,7 @@ Tension points found while doing Unit A:
 - **`at()`** scans backwards for a covering span; with an enormous history and one span that
   outlives millions of later events it is O(n). Add an index/interval table if profiling says so.
 
-## Unit C (WinUI viewer) — TODO and tension points
+## Unit C (viewer) — TODO and tension points
 
 Nothing of Unit C survived: `crates/rsrewind-ui/src/lib.rs` is the 7-line stub, and no design
 boards are in Git (only `docs/design/brief.md`). Build to the brief ("nostalgia at the edges,
@@ -110,11 +110,18 @@ clarity at the center"), reading only through `rsrewind-query`.
 - `visual_detail` is now a single snapshot; the UI can call it on selection without caveats.
 - Search hits report the earliest *matching* observation (it may differ from the state's first
   sighting): "cue to the moment" must jump to that timestamp, not `captured_at`.
-- The UI crate must still not depend (even transitively) on capture/storage/ocr/daemon. Note that
-  `rsrewind-query` depends on `rsrewind-storage` (for `SCHEMA_VERSION` and `resolve_media_path`),
-  so this is currently only true for the *direct* graph — the CLAUDE.md rule says "even
-  transitively". Either move those two items into `rsrewind-core` or amend the rule; decide before
-  the UI crate gets real dependencies.
+- The UI crate must still not depend (even transitively) on capture/storage/ocr/daemon. **Fixed
+  2026-10-06:** `SCHEMA_VERSION` and stored-media-path resolution moved into `rsrewind-core`
+  (`rsrewind_core::SCHEMA_VERSION`, `DataDir::resolve_media_checked`); storage re-exports/wraps them
+  with unchanged behaviour, and `rsrewind-query` keeps storage only as a dev-dependency.
+  `rsrewind-query/tests/ui_boundary.rs` walks `cargo metadata` (all platforms, non-dev edges) and
+  fails if the UI or the query layer can reach storage, capture, OCR, the daemon, segment or the CLI
+  (mutation-checked with a Windows-only edge, caught on Linux).
+
+**Status 2026-10-06:** the technology changed (maintainer decision: Iced chrome + custom wgpu
+viewport, not WinUI). Built on the `History` facade: `TimelineCursor` paging (now total across
+sources), cue-to-moment on the hit's matching observation timestamp, `visual_detail` as one snapshot
+per selection. See ARCHITECTURE.md "UI boundary" and `docs/dev-process.md` (2026-10-06, UI).
 
 ## Still to do after B and C (from the handoff)
 

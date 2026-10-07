@@ -1475,3 +1475,5 @@ fn forget_names_surviving_backups_and_truncates_the_wal() -> TestResult {
     assert!(report.wal_truncated);
     Ok(())
 }
+
+mod replication;

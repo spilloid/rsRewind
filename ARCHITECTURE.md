@@ -5,36 +5,45 @@ orchestrator's contract written *before* the first vertical slice was implemente
 meant to track the real, built system over time and will diverge from the contract as
 implementation proceeds and is reviewed.
 
-**Verification status at the time of writing:** only `rsrewind-core` (shared domain types,
-config, paths, privacy rules, event/search types) is implemented and tested. `rsrewind-capture`,
-`rsrewind-storage`, `rsrewind-ocr`, `rsrewind-query`, `rsrewind-daemon`, `rsrewind-ui`, and
-`rsrewind-cli`'s actual subcommands are **not yet implemented** — their crates currently contain
-only placeholder code. Everything below describes the committed design those crates are being
-built against, not confirmed behavior of a working binary. Sections describing unimplemented
-pieces say so explicitly.
+**Verification status (2026-10-06).** This file's earlier claim that only `rsrewind-core` exists
+was stale. Actual state: `rsrewind-core`, `-storage`, `-query` and `-segment` are implemented and
+tested (these are the crates that build and test on Linux; run `cargo test -p rsrewind-core -p
+rsrewind-segment -p rsrewind-storage -p rsrewind-query -p rsrewind-cli`). `rsrewind-capture`,
+`-ocr`, `-daemon` and the recorder half of `-cli` have real code that only builds on Windows; the
+Astra-review remediation for them (Unit B in `docs/remediation-status.md`) is still open, so treat
+recorder behaviour as unverified. `rsrewind-ui` is an Iced application with a custom wgpu rewind
+viewport, reading through the `rsrewind-query` history facade (built 2026-10-06; see
+[UI boundary](#ui-boundary)). Sections below say when something is design rather than built.
 
 ## Workspace and crate responsibilities
 
 ```
 core  <- capture
 core  <- ocr
-core  <- storage <- query
+core  <- segment          (pure file format; no SQLite)
+core, segment  <- storage
+core           <- query            (storage only as a dev-dependency, for test fixtures)
 core, capture, ocr, storage           <- daemon
-core, storage, query, daemon, ui      <- cli  (bin: rsrewind.exe)
-core, query                           <- ui   (windows-reactor; windows-core 0.100 line)
+core, segment, storage, query, daemon, ui  <- cli  (bin: rsrewind.exe)
+core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bindings)
 ```
 
 - **`rsrewind-core`** — shared domain vocabulary with no SQLite, no Windows capture calls, and no
   UI dependency: `Config`, `Timestamp`, row-id newtypes (`EventId`, `VisualStateId`, …),
   `EventKind`, `MonitorInfo`, `ApplicationContext`/`WindowContext`/`FocusContext`, `BgraFrame`,
   `OcrBlock`, `CaptureState`, `PrivacyPolicy`/`PrivacyDecision`, `DataDir`/path layout, and the
-  query-facing types (`SearchQuery`, `SearchHit`, `TimelineEntry`, `VisualDetail`). Every other
+  query-facing types (`SearchQuery`, `SearchHit`, `TimelineEntry`, `VisualDetail`, `SourceId`,
+  `TimelineCursor`), the schema version both sides check (`SCHEMA_VERSION`) and the one stored
+  media path resolver both sides use (`DataDir::resolve_media_checked`). Every other
   crate depends on this one so they agree on vocabulary without depending on each other's
   internals. Implemented and tested.
 - **`rsrewind-capture`** — thin, typed wrappers around the Windows capture APIs (Windows.Graphics
   Capture, foreground window/process inspection, visible-window enumeration for privacy
   decisions, idle-time detection) plus a pure, Windows-free change-detection module. Not yet
   implemented.
+- **`rsrewind-segment`** — the sealed history segment: manifest types, writer and verifying
+  reader for the single-file `.rsseg` format used to replicate history between installations.
+  Pure format, no SQLite, no network, no Windows. See [Replication](#replication-probes-and-a-central-instance).
 - **`rsrewind-storage`** — owns the SQLite schema and all writes: sessions, monitors,
   applications, windows, visual states, events, OCR blocks and the FTS5 index, plus the
   control/status tables the CLI and daemon use to communicate. Also owns WebP encode/decode and
@@ -42,15 +51,19 @@ core, query                           <- ui   (windows-reactor; windows-core 0.1
 - **`rsrewind-ocr`** — wraps `Windows.Media.Ocr` to turn a captured frame into text blocks with
   bounding boxes. Not yet implemented.
 - **`rsrewind-query`** — a read-only query layer over the same database `rsrewind-storage`
-  writes: safe FTS5 query parsing, search, recent/timeline, and point-in-time lookups. The only
-  crate (besides `rsrewind-storage` itself) that touches SQL. Not yet implemented.
+  writes: safe FTS5 query parsing, search, recent/timeline, and point-in-time lookups, plus the
+  **history facade** (`History`) that answers the same questions across this machine's store and
+  every imported replica. The only crate (besides `rsrewind-storage` itself) that touches SQL. It
+  does not depend on `rsrewind-storage` (only its tests do), so the UI cannot reach storage
+  through it.
 - **`rsrewind-daemon`** — the recorder's orchestration: capture/persist/OCR threads, the
   bounded-channel pipeline, control-state polling, privacy enforcement, retention, and the
   single-instance/heartbeat/shutdown lifecycle. Not yet implemented.
 - **`rsrewind-cli`** — the `rsrewind` binary: argument parsing (`clap`) and dispatch to the
   daemon, storage, and query crates. Currently a placeholder `main.rs`.
-- **`rsrewind-ui`** — the optional WinUI 3 desktop UI (`windows-reactor`), reading only through
-  `rsrewind-query`. Not yet implemented.
+- **`rsrewind-ui`** — the desktop UI: Iced for the application chrome and a custom wgpu viewport
+  for the rewind room, reading only through `rsrewind-query`'s history facade. See
+  [UI boundary](#ui-boundary).
 
 ## Process model
 
@@ -173,9 +186,9 @@ database. `DataDir::resolve_media` (in `rsrewind-core`) is the one place a store
 turned back into an absolute one, and it refuses anything that could escape the data root
 (absolute paths, drive letters, `..`, leading slashes) — the database is treated as
 user-editable, untrusted input for this purpose. A stored path must also start with `media/`, and
-`rsrewind_storage::media::resolve_media_path` additionally rejects any existing component that is a
-symlink or junction (check-then-use: it stops tampered rows and stray links, not a racing local
-attacker).
+`DataDir::resolve_media_checked` (used by both storage and query) additionally rejects backslashes and
+any existing component that is a symlink or junction (check-then-use: it stops tampered rows and
+stray links, not a racing local attacker).
 
 **File-before-row write ordering.** When a new visual state is captured, the WebP file is written
 first (`write_webp_exclusive`: write to a temp file, then rename — never overwrite an existing
@@ -234,12 +247,65 @@ query cheap.
 ## UI boundary
 
 `rsrewind-ui` is a separate crate and a separate *process* from the recorder (see
-[Process model](#process-model)). It talks to history exclusively through `rsrewind-query`'s
-typed API, run on a background task (`spawn_background`), and never issues SQL of its own. The
-daemon does not know the UI exists; the UI does not know how the daemon captures anything. This
-means the UI can crash, be force-closed, or simply not be installed (Windows App Runtime missing)
+[Process model](#process-model)): `rsrewind ui` starts `rsrewind ui --foreground` detached and
+returns. It talks to history exclusively through `rsrewind-query`'s history facade, never issues
+SQL of its own, and its dependency graph cannot reach capture, storage, OCR or the daemon
+(`rsrewind-query/tests/ui_boundary.rs` walks `cargo metadata` for every platform and fails the
+build otherwise). The daemon does not know the UI exists; the UI does not know how the daemon
+captures anything. This means the UI can crash, be force-closed, or simply not be installed
 without any effect on whether recording continues, and it means the UI crate can be rewritten
-entirely (different framework, different OS even, hypothetically) without touching the recorder.
+entirely without touching the recorder.
+
+**History facade** (`rsrewind_query::History`, `docs/design/distributed.md` §4). Opens this
+machine's store and every `sources/<id>/` replica read-only and answers `sources()`,
+`recent(filter, limit, cursor)`, `at(ts, filter)`, `search(query, filter)`,
+`visual_detail(source, id)` and, through `MediaReader`, the bytes or decoded pixels of a result's
+picture. Results carry `source: Option<SourceId>` (`None` = this machine; omitted from `--json` when
+`None`, so existing output is unchanged). The timeline order is `(started_at, source, event_id)`,
+total across sources (event ids are only unique per store), and each per-store query gets the
+projection of the global cursor, so paging never skips or repeats. A replica is used only if its
+own `settings` say it is the replica of exactly the id its folder is named after; anything else is
+skipped and reported, never attributed. Pictures are read only from the reporting source's own
+`media/` tree, through the same resolver the writer uses, with size limits before decode.
+
+**Threads.** One worker thread owns the facade (SQLite connections are not `Sync`); queued
+questions of the same kind collapse to the newest (typing, scrubbing). Two decoder threads read
+and shrink pictures through `MediaReader` (no database), newest request first, from a bounded
+queue. Replies come back as futures awaited by Iced `Task`s, so the UI thread never blocks.
+
+**Rewind viewport.** A custom `iced::widget::shader` widget. `timeline::model` is pure, unit-tested
+math: a camera at a moment, depth logarithmic in elapsed time (the last minute is spread out, last
+week compressed into the back), one lane per source, perspective scale, culling (too deep, passed,
+off-screen, at most 180 cards, nearest kept), back-to-front order, hit testing and scrub/zoom.
+`timeline::gpu` draws rounded, bordered quads with an SDF shader, textured with mip-mapped
+thumbnails from a GPU texture LRU bounded at 128 MB (on-screen textures are never evicted); decoded
+thumbnails are cached on the CPU in a separate 96 MB LRU. Search hits cue the room to the hit's
+matching observation (not its first capture) with a 180 ms settle rather than a fly-through.
+
+## Replication (probes and a central instance)
+
+Full analysis, options considered and threat model: `docs/design/distributed.md`. In short:
+
+- A **segment** is an immutable, SHA-256-verified file holding a closed slice of one source's
+  history (events, the context they reference, WebP images, OCR text). It carries no database ids
+  and no absolute paths. `rsrewind export` seals settled history into `outbox/`; `rsrewind import`
+  merges segment files into a data directory.
+- Every origin store has a random **source id** (in `settings`). A central instance keeps **one
+  complete replica store per source** under `sources/<id>/`; a replica refuses segments from any
+  other source, so cross-endpoint attribution cannot happen by construction. A replica is an
+  ordinary store: `search`, `recent`, `forget`, retention and `doctor` work on it unchanged.
+- Sealing selects by `ended_at` once an event has been quiet for at least 60 s, so an observation
+  still being extended never leaks half-finished or blocks later history. Publishing a segment
+  precedes advancing the export watermark, and a crash between the two is recovered from the file.
+- Import is idempotent (`(source, seq)` + content hash), conflict-detecting, validating
+  (images, references), fence-respecting (a central forget holds against re-delivery), and
+  transactional. Image files are written before rows, as for the recorder.
+- **There is no networking in rsRewind.** Moving segment files (rsync, a share, a sync tool,
+  over LAN or WireGuard) is the operator's concern. Authentication of probes and an optional
+  built-in transport are stage 3 and would need an explicit amendment of the network rule in
+  `CLAUDE.md`.
+- State lives in the existing `settings` table (`source.id`, `source.role`, `source.label`,
+  `export.*`, `import.seq.<n>`); no schema migration was needed.
 
 ## Design rationale
 
@@ -263,7 +329,16 @@ model simple: one file per visual state, independently readable, independently d
 out to need real video compression, that is a deliberate, benchmarked future change, not a
 default.
 
-### Why WinUI 3 / windows-reactor, and the two `windows-core` lines
+### Why Iced + wgpu (superseding WinUI 3 / windows-reactor)
+
+Decided by the maintainer on 2026-10-06: Rust only, Iced for ordinary application chrome, and a
+custom wgpu viewport for the rewind view, because the spatial timeline (screenshots as GPU textures
+receding into depth) is the product's centre and needs a real GPU surface. Iced draws with wgpu
+itself, so the viewport shares its device and render pass instead of compositing a second surface.
+The UI uses no Windows bindings; the section below describes the previous plan and is kept for the
+`windows-core` reasoning, which still applies to the recorder crates.
+
+### (Previous plan) WinUI 3 / windows-reactor, and the two `windows-core` lines
 
 The UI uses Microsoft's `windows-reactor` 0.100 (a `Component`/`View` framework over WinUI 3),
 which requires the Windows App Runtime 2.4 framework package at runtime. The recorder crates
@@ -306,7 +381,8 @@ functionality.
 
 - **No network code of any kind.** No HTTP client, no listening socket, no telemetry library, in
   any crate. This is treated as an architectural invariant, not a current state that might
-  change — see `CLAUDE.md`'s hard rules.
+  change — see `CLAUDE.md`'s hard rules. Replication between installations is deliberately
+  file-based for this reason (see [Replication](#replication-probes-and-a-central-instance)).
 - Library crates (`rsrewind-core`, `rsrewind-capture`, `rsrewind-storage`, `rsrewind-ocr`,
   `rsrewind-query`) expose typed errors via `thiserror`; `anyhow` is reserved for the
   binary-level crates (`rsrewind-cli`, `rsrewind-daemon`) where a typed error no longer needs to

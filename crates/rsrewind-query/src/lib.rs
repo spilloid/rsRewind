@@ -4,16 +4,16 @@
 //! modify the database even by accident, and callers never write SQL: user text goes through
 //! [`parse_query`] and is bound as a parameter, never spliced into a statement.
 
+pub mod history;
 mod parse;
 
+pub use history::{History, MediaReader, SourceFilter, SourceInfo, SourceKind, SourceProblem};
 pub use parse::{FtsExpr, parse_query};
 
 use rsrewind_core::{
-    DataDir, EventId, OcrBlock, SearchHit, SearchQuery, TimelineCursor, TimelineEntry, Timestamp,
-    VisualDetail, VisualStateId,
+    DataDir, EventId, MediaPathError, OcrBlock, SCHEMA_VERSION, SearchHit, SearchQuery, SourceId,
+    TimelineCursor, TimelineEntry, Timestamp, VisualDetail, VisualStateId,
 };
-use rsrewind_storage::SCHEMA_VERSION;
-use rsrewind_storage::media::resolve_media_path;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior, params,
@@ -39,6 +39,22 @@ pub enum QueryError {
          run the recorder from the same rsRewind version to migrate it"
     )]
     SchemaMismatch { found: u32, expected: u32 },
+
+    #[error("no source {0} in this data folder")]
+    UnknownSource(String),
+
+    #[error(transparent)]
+    MediaPath(#[from] MediaPathError),
+
+    #[error("I/O error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("image error: {0}")]
+    Image(String),
 }
 
 /// `0` means "use the default"; anything above [`MAX_LIMIT`] is clamped.
@@ -54,11 +70,17 @@ pub fn clamp_limit(limit: u32) -> u32 {
 pub struct QueryDb {
     conn: Connection,
     data: DataDir,
+    /// Stamped on every result. `None` for a store opened directly (this machine's history, or
+    /// any store the caller pointed at); the history facade sets it for replicas.
+    source: Option<SourceId>,
 }
 
 impl std::fmt::Debug for QueryDb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QueryDb").field("data", &self.data).finish()
+        f.debug_struct("QueryDb")
+            .field("data", &self.data)
+            .field("source", &self.source)
+            .finish()
     }
 }
 
@@ -134,7 +156,39 @@ impl QueryDb {
         Ok(Self {
             conn,
             data: data.clone(),
+            source: None,
         })
+    }
+
+    /// Results from this connection are attributed to `source` from now on.
+    pub(crate) fn attribute_to(&mut self, source: Option<SourceId>) {
+        self.source = source;
+    }
+
+    /// A row of the `settings` table (identity and replication bookkeeping), read-only.
+    pub(crate) fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Number of observations with a picture, and the time they span.
+    pub(crate) fn summary(&self) -> Result<(u64, Option<Timestamp>, Option<Timestamp>)> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*), MIN(started_at), MAX(ended_at) FROM events
+             WHERE kind = 'observation' AND visual_state_id IS NOT NULL",
+            [],
+            |row| {
+                Ok((
+                    u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                    row.get::<_, Option<i64>>(1)?.map(Timestamp),
+                    row.get::<_, Option<i64>>(2)?.map(Timestamp),
+                ))
+            },
+        )?)
     }
 
     pub fn data_dir(&self) -> &DataDir {
@@ -204,6 +258,7 @@ impl QueryDb {
                     snippet: row.get(5)?,
                     media_path: self.absolute(&relative),
                     rank: row.get(7)?,
+                    source: self.source,
                 })
             },
         )?;
@@ -216,6 +271,17 @@ impl QueryDb {
     /// ([`TimelineEntry::cursor`]); `(started_at, event_id)` is a total order, so simultaneous
     /// observations on several monitors are neither skipped nor repeated across pages.
     pub fn recent(&self, limit: u32, after: Option<TimelineCursor>) -> Result<Vec<TimelineEntry>> {
+        self.recent_before(limit, after.map(|c| (c.started_at.0, c.event_id.0)))
+    }
+
+    /// [`QueryDb::recent`] with the bound as raw `(started_at, event_id)`: only entries with
+    /// `(started_at, id) < bound` are returned. `(t, i64::MAX)` means "started at or before t",
+    /// `(t, i64::MIN)` "started before t"; the history facade uses both to page across stores.
+    pub(crate) fn recent_before(
+        &self,
+        limit: u32,
+        bound: Option<(i64, i64)>,
+    ) -> Result<Vec<TimelineEntry>> {
         let sql = format!(
             "{TIMELINE_SELECT}
              WHERE e.kind = 'observation'
@@ -224,11 +290,7 @@ impl QueryDb {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            params![
-                after.map(|c| c.started_at.0),
-                after.map(|c| c.event_id.0),
-                clamp_limit(limit)
-            ],
+            params![bound.map(|b| b.0), bound.map(|b| b.1), clamp_limit(limit)],
             |row| self.timeline_entry(row),
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -298,6 +360,7 @@ impl QueryDb {
                     ocr_status: row.get(8)?,
                     ocr_text: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     blocks: Vec::new(),
+                    source: self.source,
                 })
             })
             .optional()?;
@@ -340,13 +403,14 @@ impl QueryDb {
             media_path: self.absolute(&relative),
             ocr_status: row.get(7)?,
             event_id: EventId(row.get(8)?),
+            source: self.source,
         })
     }
 
     /// Absolute path for display/loading; empty if the stored path is unsafe (tampered row), so
     /// nothing outside the data directory is ever handed to a caller.
     fn absolute(&self, relative: &str) -> String {
-        match resolve_media_path(&self.data, relative) {
+        match self.data.resolve_media_checked(relative) {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(_) => {
                 tracing::warn!("ignoring unsafe media path stored in the database");

@@ -97,7 +97,8 @@ from the same range. Finally it truncates the SQLite write-ahead log.
   deleted pages and index entries are zeroed rather than left in free pages, and the WAL (which
   keeps earlier page versions) is checkpoint-truncated. If another process is reading at that
   moment the truncation is skipped, `forget` says so, and the next checkpoint finishes it.
-- **Backups are not rewritten.** `backupsecall-v{N}-*.db` copies, made before a schema
+- **Backups are not rewritten.** `backups
+ecall-v{N}-*.db` copies, made before a schema
   upgrade, contain history as it was then. `forget` lists any that exist; deleting them is your
   decision. Uninstalling never removes them either.
 - A failed file deletion is reported back rather than treated as fatal, so a locked or
@@ -129,6 +130,21 @@ DPAPI-based (or equivalent) encryption at rest is planned future work (see
 [Roadmap for privacy](#roadmap-for-privacy) below) — it is not implemented yet, and this document
 will be updated the moment it is, per this repo's documentation-freshness commitment
 (`docs/standards.md`, STD-003).
+
+## Exporting history to another machine
+
+`rsrewind export` writes segment files containing screenshots, window titles, process names and
+recognized text for settled history, to `outbox/` (or wherever `--out` points). Treat those files,
+the folder they are moved through, and a central instance's `sources/` folder as exactly as
+sensitive as the recorder's own data: there is no encryption at rest and, in this stage, no
+authentication of who produced a segment (a hash detects corruption, not forgery). Exporting is
+always an explicit command; nothing is sent anywhere by rsRewind, and the recorder never exports
+on its own.
+
+Deleting history with `forget` on the recording machine does **not** remove copies already exported
+or imported elsewhere. It does delete sealed segments in `outbox/` that cover the forgotten time, and tells you how many of the deleted moments had already been sealed; delete delivered copies yourself. Forgetting on a
+central instance's replica is fenced, so re-delivering the same segments does not bring it back.
+History that is forgotten before it has settled (about five minutes by default) is never exported.
 
 ## Logs
 

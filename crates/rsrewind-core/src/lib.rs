@@ -10,7 +10,9 @@ pub mod event;
 pub mod ids;
 pub mod paths;
 pub mod privacy;
+pub mod schema;
 pub mod search;
+pub mod source;
 pub mod time;
 
 pub use config::Config;
@@ -20,7 +22,9 @@ pub use event::{
     WindowContext,
 };
 pub use ids::{ApplicationId, EventId, MonitorId, SessionId, VisualStateId, WindowId};
-pub use paths::DataDir;
+pub use paths::{DataDir, MediaPathError};
 pub use privacy::{PrivacyDecision, PrivacyPolicy};
+pub use schema::SCHEMA_VERSION;
 pub use search::{SearchHit, SearchQuery, TimelineCursor, TimelineEntry, VisualDetail};
+pub use source::SourceId;
 pub use time::Timestamp;

@@ -74,3 +74,57 @@ Defects noted along the way: the CLI's `forget` padded the fence `until` by 60 s
 which with a real fence would have dropped a minute of legitimate frames (fixed); a
 `resolve_media_path` test compared `/` against `\` separators and failed on non-Windows (made
 portable).
+
+
+### 2026-10-06 — Probe / central-instance foundation (stage 1)
+
+Orchestration notes: architecture analysis and the smallest foundation for "a probe seals history,
+a central instance imports it", done in one Sonnet 5.5 session on Linux (only the portable crates
+build here). Design: `docs/design/distributed.md`.
+
+| Unit | Scope | Tier routed | Model | Outcome | Notes |
+|---|---|---|---|---|---|
+| D1 | `rsrewind-segment` format + 11 tests | Sonnet | Sonnet 5.5 | green, clippy clean | truncation at every boundary, bit-flips, hostile lengths and ids |
+| D2 | storage export/import + 21 replication tests; small refactors of `insert_visual_state`, `save_ocr`, `upsert_window` into shared helpers | **Opus-tier** (security-sensitive input, schema-adjacent) done by the orchestrator session | Sonnet 5.5 | existing 38 storage tests unchanged and green, 21 new | mutation-checked: disabling the idempotency guard and weakening the sealing selection each fail tests |
+| D3 | CLI `export`/`import`/`sources` + real-binary test; query end-to-end test | Sonnet | Sonnet 5.5 | green | |
+
+Follow-up D4 (stage 1b): `forget` + outbox cleanup, `doctor` replication check, 3 tests, same tier and outcome.
+
+Windows verification (2026-10-06, kubert, Windows 11, rustc 1.98.1): `cargo fmt --check`, `cargo build
+--workspace`, `cargo test --workspace` and `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` all pass, including the capture/OCR/daemon crates. Real end to end with the actual recorder
+(WGC capture, Windows OCR, `idle_after_secs` raised so an unattended box still records): 6 screens
+recorded, sealed, imported into a second data folder, a repeat import was a no-op, and `search zebra`
+on the replica returned OCR snippets. Finding: with default settings an unattended box records
+only `recorder_start`/`idle_start`/`recorder_stop` after 5 minutes of no input, as designed.
+
+**Not yet adversarially reviewed** — owed an Opus or Astra pass before release, aimed at: import of
+hostile segments (path/identity handling, resource limits), the sealing selection under clock
+changes, crash windows between publish and watermark, and the refactored shared insert helpers.
+Not run on Windows. Pre-existing and untouched: `cargo check --workspace` fails on Linux (17
+errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warnings on non-Windows.
+
+### 2026-10-06 — History facade and the Iced + wgpu UI
+
+- **Routing:** single implementing agent, decision by the maintainer: Rust only, Iced chrome, custom
+  wgpu viewport (supersedes the WinUI 3 plan; ARCHITECTURE.md "Why Iced + wgpu").
+- **Facade first, test-driven.** `rsrewind-query` lost its `rsrewind-storage` dependency
+  (`SCHEMA_VERSION`, media path resolution moved to core); `ui_boundary.rs` enforces the UI graph via
+  `cargo metadata`. `History` merges local + replica stores with a total cross-source cursor
+  `(started_at, source, event_id)`; 10 facade tests over fixtures built only with the real
+  record/export/import path, with deliberately colliding timestamps and row ids. Mutation-checked:
+  five mutants (cursor projection x2, per-source detail lookup, replica identity check, core cursor
+  order) each killed; one mutant made the paging test spin forever, so the test gained a guard.
+- **UI.** Pure, unit-tested modules (`timeline::model` layout/camera/culling/hit-testing,
+  `timeline::cache` byte-bounded LRU, `thumb` box-filter downscale, worker coalescing/queue) are
+  testable on Linux with plain `rustc --test`; the iced/wgpu crate itself is built, clippy'd
+  (`-D warnings`) and tested (22 tests) on kubert.
+- **Visual verification** on kubert with synthetic history (3 sources x 150 moments), driven by a
+  no-password scheduled task in the logged-on session; screenshots captured only the rsRewind
+  window's client rectangle (PrintWindow returns black for wgpu's flip-model swapchain, so
+  CopyFromScreen with the window in front). Search, cue, wheel and drag scrubbing, keyboard step and
+  source filter all exercised; the process stayed alive throughout (~175 MB working set).
+  `rsrewind ui` returns in ~350 ms leaving one separate window process. Fixed from screenshots:
+  clipped transport row, overlapping lane labels, unused space under the floor; dropped thumbnail
+  requests are now retried. Not verified: real recorded history, multi-monitor, light mode, DPI
+  other than 125 %.

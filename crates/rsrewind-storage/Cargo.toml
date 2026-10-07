@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
+rsrewind-segment.workspace = true
+getrandom.workspace = true
 rusqlite = { workspace = true, features = ["backup"] }
 webp.workspace = true
 serde.workspace = true

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rsrewind-core",
     "crates/rsrewind-capture",
+    "crates/rsrewind-segment",
     "crates/rsrewind-storage",
     "crates/rsrewind-ocr",
     "crates/rsrewind-query",
@@ -12,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -22,6 +23,7 @@ publish = false
 [workspace.dependencies]
 rsrewind-core = { path = "crates/rsrewind-core" }
 rsrewind-capture = { path = "crates/rsrewind-capture" }
+rsrewind-segment = { path = "crates/rsrewind-segment" }
 rsrewind-storage = { path = "crates/rsrewind-storage" }
 rsrewind-ocr = { path = "crates/rsrewind-ocr" }
 rsrewind-query = { path = "crates/rsrewind-query" }
@@ -41,9 +43,14 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 webp = "0.3"
 tempfile = "3"
-# Recorder crates use the `windows` 0.62 projection. The UI crate uses `windows-reactor`, which is
-# on the windows-core 0.100 line; no Windows type crosses that boundary (see ARCHITECTURE.md).
+sha2 = "0.10"
+getrandom = "0.3"
+# Recorder crates use the `windows` 0.62 projection. The UI crate uses no Windows bindings of its
+# own (Iced + wgpu); no Windows type crosses the UI boundary (see ARCHITECTURE.md).
 windows = "0.62"
+# The desktop UI (rsrewind-ui only). Default features off: the UI picks wgpu and no image codecs
+# (frames arrive decoded from rsrewind-query).
+iced = { version = "0.14.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

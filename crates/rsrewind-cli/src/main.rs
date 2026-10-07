@@ -2,11 +2,14 @@
 
 mod doctor;
 mod render;
+mod replicate;
 mod timespec;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use rsrewind_core::{CaptureState, Config, DataDir, SearchQuery, Timestamp};
+#[cfg(windows)]
+use rsrewind_core::Config;
+use rsrewind_core::{CaptureState, DataDir, SearchQuery, Timestamp};
 use rsrewind_query::QueryDb;
 use rsrewind_storage::{RecorderStatus, StorageError, Store};
 use serde::Serialize;
@@ -90,8 +93,48 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Open the rsRewind window.
-    Ui,
+    /// Seal recorded history into segment files you can carry to another rsRewind.
+    ///
+    /// Writes to <data folder>\outbox unless --out is given. Moving the files (copy, rsync,
+    /// a share, a sync tool, over whatever private network you run) is up to you; rsRewind does
+    /// no networking.
+    Export {
+        /// Where to write segments.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Only seal history that has been quiet for this many minutes (at least 1).
+        #[arg(long, value_name = "N", default_value_t = 5)]
+        settle_minutes: u32,
+        /// Most events in one segment; a bigger backlog becomes several segments.
+        #[arg(long, value_name = "N", default_value_t = rsrewind_storage::DEFAULT_MAX_EVENTS)]
+        max_events: usize,
+        /// Name shown for this machine on the receiving side (default: its host name).
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Merge segment files (or folders of them) from other machines into this data folder.
+    ///
+    /// Each source gets its own store under <data folder>\sources\<id>. Importing a segment
+    /// twice is harmless.
+    Import {
+        #[arg(required = true, value_name = "FILE_OR_DIR")]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the remote sources whose history this data folder holds.
+    Sources {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open the rsRewind window (in its own process; this command returns at once).
+    Ui {
+        /// Run the window in this process and wait until it is closed.
+        #[arg(long)]
+        foreground: bool,
+    },
     /// Print the data folder.
     DataDir,
 }
@@ -131,7 +174,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Recent { limit, json } => recent(&data, limit, json),
         Command::Forget { since, yes } => forget(&data, &since, yes),
         Command::Doctor { json } => doctor::run(&data, json),
-        Command::Ui => ui(&data),
+        Command::Export {
+            out,
+            settle_minutes,
+            max_events,
+            label,
+            json,
+        } => replicate::export(&data, out, settle_minutes, max_events, label, json),
+        Command::Import { paths, json } => replicate::import(&data, &paths, json),
+        Command::Sources { json } => replicate::sources(&data, json),
+        Command::Ui { foreground } => ui(&data, foreground),
         Command::DataDir => {
             println!("{}", data.root().display());
             Ok(ExitCode::SUCCESS)
@@ -139,22 +191,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
+#[cfg(windows)]
 fn load_config(data: &DataDir) -> Result<Config> {
     Config::write_default_if_missing(&data.config_file())?;
     Ok(Config::load_or_default(&data.config_file())?)
 }
 
+#[cfg(windows)]
 fn init_logging(
     data: &DataDir,
     config: &Config,
     foreground: bool,
+    prefix: &str,
 ) -> Result<tracing_appender::non_blocking::WorkerGuard> {
     use tracing_subscriber::prelude::*;
     let filter = tracing_subscriber::EnvFilter::try_new(&config.logging.level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("rsrewind")
+        .filename_prefix(prefix)
         .filename_suffix("log")
         .max_log_files(14)
         .build(data.logs())
@@ -176,7 +231,7 @@ fn init_logging(
 fn daemon(data: &DataDir) -> Result<ExitCode> {
     data.ensure()?;
     let config = load_config(data)?;
-    let _guard = init_logging(data, &config, true)?;
+    let _guard = init_logging(data, &config, true, "rsrewind")?;
     rsrewind_daemon::run(rsrewind_daemon::RunOptions {
         data: data.clone(),
         config,
@@ -453,7 +508,10 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
         return Ok(ExitCode::from(2));
     }
     let store = Store::open_existing(data)?;
+    // Counted first: once the range is deleted there is nothing left to compare against.
+    let already_sealed = store.count_sealed_events(since, until)?;
     let report = store.delete_range(since, until)?;
+    replicate::forget_exported(data, since, until, already_sealed);
     println!(
         "Deleted {} moments and {} screenshots ({} freed).",
         report.events_deleted,
@@ -490,9 +548,34 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
     })
 }
 
+/// The window always runs in a process of its own, never inside the recorder: by default this
+/// starts `rsrewind ui --foreground` detached (no console) and returns, so a crash or hang in the
+/// window cannot touch recording or the terminal it was started from.
 #[cfg(windows)]
-fn ui(data: &DataDir) -> Result<ExitCode> {
-    rsrewind_ui::run(data.clone())?;
+fn ui(data: &DataDir, foreground: bool) -> Result<ExitCode> {
+    if foreground {
+        // Read the config without creating one: the viewer writes nothing to the data folder
+        // except its own log.
+        let config = Config::load_or_default(&data.config_file()).unwrap_or_default();
+        let _guard = init_logging(data, &config, false, "rsrewind-ui")?;
+        rsrewind_ui::run(data.clone())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    let exe = std::env::current_exe().context("find rsrewind.exe")?;
+    let child = std::process::Command::new(exe)
+        .arg("--data-dir")
+        .arg(data.root())
+        .args(["ui", "--foreground"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .context("start the rsRewind window")?;
+    println!("Opened the rsRewind window (process {}).", child.id());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -509,7 +592,7 @@ fn stop(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows only")
 }
 #[cfg(not(windows))]
-fn ui(_: &DataDir) -> Result<ExitCode> {
+fn ui(_: &DataDir, _foreground: bool) -> Result<ExitCode> {
     bail!("the UI runs on Windows only")
 }
 
