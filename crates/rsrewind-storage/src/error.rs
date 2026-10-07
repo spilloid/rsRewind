@@ -61,6 +61,40 @@ pub enum StorageError {
     #[error("the application or window context no longer exists; re-resolve it")]
     ContextMissing,
 
+    #[error(transparent)]
+    Segment(#[from] rsrewind_segment::SegmentError),
+
+    #[error("system entropy unavailable: {0}")]
+    Entropy(String),
+
+    /// A replica store belongs to exactly one remote source; history from another source (or a
+    /// local recording) must never be mixed into it.
+    #[error("this store belongs to source {expected}, not {found}")]
+    SourceMismatch { expected: String, found: String },
+
+    #[error("only a locally recorded store can export segments (this one replicates source {0})")]
+    NotAnOrigin(String),
+
+    /// Same `(source, seq)` as a segment already imported, but different content. Either the
+    /// source lost and reused its identity (restored backup, cloned disk) or the file was
+    /// altered. Nothing was imported.
+    #[error(
+        "segment {seq} from source {source_id} was already imported with different content \
+         (have {have}, got {got}); the source's identity may have been cloned or restored"
+    )]
+    SegmentConflict {
+        source_id: String,
+        seq: u64,
+        have: String,
+        got: String,
+    },
+
+    #[error("exported segment {path} in the outbox is unreadable: {reason}")]
+    OutboxCorrupt { path: PathBuf, reason: String },
+
+    #[error("media file {0} already exists with different content")]
+    MediaConflict(PathBuf),
+
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 

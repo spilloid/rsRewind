@@ -202,7 +202,7 @@ impl Selection {
 
 /// One read-write SQLite connection to `recall.db`.
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
     data: DataDir,
 }
 
@@ -268,7 +268,7 @@ impl Store {
         migrations::current_version(&self.conn)
     }
 
-    fn immediate(&self) -> Result<Transaction<'_>> {
+    pub(crate) fn immediate(&self) -> Result<Transaction<'_>> {
         Ok(Transaction::new_unchecked(
             &self.conn,
             TransactionBehavior::Immediate,
@@ -347,28 +347,8 @@ impl Store {
         window: &WindowContext,
         at: Timestamp,
     ) -> Result<WindowId> {
-        // Look up with `IS` (NULL-safe) under the write lock: UNIQUE treats NULL class names as
-        // distinct, so INSERT ... ON CONFLICT alone would duplicate windows without a class.
         let tx = self.immediate()?;
-        let existing: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM windows
-                 WHERE application_id = ?1 AND title = ?2 AND class_name IS ?3",
-                params![application.0, window.title, window.class_name],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let id = match existing {
-            Some(id) => id,
-            None => {
-                tx.execute(
-                    "INSERT INTO windows (application_id, title, class_name, first_seen_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![application.0, window.title, window.class_name, at.0],
-                )?;
-                tx.last_insert_rowid()
-            }
-        };
+        let id = upsert_window_row(&tx, application, window, at)?;
         tx.commit()?;
         Ok(WindowId(id))
     }
@@ -386,35 +366,10 @@ impl Store {
                 state.media_path
             )));
         }
-        let byte_size = i64::try_from(state.byte_size)
-            .map_err(|_| StorageError::InvalidArgument("byte_size out of range".into()))?;
-        let status = if state.ocr_enabled {
-            OcrStatus::Pending
-        } else {
-            OcrStatus::Skipped
-        };
         let tx = self.immediate()?;
-        refuse_if_fenced(&tx, state.captured_at.0)?;
-        tx.execute(
-            "INSERT INTO visual_states
-                 (monitor_id, captured_at, media_path, width, height, byte_size, fingerprint,
-                  ocr_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                state.monitor.0,
-                state.captured_at.0,
-                state.media_path,
-                state.width,
-                state.height,
-                byte_size,
-                // Stored bit-for-bit; SQLite integers are signed.
-                state.fingerprint.map(|f| f as i64),
-                status.as_str()
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
+        let id = insert_state_row(&tx, state)?;
         tx.commit()?;
-        Ok(VisualStateId(id))
+        Ok(id)
     }
 
     /// Extends the session's latest observation on this monitor if nothing changed and the gap is
@@ -595,15 +550,6 @@ impl Store {
         engine: &str,
         elapsed_ms: u64,
     ) -> Result<()> {
-        let mut ordered: Vec<&OcrBlock> = blocks.iter().collect();
-        ordered.sort_by_key(|b| b.line_index);
-        let text = ordered
-            .iter()
-            .map(|b| b.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let elapsed_ms = i64::try_from(elapsed_ms).unwrap_or(i64::MAX);
-
         let tx = self.immediate()?;
         let current: Option<String> = tx
             .query_row(
@@ -616,37 +562,7 @@ impl Store {
             // Usually: retention or delete_range removed it while OCR was running.
             return Err(StorageError::VisualStateMissing(id));
         }
-        tx.execute("DELETE FROM ocr_blocks WHERE visual_state_id = ?1", [id.0])?;
-        tx.execute("DELETE FROM ocr_fts WHERE rowid = ?1", [id.0])?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO ocr_blocks
-                     (visual_state_id, line_index, text, x, y, width, height, confidence)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            )?;
-            for block in &ordered {
-                insert.execute(params![
-                    id.0,
-                    block.line_index,
-                    block.text,
-                    f64::from(block.x),
-                    f64::from(block.y),
-                    f64::from(block.width),
-                    f64::from(block.height),
-                    block.confidence.map(f64::from)
-                ])?;
-            }
-        }
-        tx.execute(
-            "INSERT INTO ocr_fts (rowid, text) VALUES (?1, ?2)",
-            params![id.0, text],
-        )?;
-        tx.execute(
-            "UPDATE visual_states
-             SET ocr_status = 'done', ocr_error = NULL, ocr_engine = ?2, ocr_ms = ?3
-             WHERE id = ?1",
-            params![id.0, engine, elapsed_ms],
-        )?;
+        write_ocr_rows(&tx, id, blocks, engine, elapsed_ms)?;
         tx.commit()?;
         tracing::debug!(visual_state = id.0, lines = blocks.len(), "saved OCR");
         Ok(())
@@ -1269,6 +1185,121 @@ fn state_from_parts(state: &str, until: Option<i64>) -> Result<CaptureState> {
         "stopped" => CaptureState::Stopped,
         other => return Err(StorageError::Corrupt(format!("capture state {other:?}"))),
     })
+}
+
+/// The `visual_states` insert shared by the recorder and the segment importer. The caller holds
+/// the write transaction and has already checked that the media file exists.
+pub(crate) fn insert_state_row(
+    tx: &Transaction<'_>,
+    state: &NewVisualState,
+) -> Result<VisualStateId> {
+    let byte_size = i64::try_from(state.byte_size)
+        .map_err(|_| StorageError::InvalidArgument("byte_size out of range".into()))?;
+    let status = if state.ocr_enabled {
+        OcrStatus::Pending
+    } else {
+        OcrStatus::Skipped
+    };
+    refuse_if_fenced(tx, state.captured_at.0)?;
+    tx.execute(
+        "INSERT INTO visual_states
+             (monitor_id, captured_at, media_path, width, height, byte_size, fingerprint,
+              ocr_status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            state.monitor.0,
+            state.captured_at.0,
+            state.media_path,
+            state.width,
+            state.height,
+            byte_size,
+            // Stored bit-for-bit; SQLite integers are signed.
+            state.fingerprint.map(|f| f as i64),
+            status.as_str()
+        ],
+    )?;
+    Ok(VisualStateId(tx.last_insert_rowid()))
+}
+
+/// Replaces one visual state's OCR rows, FTS row and status inside the caller's transaction.
+pub(crate) fn write_ocr_rows(
+    tx: &Transaction<'_>,
+    id: VisualStateId,
+    blocks: &[OcrBlock],
+    engine: &str,
+    elapsed_ms: u64,
+) -> Result<()> {
+    let mut ordered: Vec<&OcrBlock> = blocks.iter().collect();
+    ordered.sort_by_key(|b| b.line_index);
+    let text = ordered
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let elapsed_ms = i64::try_from(elapsed_ms).unwrap_or(i64::MAX);
+    tx.execute("DELETE FROM ocr_blocks WHERE visual_state_id = ?1", [id.0])?;
+    tx.execute("DELETE FROM ocr_fts WHERE rowid = ?1", [id.0])?;
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO ocr_blocks
+                 (visual_state_id, line_index, text, x, y, width, height, confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for block in &ordered {
+            insert.execute(params![
+                id.0,
+                block.line_index,
+                block.text,
+                f64::from(block.x),
+                f64::from(block.y),
+                f64::from(block.width),
+                f64::from(block.height),
+                block.confidence.map(f64::from)
+            ])?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO ocr_fts (rowid, text) VALUES (?1, ?2)",
+        params![id.0, text],
+    )?;
+    tx.execute(
+        "UPDATE visual_states
+         SET ocr_status = 'done', ocr_error = NULL, ocr_engine = ?2, ocr_ms = ?3
+         WHERE id = ?1",
+        params![id.0, engine, elapsed_ms],
+    )?;
+    Ok(())
+}
+
+/// Window lookup-or-insert inside the caller's write transaction.
+pub(crate) fn upsert_window_row(
+    tx: &Transaction<'_>,
+    application: ApplicationId,
+    window: &WindowContext,
+    at: Timestamp,
+) -> Result<i64> {
+    // Look up with `IS` (NULL-safe) under the write lock: UNIQUE treats NULL class names as
+    // distinct, so INSERT ... ON CONFLICT alone would duplicate windows without a class.
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM windows
+             WHERE application_id = ?1 AND title = ?2 AND class_name IS ?3",
+            params![application.0, window.title, window.class_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            tx.execute(
+                "INSERT INTO windows (application_id, title, class_name, first_seen_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![application.0, window.title, window.class_name, at.0],
+            )?;
+            tx.last_insert_rowid()
+        }
+    };
+    Ok(id)
 }
 
 fn refuse_if_fenced(tx: &Transaction<'_>, at: i64) -> Result<()> {

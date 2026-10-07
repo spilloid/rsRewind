@@ -9,13 +9,19 @@ publish.workspace = true
 
 [dependencies]
 rsrewind-core.workspace = true
-rsrewind-storage.workspace = true
 rusqlite = { workspace = true, features = ["functions"] }
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+# Decoding stored frames for a viewer (`history::decode_webp`); the same codec the writer uses.
+webp.workspace = true
 
+# Tests build real stores through the writer. Never a normal dependency: `rsrewind-ui` depends on
+# this crate and must not reach storage, even transitively (CLAUDE.md, enforced by
+# `rsrewind-query/tests/ui_boundary.rs`).
 [dev-dependencies]
+rsrewind-storage.workspace = true
+rsrewind-segment.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
 
