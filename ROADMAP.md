@@ -27,6 +27,13 @@
 > | `rsrewind-ui` (WinUI 3 UI) | TODO | |
 > | v0.1.0 acceptance criterion (8-hour session, no uncontrolled growth or catastrophic failure) | TODO — not yet run | |
 
+> ### Probe and central instance (cross-cutting)
+>
+> Not tied to a version number. Stage 1 (sealed segments, `export`/`import`/`sources`, per-source
+> replica stores) is built; later stages (history facade in `rsrewind-query`, probe
+> authentication, optional built-in transport, tombstones) are in `docs/design/distributed.md`
+> §6. It must not delay the v0.9 hardening work: it adds no recorder behaviour.
+
 ## v0.1.0 — Eyes
 
 The recorder can see the screen and not fall over.

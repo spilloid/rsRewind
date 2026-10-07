@@ -6,6 +6,54 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-06
+
+**Second pre-release: history from other machines, and a window to browse it.** Everything in
+0.0.1 still applies, including its warning below: recorder-side privacy gaps from the adversarial
+review are **not fixed yet**, so this is still not ready for sensitive desktops. The new import
+path takes files from other machines and has had tests and mutation checks but **no independent
+security review yet**. The new window has been checked on Windows with synthetic history only.
+
+### Added
+
+- **Desktop UI (`rsrewind ui`).** An Iced window with a custom wgpu rewind viewport: recorded
+  screens as GPU-textured cards receding into depth (logarithmic in time), one lane per source,
+  drag/wheel scrubbing, a filament of all history, keyboard stepping. Search results cue the room
+  to the moment the text was on screen and open it in a detail pane with the recognized text.
+  Runs in its own detached process (`--foreground` to stay attached) and reads history only through
+  the new cross-source **history facade** in `rsrewind-query` (`History`: sources, recent, at,
+  search, detail, media), which merges this machine with every imported replica.
+- `cargo run -p rsrewind-query --example synth_history -- <folder>` builds throwaway synthetic
+  history (this machine plus two probes) for trying the UI without recording a real screen.
+
+- **Probe / central-instance replication, stage 1.** `rsrewind export` seals settled history into
+  immutable, hash-verified `.rsseg` segment files; `rsrewind import` merges them into a data
+  directory as one independent replica store per source (`sources/<id>/`); `rsrewind sources`
+  lists them. Import is idempotent, detects conflicting content for a known `(source, seq)`,
+  validates images and references, respects deletion fences and refuses cross-source history.
+  Still no network code: moving files is up to the operator. New crate `rsrewind-segment`. No
+  schema migration. Design and threat model: `docs/design/distributed.md`.
+
+- `forget` deletes outbox segments covering the forgotten time and reports how many deleted
+  moments were already sealed. `doctor` gains a replication check (outbox size, files that do not
+  verify, retention about to outrun export).
+
+### Verified
+
+- Replication stage 1 builds, passes fmt/clippy/tests, and works end to end with the real recorder
+  on Windows 11 (2026-10-06).
+
+### Security
+
+- Window titles, process names, source labels and recognized text are stripped of terminal
+  control characters before the command line prints them, so a remote source cannot drive your
+  terminal through them.
+
+### Changed
+
+- Documentation reconciled with the code (`ARCHITECTURE.md`, `CLAUDE.md` said most crates were
+  unimplemented).
+
 ## [0.0.1] - 2026-10-01
 
 **First pre-release: the first vertical slice, end to end.** rsRewind watches your screen,
