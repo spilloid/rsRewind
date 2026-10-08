@@ -1,7 +1,7 @@
 # Astra review remediation — status and Windows hand-off
 
 Review: `docs/reviews/2026-09-30-astra-ultra-mvp.md` (of `aa2c5e7`). Contract amendments:
-`docs/mvp-contract.md` → "Review amendments". Last updated 2026-10-01.
+`docs/mvp-contract.md` → "Review amendments". Last updated 2026-10-08 (platform seam).
 
 Unit A was done on a Linux box where only `rsrewind-core`, `-storage` and `-query` build. Units B
 and C touch Windows-only crates and were **not started**; this file is their brief.
@@ -11,17 +11,17 @@ and C touch Windows-only crates and were **not started**; this file is their bri
 | # | Area | Status | Where / evidence |
 |---|---|---|---|
 | F1 | OCR resurrection / id reuse | **fixed (A)** | AUTOINCREMENT; `save_ocr`/`mark_ocr` take the expected media path. `ocr_from_a_deleted_state_cannot_attach_to_a_later_one`, `ids_are_never_reused_after_deletion` |
-| F2 | privacy provenance of frames | **open (B)** | recorder/capture |
-| F3 | pause is a barrier | **open (B)** | needs control generation, see below |
-| F4 | fail closed on missing info | **open (B)** | capture/window.rs, idle.rs |
+| F2 | privacy provenance of frames | **open (B)**; in-memory half tested | WGC capture timestamps / clear-since marks not implemented. Tested: a frame taken while a monitor was excluded is dropped from memory and never stored after the window goes (`an_excluded_window_skips_its_monitor_and_its_frame_is_never_stored_later`, mutation-checked). Not tested (needs timestamps through `FrameSource`): a frame buffered by WGC before enumeration |
+| F3 | pause is a barrier | **open (B)**; recorder-side ordering tested | No control generation/ack, so `rsrewind pause` can still print "Paused" before an in-flight tick finishes. Tested on the recorder side: a paused tick neither polls a frame source nor queues anything but the marker, the marker precedes every later state, a span never bridges a pause (`pause_is_a_barrier_ordered_before_anything_captured_after_it`, mutation-checked; end to end in `records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order`) |
+| F4 | fail closed on missing info | **portable recorder fixed; Windows backends open** | The platform contract is fail-closed and tested: failed enumeration skips every monitor, unknown idle counts as idle, no window list is never asked for, start refused without enforceable rules (`a_failed_window_enumeration_stores_nothing_anywhere`, `unknown_idle_time_counts_as_idle`, `refuses_to_start_where_privacy_cannot_be_enforced_unless_opted_in`, all mutation-checked). The Windows adapters still report degraded data as success (window.rs titles/process `unknown`, idle.rs failure = active) |
 | F5 | queued writes recreate forgotten range | **storage side fixed (A)**; persist handling **open (B)** | `deletion_fences`, `StorageError::Fenced`. `a_forget_fences_its_interval_against_queued_writes` |
 | F6 | window titles survive deletion | **fixed (A)** | `deleting_history_removes_window_titles_and_applications` |
 | F7 | FTS/WAL remnants | **fixed (A)** for `recall.db`/WAL; backups reported, not rewritten | `forgotten_text_is_gone_from_the_database_file_and_wal` (mutation-checked: fails without FTS secure-delete) |
 | F8 | orphan media / failed cleanup | **fixed (A)** for orphans/temp files in range; no durable unlink-retry queue (an unlink that fails is retried only by a later pass that covers its time) | `orphan_media_files_in_the_range_are_deleted_with_it`, `stale_temp_files_and_foreign_files_are_handled_correctly` |
-| F9 | queue admission ≠ persisted | **open (B)** | |
+| F9 | queue admission ≠ persisted | **open (B)** | Non-blocking drop is tested (`a_full_persist_queue_drops_candidates_and_never_blocks_capture`, mutation-checked). The defect itself is pinned by an ignored, currently failing test: `f9_a_dropped_change_is_retried_not_papered_over_by_an_extension` |
 | F10 | media path confinement | **fixed (A)**; Windows junction branch **unverified** | `media_paths_must_live_under_media_and_not_cross_links` (symlink, Linux only) |
 | F11 | probe dumps pixels | **open (B)** | capture/examples/probe.rs |
-| F12 | retention only on traffic | **open (B)** | persist.rs timer |
+| F12 | retention only on traffic | **open (B)** | persist.rs timer; untouched, untested |
 | F13 | WGC out-of-order drain | **open (B)** | wgc.rs |
 | F14 | console close | **open (B)** | daemon/win.rs |
 | F15 | GDI helper dims | **open (B)** | ocr/gdi_render.rs |
@@ -30,7 +30,7 @@ and C touch Windows-only crates and were **not started**; this file is their bri
 | F18 | timeline paging | **fixed (A)** | `TimelineCursor`; `paging_never_skips_observations_that_share_a_timestamp` |
 | F19 | search time ranges | **fixed (A)** | three tests in `rsrewind-query/tests/search.rs` |
 | F20 | `visual_detail` snapshot | **fixed (A)** | `visual_detail_is_one_snapshot_even_if_ocr_commits_mid_read` (mutation-checked) |
-| F21 | HWND attribution | **open (B)** | |
+| F21 | HWND attribution | **open (B)** | subject and foreground matching still by pid; untested |
 | F22 | retention accounting | **fixed (A)** | `Store::disk_bytes`, compaction. `size_retention_counts_wal_and_orphan_media` |
 
 Quality gate on Linux for the three portable crates: `cargo test` (core 21, storage 38, query
@@ -59,6 +59,32 @@ Quality gate on Linux for the three portable crates: `cargo test` (core 21, stor
 - `QueryDb::recent(limit, after: Option<TimelineCursor>)`; `TimelineEntry.event_id`,
   `TimelineEntry::cursor()`; `rsrewind_core::TimelineCursor`. `--json` output gains `event_id`.
 - `DataDir::resolve_media` now requires a `media/` prefix and depth ≥ 2.
+
+## Platform seam (2026-10-08) — what the recorder tests now are
+
+The recorder was graded "F" because its only tests were helper booleans in `plan.rs`. The seam
+(`rsrewind-daemon/src/platform.rs`, ARCHITECTURE.md "Platform seam and capabilities") lets the
+real capture loop run on deterministic fakes (`src/tests/fakes.rs`): a fake clock whose sleeps
+run scripted hooks between ticks, scripted frames/windows/idle, in-memory OCR. 11 tick-level tests (plus one ignored F9 test)
+(`src/tests/capture_loop.rs`) observe the exact persist queue; 3 end-to-end tests
+(`src/tests/run.rs`) run `run_with` with the real persist and OCR threads over a temp SQLite
+store and read results back through `rsrewind-query` and a sealed segment. No sleeps; the one wait
+is a condition variable on OCR progress.
+
+Mutation checks (each applied to `recorder.rs`, tests re-run, reverted): excluded frame kept as
+the current screen; privacy only from the monitor a window is mostly on; pause not resetting the
+persisted fingerprint; unknown idle treated as active; fail-closed start removed; blocking `send`
+on a full queue; failed enumeration allowed; window list queried without the capability; persist
+thread not joined; final heartbeat not `Stopped`; session closed at the wrong instant — each
+killed. Survived (and why): moving `end_session` before the joins (an equivalent mutant: same
+timestamp written twice); not joining the OCR thread (the OCR fake finishes before the assertion
+anyway, so the join is not observable without a sleep). Plus, in storage, dropping the export
+capability narrowing (killed).
+
+Still open after the seam: F2 (timestamps), F3 (ack), F4 on the Windows backends, F5 persist
+handling of `Fenced`/`ContextMissing`, F9, F12, F13, F14, F21. Also found: PRIVACY.md says a
+`privacy_skip` event is recorded when a rule matches; the recorder only counts it
+(`privacy_skips`) and writes no event.
 
 ## Unit B (capture / recorder) — TODO and tension points
 

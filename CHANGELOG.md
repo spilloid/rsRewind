@@ -6,6 +6,28 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Platform seam for the recorder.** The capture loop, persist thread and OCR thread are now
+  portable and reach the desktop only through traits (`rsrewind_daemon::platform`: frame source,
+  screen context, idle clock, OCR backend, clock, lifecycle/single instance). Windows behaviour,
+  config, schema and CLI output are unchanged; Windows remains the only platform that records.
+- **Capabilities are explicit.** `rsrewind_core::Capabilities` states what a platform can see. The
+  recorder refuses to start where the privacy rules cannot be enforced unless the new
+  `privacy.unenforced_ok = true` is set (default `false`); `status`, `status --json` and `doctor`
+  then report "privacy rules NOT enforced", and exported segments never claim `window_titles` for
+  such a session. Each session's capabilities are stored in `settings` (no schema change).
+- **Recorder tests that exercise the recorder.** Deterministic fakes (fake clock, scripted frames
+  and windows, in-memory OCR) drive the real capture loop and, end to end, `run_with` with its real
+  persist/OCR threads and SQLite: privacy skip before persist, any-visible-window rule, pause
+  ordering, idle, fail-closed start, non-blocking capture on a full queue, shutdown order. They run
+  on Linux and Windows.
+
+### Changed
+
+- `rsrewind-capture`: `VisibleWindow`/`ScreenRect` moved to a portable module (same public
+  paths); `MonitorHandle::to_raw`/`from_raw`; the `probe` example is a stub off Windows.
+
 ## [0.0.2] - 2026-10-06
 
 **Second pre-release: history from other machines, and a window to browse it.** Everything in

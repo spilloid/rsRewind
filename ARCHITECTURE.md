@@ -23,7 +23,7 @@ core  <- ocr
 core  <- segment          (pure file format; no SQLite)
 core, segment  <- storage
 core           <- query            (storage only as a dev-dependency, for test fixtures)
-core, capture, ocr, storage           <- daemon
+core, capture, storage, (ocr: Windows) <- daemon
 core, segment, storage, query, daemon, ui  <- cli  (bin: rsrewind.exe)
 core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bindings)
 ```
@@ -58,7 +58,9 @@ core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bind
   through it.
 - **`rsrewind-daemon`** — the recorder's orchestration: capture/persist/OCR threads, the
   bounded-channel pipeline, control-state polling, privacy enforcement, retention, and the
-  single-instance/heartbeat/shutdown lifecycle. Not yet implemented.
+  single-instance/heartbeat/shutdown lifecycle. Portable behind the
+  [platform seam](#platform-seam-and-capabilities); the Windows backends are wired in
+  `windows_platform.rs`.
 - **`rsrewind-cli`** — the `rsrewind` binary: argument parsing (`clap`) and dispatch to the
   daemon, storage, and query crates. Currently a placeholder `main.rs`.
 - **`rsrewind-ui`** — the desktop UI: Iced for the application chrome and a custom wgpu viewport
@@ -123,8 +125,57 @@ The persist thread and the OCR thread each own their own `Store` (their own SQLi
 WAL mode plus a 5-second busy timeout make two writers from one process safe. See
 [Storage model](#storage-model).
 
-Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) so a second `rsrewind
+Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) on Windows (the
+`SingleInstance` trait of the [platform seam](#platform-seam-and-capabilities); another platform
+needs an equivalent, e.g. a lock file held for the process lifetime) so a second `rsrewind
 daemon`/`start` cannot run concurrently and corrupt or race on the same database.
+
+## Platform seam and capabilities
+
+The recorder loop, the persist thread and the OCR thread are portable code
+(`rsrewind-daemon`: `recorder.rs`, `persist.rs`, `ocr_worker.rs`, `plan.rs`) and reach the desktop
+only through the traits in `rsrewind-daemon/src/platform.rs`:
+
+| Trait | Windows implementation (unchanged code, adapted in `windows_platform.rs`) |
+|---|---|
+| `ScreenContext` — monitors, foreground `FocusContext`, visible windows with rects, and a `Capabilities` value | `rsrewind-capture`: `monitors`, `foreground`, `visible_windows` (EnumWindows) |
+| `CaptureBackend` / `FrameSource` — one newest-frame-only source per display | `rsrewind-capture::MonitorCapturer` (Windows.Graphics.Capture) |
+| `IdleClock` — time since input, `None` = unknown | `rsrewind-capture::idle_millis` (`GetLastInputInfo`) |
+| `OcrBackend` (created on the OCR thread by an `OcrFactory`) | `rsrewind-ocr::OcrEngine` (Windows.Media.Ocr), thread priority lowered first |
+| `Lifecycle` / `SingleInstance` | `win::InstanceGuard`: `Local\rsRewind.Recorder` mutex, `rsrewind stop` event, console handler |
+| `Clock` — wall, monotonic, sleep | `SystemClock` |
+
+`run_with(options, Platform)` is the portable entry; `rsrewind_daemon::run` (Windows) builds the
+Windows `Platform` and calls it with the startup order it always had. Other platforms have no
+backends yet, so `rsrewind daemon` there still says the recorder is unsupported. Why traits in the
+daemon rather than a new crate: the daemon is their only consumer, and implementing them next to
+the recorder keeps `rsrewind-capture`/`rsrewind-ocr` free of a dependency on the daemon. The pure
+window shapes (`VisibleWindow`, `ScreenRect`) and change detection in `rsrewind-capture` build on
+every platform.
+
+**Capabilities are explicit, never pretended equal.** `rsrewind_core::Capabilities` says whether
+the platform can list windows (with rects), read titles, read process names, capture several
+monitors, and recognize text. `Capabilities::privacy_gaps(policy)` names what the configured
+rules need and the platform lacks (the window list always; titles or process names only when a
+rule of that kind exists). Rules the recorder holds to:
+
+- **Fail closed at start.** With any gap, the recorder refuses to start (before touching the data
+  folder) unless `privacy.unenforced_ok = true` is set in `config.toml`.
+- **Unknown means do not record, per tick.** A provider without a window list is never asked for
+  one (an empty answer would read as "nothing excluded is visible") and an excluded focused
+  window then skips every monitor; a failed enumeration skips every monitor; unknown idle time
+  counts as idle. The Windows adapters never report these states (their degraded-information
+  behaviour is remediation F4, still open).
+- **Say so afterwards.** Each session's `SessionCapabilities` is stored in `settings`
+  (`session.<id>.capabilities`; no schema change). `status` and `doctor` show "privacy rules NOT
+  enforced" while the newest session ran with gaps, and export narrows the segment's
+  `capabilities` to what every exported session had (`window_titles` only together with the
+  window list). Where every rule is enforced (Windows), output is unchanged.
+
+**Tests.** `rsrewind-daemon/src/tests/` drives this loop on every platform with deterministic
+fakes (fake clock whose sleeps run scripted hooks between ticks, scripted frames and windows,
+in-memory OCR): tick-level tests against a persist queue the test holds, and end-to-end runs of
+`run_with` with the real persist and OCR threads over a temp SQLite store.
 
 ## Event model
 
