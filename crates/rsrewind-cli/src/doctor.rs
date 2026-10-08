@@ -134,6 +134,17 @@ fn collect(data: &DataDir) -> Vec<Check> {
     };
     if let Some(store) = &store {
         checks.push(replication_check(data, store, config.as_ref()));
+        // Only ever a warning line: where the rules are enforced, doctor's output is unchanged.
+        if let Some(why) = crate::privacy_unenforced(store) {
+            checks.push(check(
+                "privacy",
+                Level::Warn,
+                format!(
+                    "privacy rules NOT enforced in the latest recording session: {why}; it ran \
+                     because privacy.unenforced_ok = true"
+                ),
+            ));
+        }
     }
     if let Some(store) = &store {
         match store.integrity_check() {
