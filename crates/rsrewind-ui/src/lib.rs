@@ -11,6 +11,7 @@ mod app;
 mod style;
 mod thumb;
 mod timeline;
+mod viewer;
 mod worker;
 
 use rsrewind_core::DataDir;

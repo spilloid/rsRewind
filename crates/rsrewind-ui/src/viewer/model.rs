@@ -35,7 +35,7 @@ pub struct Placement {
 
 impl Placement {
     /// An image-pixel rectangle on screen.
-    pub fn to_screen(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
+    pub fn to_screen(self, x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect {
             x: self.rect.x + x * self.scale,
             y: self.rect.y + y * self.scale,
@@ -45,7 +45,7 @@ impl Placement {
     }
 
     /// The image pixel under a viewport point (may lie outside the image).
-    pub fn to_image(&self, x: f32, y: f32) -> (f32, f32) {
+    pub fn to_image(self, x: f32, y: f32) -> (f32, f32) {
         let s = self.scale.max(f32::MIN_POSITIVE);
         ((x - self.rect.x) / s, (y - self.rect.y) / s)
     }
@@ -158,7 +158,14 @@ pub fn zoom_at(
 }
 
 /// Moves the image by a pointer drag of `(dx, dy)` logical pixels.
-pub fn pan(zoom: Zoom, dx: f32, dy: f32, image: (f32, f32), viewport: (f32, f32), actual: f32) -> Zoom {
+pub fn pan(
+    zoom: Zoom,
+    dx: f32,
+    dy: f32,
+    image: (f32, f32),
+    viewport: (f32, f32),
+    actual: f32,
+) -> Zoom {
     let Zoom::Scale { scale, center } = zoom else {
         return Zoom::Fit;
     };
@@ -178,7 +185,14 @@ pub fn actual_size(
     actual: f32,
 ) -> Zoom {
     let now = place(zoom, image, viewport).scale;
-    zoom_at(zoom, actual / now.max(f32::MIN_POSITIVE), at, image, viewport, actual)
+    zoom_at(
+        zoom,
+        actual / now.max(f32::MIN_POSITIVE),
+        at,
+        image,
+        viewport,
+        actual,
+    )
 }
 
 /// Double-click: from fit (or anything other than 100 %) to 100 % at the pointer; from 100 % back
@@ -204,7 +218,9 @@ pub fn percent(placement: &Placement, actual: f32) -> u32 {
     if actual <= 0.0 || !actual.is_finite() {
         return 100;
     }
-    (placement.scale / actual * 100.0).round().clamp(1.0, 100_000.0) as u32
+    (placement.scale / actual * 100.0)
+        .round()
+        .clamp(1.0, 100_000.0) as u32
 }
 
 /// An OCR block's rectangle in the pixels of the picture being shown. Blocks are stored in the
@@ -214,7 +230,12 @@ pub fn block_rect(block: &OcrBlock, captured: (f32, f32), shown: (f32, f32)) -> 
         return None;
     }
     let (sx, sy) = (shown.0 / captured.0, shown.1 / captured.1);
-    let r = [block.x * sx, block.y * sy, block.width * sx, block.height * sy];
+    let r = [
+        block.x * sx,
+        block.y * sy,
+        block.width * sx,
+        block.height * sy,
+    ];
     (r.iter().all(|v| v.is_finite()) && r[2] > 0.0 && r[3] > 0.0).then_some(r)
 }
 
@@ -282,13 +303,17 @@ fn contains_phrase(haystack: &[String], phrase: &Phrase) -> bool {
         return false;
     }
     haystack.windows(n).any(|window| {
-        window.iter().zip(&phrase.words).enumerate().all(|(k, (have, want))| {
-            if phrase.prefix && k == n - 1 {
-                have.starts_with(want.as_str())
-            } else {
-                have == want
-            }
-        })
+        window
+            .iter()
+            .zip(&phrase.words)
+            .enumerate()
+            .all(|(k, (have, want))| {
+                if phrase.prefix && k == n - 1 {
+                    have.starts_with(want.as_str())
+                } else {
+                    have == want
+                }
+            })
     })
 }
 
@@ -310,16 +335,6 @@ pub fn matching_blocks(blocks: &[OcrBlock], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The neighbouring moment in one lane: given moment start times of that lane, oldest first, the
-/// index after (`forward`) or before `current`. `None` at either end.
-pub fn neighbour(len: usize, current: usize, forward: bool) -> Option<usize> {
-    if forward {
-        (current + 1 < len).then_some(current + 1)
-    } else {
-        current.checked_sub(1).filter(|_| current < len)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,7 +353,10 @@ mod tests {
         assert!(close(p.scale, 1000.0 / 1920.0));
         assert!(close(p.rect.w / p.rect.h, 1920.0 / 1080.0));
         assert!(close(p.rect.x, 0.0) && close(p.rect.w, 1000.0));
-        assert!(close(p.rect.y, (800.0 - p.rect.h) / 2.0), "letterboxed vertically");
+        assert!(
+            close(p.rect.y, (800.0 - p.rect.h) / 2.0),
+            "letterboxed vertically"
+        );
         // A tall viewport letterboxes the other way.
         let tall = place(Zoom::Fit, IMG, (500.0, 900.0));
         assert!(close(tall.rect.w, 500.0) && tall.rect.y > 0.0);
@@ -356,14 +374,20 @@ mod tests {
         let after = place(zoomed, IMG, VP);
         assert!(close(after.scale, before.scale * 2.0));
         let still = after.to_image(at.0, at.1);
-        assert!(close(still.0, target.0) && close(still.1, target.1), "{still:?} vs {target:?}");
+        assert!(
+            close(still.0, target.0) && close(still.1, target.1),
+            "{still:?} vs {target:?}"
+        );
         // Zooming back out by the same factor returns to fit exactly.
         assert_eq!(zoom_at(zoomed, 0.5, at, IMG, VP, ACTUAL), Zoom::Fit);
     }
 
     #[test]
     fn zoom_is_limited_to_fit_and_eight_times_actual() {
-        assert_eq!(zoom_at(Zoom::Fit, 0.1, (0.0, 0.0), IMG, VP, ACTUAL), Zoom::Fit);
+        assert_eq!(
+            zoom_at(Zoom::Fit, 0.1, (0.0, 0.0), IMG, VP, ACTUAL),
+            Zoom::Fit
+        );
         let mut z = Zoom::Fit;
         for _ in 0..50 {
             z = zoom_at(z, 1.5, (500.0, 400.0), IMG, VP, ACTUAL);
@@ -381,9 +405,14 @@ mod tests {
         // 1920 x 0.8 = 1536 wide (> 1000): pannable; 1080 x 0.8 = 864 tall (> 800): pannable.
         let far = pan(z, 1e6, 1e6, IMG, VP, ACTUAL);
         let p = place(far, IMG, VP);
-        assert!(close(p.rect.x, 0.0) && close(p.rect.y, 0.0), "left/top edge reached: {p:?}");
+        assert!(
+            close(p.rect.x, 0.0) && close(p.rect.y, 0.0),
+            "left/top edge reached: {p:?}"
+        );
         let other = place(pan(z, -1e6, -1e6, IMG, VP, ACTUAL), IMG, VP);
-        assert!(close(other.rect.x + other.rect.w, VP.0) && close(other.rect.y + other.rect.h, VP.1));
+        assert!(
+            close(other.rect.x + other.rect.w, VP.0) && close(other.rect.y + other.rect.h, VP.1)
+        );
         // At fit nothing pans.
         assert_eq!(pan(Zoom::Fit, 50.0, 50.0, IMG, VP, ACTUAL), Zoom::Fit);
         // An axis narrower than the viewport stays centred while the other pans.
@@ -402,7 +431,10 @@ mod tests {
         assert_eq!(toggle(one, at, IMG, VP, ACTUAL), Zoom::Fit);
         // From some other zoom, toggle goes to 100 % first.
         let two = zoom_at(Zoom::Fit, 3.0, at, IMG, VP, ACTUAL);
-        assert!(close(place(toggle(two, at, IMG, VP, ACTUAL), IMG, VP).scale, ACTUAL));
+        assert!(close(
+            place(toggle(two, at, IMG, VP, ACTUAL), IMG, VP).scale,
+            ACTUAL
+        ));
         assert_eq!(percent(&place(one, IMG, VP), ACTUAL), 100);
         // A picture smaller than the window: fit is bigger than 100 %, and 100 % is reachable.
         let small = (400.0, 300.0);
@@ -454,23 +486,33 @@ mod tests {
             block("KONICA-printer", 0.0),
             block("budgetary", 0.0),
         ];
-        assert_eq!(matching_blocks(&blocks, "konica"), vec![0, 3], "case and punctuation");
-        assert_eq!(matching_blocks(&blocks, "budget"), vec![2], "whole words only");
+        assert_eq!(
+            matching_blocks(&blocks, "konica"),
+            vec![0, 3],
+            "case and punctuation"
+        );
+        assert_eq!(
+            matching_blocks(&blocks, "budget"),
+            vec![2],
+            "whole words only"
+        );
         assert_eq!(matching_blocks(&blocks, "budget*"), vec![2, 4], "prefix");
         assert_eq!(matching_blocks(&blocks, "\"toner low\""), vec![0], "phrase");
-        assert!(matching_blocks(&blocks, "\"low toner\"").is_empty(), "phrase order matters");
-        assert_eq!(matching_blocks(&blocks, "order konica"), vec![0, 1, 3], "each phrase outlined");
+        assert!(
+            matching_blocks(&blocks, "\"low toner\"").is_empty(),
+            "phrase order matters"
+        );
+        assert_eq!(
+            matching_blocks(&blocks, "order konica"),
+            vec![0, 1, 3],
+            "each phrase outlined"
+        );
         assert!(matching_blocks(&blocks, "").is_empty());
         assert!(matching_blocks(&blocks, "\" *** ").is_empty());
-        assert_eq!(matching_blocks(&blocks, "\"toner"), vec![0], "unterminated quote");
-    }
-
-    #[test]
-    fn neighbours_stop_at_the_ends() {
-        assert_eq!(neighbour(3, 1, true), Some(2));
-        assert_eq!(neighbour(3, 1, false), Some(0));
-        assert_eq!(neighbour(3, 2, true), None);
-        assert_eq!(neighbour(3, 0, false), None);
-        assert_eq!(neighbour(3, 7, false), None);
+        assert_eq!(
+            matching_blocks(&blocks, "\"toner"),
+            vec![0],
+            "unterminated quote"
+        );
     }
 }

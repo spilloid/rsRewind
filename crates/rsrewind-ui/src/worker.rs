@@ -49,6 +49,14 @@ pub enum Ask {
         source: Option<SourceId>,
         id: VisualStateId,
     },
+    /// The moments next to `from` in one direction: oldest first after it (`forward`), newest
+    /// first before it.
+    Step {
+        filter: SourceFilter,
+        from: TimelineCursor,
+        forward: bool,
+        limit: u32,
+    },
 }
 
 impl Ask {
@@ -60,6 +68,7 @@ impl Ask {
             Self::Search { .. } => 2,
             Self::At { .. } => 3,
             Self::Detail { .. } => 4,
+            Self::Step { .. } => 5,
         }
     }
 }
@@ -74,6 +83,7 @@ pub enum Answer {
     Search(Vec<SearchHit>),
     At(Option<TimelineEntry>),
     Detail(Option<VisualDetail>),
+    Step(Vec<TimelineEntry>),
     /// A newer question of the same kind arrived first.
     Superseded,
     /// The query failed; the message is for display (no screen content in it).
@@ -189,6 +199,17 @@ fn answer(history: &History, ask: Ask) -> Answer {
             .search(&query, filter)
             .map_or_else(failed, Answer::Search),
         Ask::At { at, filter } => history.at(at, filter).map_or_else(failed, Answer::At),
+        Ask::Step {
+            filter,
+            from,
+            forward,
+            limit,
+        } => if forward {
+            history.later(filter, limit, from)
+        } else {
+            history.recent(filter, limit, Some(from))
+        }
+        .map_or_else(failed, Answer::Step),
         Ask::Detail { source, id } => history
             .visual_detail(source, id)
             .map_or_else(failed, Answer::Detail),

@@ -5,6 +5,8 @@
 //! Every query runs on the history worker; the update loop only sends questions and applies
 //! answers, so the window stays responsive whatever SQLite is doing.
 
+mod viewer;
+
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
 use crate::timeline::cache::ByteLru;
@@ -12,8 +14,8 @@ use crate::timeline::model::{self, Camera, Filament};
 use crate::timeline::{self, FrameKey, Moment, Room, Strip};
 use crate::worker::{Answer, Ask, FrameAnswer, FramePool, HistoryWorker};
 use iced::widget::{
-    button, column, container, image, pin, responsive, rich_text, row, scrollable, shader, space,
-    span, stack, text, text_input,
+    button, column, container, image, mouse_area, pin, responsive, rich_text, row, scrollable,
+    shader, space, span, stack, text, text_input,
 };
 use iced::{
     Alignment, Color, ContentFit, Element, Fill, FillPortion, Font, Length, Subscription, Task,
@@ -78,6 +80,14 @@ pub enum Message {
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
+    /// Double-click on the detail pane's picture.
+    OpenSelected,
+    Viewer(crate::viewer::Event),
+    ViewerPicture(u64, FrameAnswer),
+    ViewerDetail(u64, Answer),
+    ViewerStepped(u64, bool, Answer),
+    CloseViewer,
+    ScaleFactor(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,6 +143,12 @@ pub struct App {
     detail: Option<VisualDetail>,
     detail_picture: Option<(FrameKey, image::Handle)>,
     cue_seq: u64,
+
+    /// The full-window image viewer, when open.
+    viewer: Option<viewer::ViewerState>,
+    viewer_seq: u64,
+    /// The window's scale factor (physical / logical pixels), for the viewer's 100 %.
+    scale_factor: f32,
 }
 
 impl App {
@@ -175,6 +191,9 @@ impl App {
             detail: None,
             detail_picture: None,
             cue_seq: 0,
+            viewer: None,
+            viewer_seq: 0,
+            scale_factor: 1.0,
         };
         let sources = app.ask(Ask::Sources, Message::Sources);
         (
@@ -317,6 +336,19 @@ impl App {
                 self.hovered = index;
                 Task::none()
             }
+            Message::Timeline(timeline::Event::Open(frame)) => self.open_from_room(frame),
+            Message::OpenSelected => self.open_selected(),
+            Message::Viewer(event) => self.viewer_event(event),
+            Message::ViewerPicture(seq, answer) => self.viewer_picture(seq, answer),
+            Message::ViewerDetail(seq, answer) => self.viewer_detail(seq, answer),
+            Message::ViewerStepped(seq, forward, answer) => {
+                self.viewer_stepped(seq, forward, answer)
+            }
+            Message::CloseViewer => self.close_viewer(),
+            Message::ScaleFactor(factor) => {
+                self.scale_factor = factor;
+                Task::none()
+            }
             Message::Timeline(timeline::Event::Select(index)) => {
                 let Some(moment) = self.moments.get(index) else {
                     return Task::none();
@@ -429,6 +461,9 @@ impl App {
                     }
                 }
                 Task::none()
+            }
+            Message::Key(keyboard::Event::KeyPressed { key, .. }) if self.viewer.is_some() => {
+                self.viewer_key(key.as_ref()).unwrap_or_else(Task::none)
             }
             Message::Key(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
                 keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
@@ -660,6 +695,14 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let t = self.tokens;
+        // The viewer takes the whole window: nothing behind it is laid out, drawn, or focused.
+        if let Some(v) = &self.viewer {
+            return container(self.viewer_view(v))
+                .style(move |_| t.bar())
+                .width(Fill)
+                .height(Fill)
+                .into();
+        }
         let body: Element<'_, Message> = if let Some(error) = &self.fatal {
             empty_state(t, "Could not open history.", error)
         } else if self.sources_loaded && self.sources.is_empty() {
@@ -1047,11 +1090,15 @@ impl App {
             .into();
         };
         let picture: Element<'_, Message> = match &self.detail_picture {
-            Some((key, handle)) if *key == selection.frame => image(handle.clone())
-                .content_fit(ContentFit::Contain)
-                .width(Fill)
-                .height(Length::Fixed(200.0))
-                .into(),
+            Some((key, handle)) if *key == selection.frame => mouse_area(
+                image(handle.clone())
+                    .content_fit(ContentFit::Contain)
+                    .width(Fill)
+                    .height(Length::Fixed(200.0)),
+            )
+            .on_double_click(Message::OpenSelected)
+            .interaction(iced::mouse::Interaction::ZoomIn)
+            .into(),
             _ => container(text("Loading picture…").size(12).color(t.text_3))
                 .center_x(Fill)
                 .height(Length::Fixed(200.0))

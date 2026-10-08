@@ -54,6 +54,11 @@ impl<K: Eq + Hash + Clone, V> ByteLru<K, V> {
         self.entries.contains_key(key)
     }
 
+    /// Every key, in no particular order.
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.entries.keys()
+    }
+
     /// The value, marking it most recently used.
     pub fn get(&mut self, key: &K) -> Option<&V> {
         self.clock += 1;

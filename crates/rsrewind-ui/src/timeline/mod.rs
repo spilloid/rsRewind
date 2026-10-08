@@ -14,7 +14,7 @@ pub mod model;
 use crate::style::Tokens;
 use crate::thumb::Bgra;
 use cache::ByteLru;
-use gpu::{Cards, Quad};
+use gpu::{Cards, Quad, TexKey};
 use iced::event::Event as UiEvent;
 use iced::mouse;
 use iced::widget::shader::{self, Action};
@@ -63,6 +63,26 @@ pub enum Event {
     Hover(Option<usize>),
     /// This moment was clicked.
     Select(usize),
+    /// This picture was double-clicked: open it in the viewer. A frame, not an index, because the
+    /// loaded moments may change between the two clicks.
+    Open(FrameKey),
+}
+
+/// Two clicks closer than this in time and distance are a double-click.
+pub const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(450);
+pub const DOUBLE_CLICK_SLOP: f32 = 6.0;
+
+/// Whether a click at `at`, `now`, completes a double-click begun by `previous`.
+pub fn is_double_click(
+    previous: Option<(std::time::Instant, Point)>,
+    now: std::time::Instant,
+    at: Point,
+) -> bool {
+    previous.is_some_and(|(then, from)| {
+        now.saturating_duration_since(then) <= DOUBLE_CLICK
+            && (at.x - from.x).abs() <= DOUBLE_CLICK_SLOP
+            && (at.y - from.y).abs() <= DOUBLE_CLICK_SLOP
+    })
 }
 
 /// Lays out moments the same way for drawing, hit testing and deciding which pictures to load.
@@ -98,6 +118,8 @@ pub struct Room<'a, F> {
 pub struct RoomState {
     drag: Option<Drag>,
     hovered: Option<usize>,
+    /// The last click on a card: when, where, which card (for double-click).
+    last_click: Option<(std::time::Instant, Point, FrameKey)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,6 +193,17 @@ where
                     return Some(Action::capture());
                 }
                 let at = cursor.position_in(bounds)?;
+                let now = std::time::Instant::now();
+                // The first click cues the room, so the card may have moved under the pointer:
+                // a double-click opens the card the first click hit.
+                if let Some((then, from, frame)) = state.last_click
+                    && is_double_click(Some((then, from)), now, at)
+                {
+                    state.last_click = None;
+                    return Some(
+                        Action::publish((self.on_event)(Event::Open(frame))).and_capture(),
+                    );
+                }
                 let placed = place(
                     self.moments,
                     self.lanes,
@@ -178,7 +211,11 @@ where
                     bounds.width,
                     bounds.height,
                 );
-                let hit = model::hit_test(&placed, at.x, at.y)?;
+                let Some(hit) = model::hit_test(&placed, at.x, at.y) else {
+                    state.last_click = None;
+                    return None;
+                };
+                state.last_click = self.moments.get(hit.index).map(|m| (now, at, m.frame()));
                 Some(Action::publish((self.on_event)(Event::Select(hit.index))).and_capture())
             }
             mouse::Event::WheelScrolled { delta } => {
@@ -263,10 +300,10 @@ where
                 border_width,
                 opacity: placed.alpha,
                 glow,
-                texture: picture.as_ref().map(|_| key),
+                texture: picture.as_ref().map(|_| TexKey::thumb(key)),
             });
             if let Some(picture) = picture {
-                pictures.push((key, picture));
+                pictures.push((TexKey::thumb(key), picture));
             }
         }
         Cards {
@@ -404,5 +441,37 @@ where
         } else {
             mouse::Interaction::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn double_clicks_must_be_quick_and_close() {
+        let t0 = Instant::now();
+        let p = Point::new(100.0, 100.0);
+        assert!(!is_double_click(None, t0, p));
+        assert!(is_double_click(
+            Some((t0, p)),
+            t0 + Duration::from_millis(200),
+            Point::new(104.0, 97.0)
+        ));
+        assert!(
+            !is_double_click(Some((t0, p)), t0 + Duration::from_millis(600), p),
+            "too slow"
+        );
+        assert!(
+            !is_double_click(Some((t0, p)), t0, Point::new(120.0, 100.0)),
+            "moved away"
+        );
+        // A clock that goes backwards is not a double-click forever after.
+        assert!(is_double_click(
+            Some((t0 + Duration::from_millis(5), p)),
+            t0,
+            p
+        ));
     }
 }
