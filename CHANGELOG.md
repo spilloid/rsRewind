@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Full-window image viewer.** Double-click a card in the room, or the picture in the detail pane,
+  to see that moment's screenshot at full resolution: fit to the window by default, scroll (or
+  pinch) to zoom toward the pointer, drag to pan, double-click or `1` / `0` for 100 % / fit, `+` /
+  `-`, `←` / `→` for the previous / next moment in the same source, Esc or a click on the backdrop to
+  close. Words matching the current search are outlined in gold from the recognized-text boxes.
+  Full-resolution pictures decode off the UI thread, one at a time (reduced to fit 4096 px), and
+  their GPU textures are freed as soon as they leave the screen.
+- `Ctrl+F` or `/` jumps to the search box.
+- `History::later` in `rsrewind-query`: observations after a cursor, oldest first (the forward
+  counterpart of `recent`), in the same cross-source order.
+
 ## [0.0.2] - 2026-10-06
 
 **Second pre-release: history from other machines, and a window to browse it.** Everything in

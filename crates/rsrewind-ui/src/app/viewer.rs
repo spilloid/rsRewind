@@ -8,7 +8,7 @@
 //! texture on the frame it leaves the screen.
 
 use super::{App, Message, format_time, source_name};
-use crate::style::MONO;
+use crate::style::{MONO, Tokens};
 use crate::thumb::Bgra;
 use crate::timeline::FrameKey;
 use crate::viewer::{self, Viewer, model::Zoom};
@@ -365,7 +365,8 @@ impl App {
     }
 
     pub(super) fn viewer_view<'a>(&'a self, v: &'a ViewerState) -> Element<'a, Message> {
-        let t = self.tokens;
+        // A lightbox: dark in both appearances, so the screenshot is what stands out.
+        let t = Tokens::DARK;
         let outlines = self.outlines(v);
         let matches = outlines.len();
         let actual = self.actual_scale();
@@ -469,11 +470,20 @@ impl App {
         .padding([8, 24])
         .height(viewer::FOOTER);
 
+        // Bands behind the header and hints, so they stay readable over a zoomed-in picture.
+        let band = move |_: &iced::Theme| container::Style {
+            background: Some(viewer::backdrop(&t).scale_alpha(0.86).into()),
+            ..container::Style::default()
+        };
         stack![
             canvas,
-            column![header, space::vertical(), footer]
-                .width(Fill)
-                .height(Fill),
+            column![
+                container(header).width(Fill).style(band),
+                space::vertical(),
+                container(footer).width(Fill).style(band),
+            ]
+            .width(Fill)
+            .height(Fill),
         ]
         .width(Fill)
         .height(Fill)

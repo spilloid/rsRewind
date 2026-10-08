@@ -38,6 +38,16 @@ pub enum Event {
     Close,
 }
 
+/// The viewer's backdrop: near-black in both appearances (a light frame around a screenshot
+/// makes the screenshot look washed out), a touch warmer in light mode.
+pub fn backdrop(t: &Tokens) -> Color {
+    if t.dark {
+        Color::from_rgb8(5, 5, 7)
+    } else {
+        Color::from_rgb8(24, 22, 26)
+    }
+}
+
 /// The area the image is laid out in, inside the viewer's bounds.
 pub fn image_area(width: f32, height: f32) -> (f32, f32) {
     (
@@ -209,13 +219,9 @@ where
         let t = &self.tokens;
         let mut quads = vec![Quad::solid(
             [0.0, 0.0, bounds.width, bounds.height],
-            if t.dark {
-                Color::from_rgb8(5, 5, 7)
-            } else {
-                Color::from_rgb8(28, 26, 30)
-            },
+            backdrop(t),
             0.0,
-            0.97,
+            1.0,
         )];
         let mut pictures = Vec::new();
         if let Some((placement, zoomable)) = self.placement(bounds)
