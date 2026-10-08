@@ -1,7 +1,7 @@
 # Company standards status
 
-Reconciled 2026-10-07 against `corporate-strategy/standards/STD-001` through `STD-008` and `main` at
-v0.0.2. Re-verify these claims
+Reconciled 2026-10-08 against `corporate-strategy/standards/STD-001` through `STD-008` and `main` at
+v0.0.3. Re-verify these claims
 against the live repo when the standards or the implementation change — this table is itself
 subject to STD-003 (doc freshness): a claim here that goes stale is a bug, not a detail.
 

@@ -5,8 +5,8 @@ screens, keeps a visual record of what changed, runs OCR over it, and lets you s
 history by text, app, window title, or time — entirely on your own machine. There is no cloud
 component, no required network service, and no telemetry.
 
-**Current release: v0.0.2** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
-[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.2) ·
+**Current release: v0.0.3** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
+[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.3) ·
 [website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind: the rewind room, screenshots in 3D with one lane per machine (made-up data)](site/img/room-dark.png)
