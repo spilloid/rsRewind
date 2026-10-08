@@ -44,6 +44,8 @@ const NOMINAL: (f32, f32) = (1280.0, 640.0);
 /// The short settle when cueing to a moment (the brief: ~100-180 ms, no fake scrubbing).
 const CUE_MS: f32 = 180.0;
 const SEARCH_LIMIT: u32 = 100;
+/// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
+const SEARCH_ID: &str = "search";
 
 pub fn run(data: DataDir) -> iced::Result {
     iced::application(move || App::boot(data.clone()), App::update, App::view)
@@ -465,6 +467,12 @@ impl App {
             Message::Key(keyboard::Event::KeyPressed { key, .. }) if self.viewer.is_some() => {
                 self.viewer_key(key.as_ref()).unwrap_or_else(Task::none)
             }
+            // Ctrl+F or `/` jumps to the search box (a `/` typed into the box is the box's own).
+            Message::Key(keyboard::Event::KeyPressed { key, modifiers, .. })
+                if is_find_key(key.as_ref(), modifiers) =>
+            {
+                iced::widget::operation::focus(SEARCH_ID)
+            }
             Message::Key(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
                 keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
                 | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
@@ -741,6 +749,7 @@ impl App {
             text("Rewind").size(22).color(t.text),
         ];
         let search = text_input("Search anything you remember…", &self.query)
+            .id(SEARCH_ID)
             .on_input(Message::Query)
             .padding([9, 16])
             .size(15)
@@ -1189,6 +1198,15 @@ fn snippet<'a>(t: Tokens, raw: &str) -> Element<'a, Message> {
     rich_text(spans).into()
 }
 
+/// Ctrl+F (Cmd+F on macOS) or a bare `/`.
+fn is_find_key(key: keyboard::Key<&str>, modifiers: keyboard::Modifiers) -> bool {
+    match key {
+        keyboard::Key::Character("f" | "F") => modifiers.command(),
+        keyboard::Key::Character("/") => !modifiers.command() && !modifiers.alt(),
+        _ => false,
+    }
+}
+
 /// `"a [b] c"` -> `[("a ", false), ("b", true), (" c", false)]`.
 pub(crate) fn split_matches(raw: &str) -> Vec<(String, bool)> {
     let mut parts = Vec::new();
@@ -1277,6 +1295,16 @@ mod tests {
             vec![("a".to_owned(), true), ("b".to_owned(), true)]
         );
         assert!(split_matches("").is_empty());
+    }
+
+    #[test]
+    fn find_shortcuts() {
+        use keyboard::{Key, Modifiers};
+        assert!(is_find_key(Key::Character("f"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("f"), Modifiers::empty()));
+        assert!(is_find_key(Key::Character("/"), Modifiers::empty()));
+        assert!(!is_find_key(Key::Character("/"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("g"), Modifiers::CTRL));
     }
 
     #[test]
