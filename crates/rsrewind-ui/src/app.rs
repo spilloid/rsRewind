@@ -47,20 +47,24 @@ const SEARCH_LIMIT: u32 = 100;
 /// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
 const SEARCH_ID: &str = "search";
 
-pub fn run(data: DataDir) -> iced::Result {
-    iced::application(move || App::boot(data.clone()), App::update, App::view)
-        .title(App::title)
-        .theme(App::theme)
-        .subscription(App::subscription)
-        .default_font(UI_FONT)
-        .window(window::Settings {
-            size: iced::Size::new(1280.0, 800.0),
-            min_size: Some(iced::Size::new(960.0, 600.0)),
-            maximized: true,
-            position: window::Position::Centered,
-            ..window::Settings::default()
-        })
-        .run()
+pub fn run(data: DataDir, appearance: crate::Appearance) -> iced::Result {
+    iced::application(
+        move || App::boot(data.clone(), appearance),
+        App::update,
+        App::view,
+    )
+    .title(App::title)
+    .theme(App::theme)
+    .subscription(App::subscription)
+    .default_font(UI_FONT)
+    .window(window::Settings {
+        size: iced::Size::new(1280.0, 800.0),
+        min_size: Some(iced::Size::new(960.0, 600.0)),
+        maximized: true,
+        position: window::Position::Centered,
+        ..window::Settings::default()
+    })
+    .run()
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +111,7 @@ struct Selection {
 
 pub struct App {
     tokens: Tokens,
+    appearance: crate::Appearance,
     worker: Option<HistoryWorker>,
     frames: Option<FramePool>,
     fatal: Option<String>,
@@ -154,14 +159,18 @@ pub struct App {
 }
 
 impl App {
-    fn boot(data: DataDir) -> (Self, Task<Message>) {
+    fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
         };
         let now = Timestamp::now().0 as f64;
         let app = Self {
-            tokens: Tokens::DARK,
+            tokens: match appearance {
+                crate::Appearance::Light => Tokens::LIGHT,
+                crate::Appearance::Dark | crate::Appearance::System => Tokens::DARK,
+            },
+            appearance,
             worker,
             frames,
             fatal,
@@ -198,10 +207,12 @@ impl App {
             scale_factor: 1.0,
         };
         let sources = app.ask(Ask::Sources, Message::Sources);
-        (
-            app,
-            Task::batch([sources, iced::system::theme().map(Message::Appearance)]),
-        )
+        let theme = if appearance == crate::Appearance::System {
+            iced::system::theme().map(Message::Appearance)
+        } else {
+            Task::none()
+        };
+        (app, Task::batch([sources, theme]))
     }
 
     fn title(&self) -> String {
@@ -213,10 +224,10 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![
-            keyboard::listen().map(Message::Key),
-            iced::system::theme_changes().map(Message::Appearance),
-        ];
+        let mut subs = vec![keyboard::listen().map(Message::Key)];
+        if self.appearance == crate::Appearance::System {
+            subs.push(iced::system::theme_changes().map(Message::Appearance));
+        }
         if self.cue.is_some() {
             subs.push(window::frames().map(Message::Frame));
         }
@@ -233,7 +244,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Appearance(mode) => {
-                self.tokens = Tokens::for_mode(mode);
+                if self.appearance == crate::Appearance::System {
+                    self.tokens = Tokens::for_mode(mode);
+                }
                 Task::none()
             }
             Message::Sources(Answer::Sources { sources, problems }) => {

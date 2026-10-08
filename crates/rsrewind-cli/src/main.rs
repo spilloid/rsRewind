@@ -134,6 +134,9 @@ enum Command {
         /// Run the window in this process and wait until it is closed.
         #[arg(long)]
         foreground: bool,
+        /// Light or dark; by default the window follows the system.
+        #[arg(long, value_enum, default_value_t = Appearance::System)]
+        appearance: Appearance,
     },
     /// Print the data folder.
     DataDir,
@@ -183,7 +186,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => replicate::export(&data, out, settle_minutes, max_events, label, json),
         Command::Import { paths, json } => replicate::import(&data, &paths, json),
         Command::Sources { json } => replicate::sources(&data, json),
-        Command::Ui { foreground } => ui(&data, foreground),
+        Command::Ui {
+            foreground,
+            appearance,
+        } => ui(&data, foreground, appearance),
         Command::DataDir => {
             println!("{}", data.root().display());
             Ok(ExitCode::SUCCESS)
@@ -551,14 +557,27 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
 /// The window always runs in a process of its own, never inside the recorder: by default this
 /// starts `rsrewind ui --foreground` detached (no console) and returns, so a crash or hang in the
 /// window cannot touch recording or the terminal it was started from.
+/// `rsrewind ui --appearance`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Appearance {
+    System,
+    Light,
+    Dark,
+}
+
 #[cfg(windows)]
-fn ui(data: &DataDir, foreground: bool) -> Result<ExitCode> {
+fn ui(data: &DataDir, foreground: bool, appearance: Appearance) -> Result<ExitCode> {
     if foreground {
         // Read the config without creating one: the viewer writes nothing to the data folder
         // except its own log.
         let config = Config::load_or_default(&data.config_file()).unwrap_or_default();
         let _guard = init_logging(data, &config, false, "rsrewind-ui")?;
-        rsrewind_ui::run(data.clone())?;
+        let appearance = match appearance {
+            Appearance::System => rsrewind_ui::Appearance::System,
+            Appearance::Light => rsrewind_ui::Appearance::Light,
+            Appearance::Dark => rsrewind_ui::Appearance::Dark,
+        };
+        rsrewind_ui::run_with(data.clone(), appearance)?;
         return Ok(ExitCode::SUCCESS);
     }
     use std::os::windows::process::CommandExt;
@@ -568,7 +587,12 @@ fn ui(data: &DataDir, foreground: bool) -> Result<ExitCode> {
     let child = std::process::Command::new(exe)
         .arg("--data-dir")
         .arg(data.root())
-        .args(["ui", "--foreground"])
+        .args(["ui", "--foreground", "--appearance"])
+        .arg(match appearance {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        })
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -592,7 +616,7 @@ fn stop(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows only")
 }
 #[cfg(not(windows))]
-fn ui(_: &DataDir, _foreground: bool) -> Result<ExitCode> {
+fn ui(_: &DataDir, _foreground: bool, _appearance: Appearance) -> Result<ExitCode> {
     bail!("the UI runs on Windows only")
 }
 

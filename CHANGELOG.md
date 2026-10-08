@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file. The format foll
   Full-resolution pictures decode off the UI thread, one at a time (reduced to fit 4096 px), and
   their GPU textures are freed as soon as they leave the screen.
 - `Ctrl+F` or `/` jumps to the search box.
+- `rsrewind ui --appearance light|dark` forces an appearance (default `system`: follow Windows).
 - `History::later` in `rsrewind-query`: observations after a cursor, oldest first (the forward
   counterpart of `recent`), in the same cross-source order.
 
