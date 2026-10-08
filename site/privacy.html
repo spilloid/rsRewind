@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy</title>
+<meta name="description" content="What rsRewind records, what it never does, and how deletion works.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <a class="brand" href="index.html">rs<span>Rewind</span></a>
+  <nav aria-label="Site">
+    <a href="index.html">Overview</a>
+    <a href="install.html">Install</a>
+    <a href="probes.html">Many machines</a>
+    <a href="privacy.html" aria-current="page">Privacy</a>
+    <a href="https://github.com/spilloid/rsRewind">Source</a>
+  </nav>
+</header>
+<section>
+  <div class="kicker">The short version</div>
+  <h1>It records your screen. So the rules are strict.</h1>
+  <p class="lede">Everything stays on your machine unless you move it yourself. The recorder has no network code, no accounts and no telemetry.</p>
+</section>
+
+<section>
+  <div class="grid">
+    <div class="card"><h3>What it stores</h3><p>Screenshots when the screen changes, the text recognized in them, and which application and window were in front. All in a folder you can open, move or delete.</p></div>
+    <div class="card"><h3>Excluded before it is saved</h3><p>Exclusion rules are checked before anything is written. A monitor is skipped entirely if any visible window on it matches, not just the one in front. Password managers and private browser windows are excluded by default.</p></div>
+    <div class="card"><h3>Never hidden</h3><p><code>rsrewind status</code> always says whether it is recording. There is no stealth mode, under any flag.</p></div>
+    <div class="card"><h3>Deletion is real</h3><p><code>rsrewind forget</code> removes screenshots, recognized text and window titles together, and overwrites deleted database pages. Uninstalling never deletes your history behind your back.</p></div>
+    <div class="card"><h3>Quiet logs</h3><p>Logs hold counts, ids and rule names. Screen text and window titles are never logged at normal levels.</p></div>
+    <div class="card"><h3>You control copies</h3><p>Exporting to another machine is always a command you run. Deleting on one machine does not reach copies you already moved.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Known gaps in this release</h2>
+  <div class="callout warn"><ul style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:8px">
+    <li><strong>Recorder privacy gaps from an independent review are not fixed yet</strong> (how it proves a frame was checked, how it behaves when window information is unreadable, and how pausing is acknowledged). Until they are, treat it as unsuitable for sensitive desktops.</li>
+    <li><strong>No encryption at rest.</strong> Anyone who can read your data folder can read your history.</li>
+    <li><strong>Imported files are not authenticated</strong>, only checked for damage.</li>
+  </ul></div>
+  <p>The complete policy, including logging and deletion details, is in <a href="https://github.com/spilloid/rsRewind/blob/main/PRIVACY.md">PRIVACY.md</a>. Report a security problem as described in <a href="https://github.com/spilloid/rsRewind/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+<footer>
+  <span>rsRewind is MIT licensed. A Spillers Technology project.</span>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/SECURITY.md">Security</a>
+  <a href="https://github.com/spilloid/rsRewind/issues">Issues</a>
+  <span>This site loads nothing from other servers.</span>
+</footer>
+</div>
+</body>
+</html>

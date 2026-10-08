@@ -65,6 +65,33 @@ security review yet**. The new window has been checked on Windows with synthetic
 - Replication stage 1 builds, passes fmt/clippy/tests, and works end to end with the real recorder
   on Windows 11 (2026-10-06).
 
+### Known issues
+
+- **Recorder privacy gaps from the first adversarial review are still open** (frame/privacy-check
+  provenance, fail-closed handling of unreadable window information, pause acknowledgement, writer
+  feedback). See `docs/remediation-status.md`, Unit B. Not suitable for sensitive desktops.
+- **No encryption at rest.** Anyone who can read the data folder can read the history.
+- **Imported segments are checked for damage, not for authorship**, and the import path has had no
+  independent security review. Keep the folders segments pass through as private as the history.
+- `rsrewind forget` cannot reach copies already moved to another machine; it reports how many of the
+  deleted moments had already been sealed.
+- `rsrewind doctor` reports capture as failed when run from a non-interactive session (for example
+  over SSH). Run it from your logged-in desktop.
+- The rewind window has been checked on Windows with synthetic history only. Cards newer than the
+  cursor drift past the camera large and semi-transparent and can cover a lane label, and the strip
+  under the room marks only the moments loaded around the cursor, not all of history.
+- Windows 10, multiple-monitor recording on other hardware, light mode and display scaling other than
+  125% are unverified. Linux and macOS recorders do not exist yet.
+- With default settings nothing new is stored after five minutes without keyboard or mouse input
+  (`capture.idle_after_secs`).
+
+### Upgrade notes
+
+- From 0.0.1: no database migration (schema stays at version 1) and no settings change is required.
+  New folders appear in the data directory only when used: `outbox\` (after `rsrewind export`) and
+  `sources\<id>\` (after `rsrewind import`).
+- `rsrewind ui` is now a native window and no longer needs the Windows App Runtime.
+
 ### Security
 
 - Window titles, process names, source labels and recognized text are stripped of terminal

@@ -18,6 +18,9 @@
       `rsrewind-ocr`, or `rsrewind-daemon`
 - [ ] If this touches logging: no OCR text, window titles, or other captured screen content is
       logged at `info` level or above
+- [ ] `./scripts/check-docs.sh` passes (versions agree across `Cargo.toml`, `CHANGELOG.md`, `README.md`, `site/`)
+- [ ] If this changes what a user sees or does: the website (`site/`) and its screenshots describe the
+      current app, and screenshots come from the running build on synthetic data
 - [ ] Relevant docs updated in this same PR (`README.md`, `ARCHITECTURE.md`, `PRIVACY.md`,
       `ROADMAP.md`, `CHANGELOG.md`) if behavior changed
 - [ ] Screenshots, sample data, and test fixtures in this PR contain no real personal or customer

@@ -1,0 +1,43 @@
+# Publishes site/ to GitHub Pages (https://spilloid.github.io/rsRewind/).
+# The site is hand-written static HTML and CSS: no build tool, no runtime, no third-party requests.
+# scripts/check-docs.sh fails the deploy if the site, README, changelog and Cargo.toml disagree
+# about the version, or if the site references another host or a missing image.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'Cargo.toml'
+      - 'scripts/check-docs.sh'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-docs.sh
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
