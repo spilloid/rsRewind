@@ -58,9 +58,21 @@ rules (`[privacy]` in `config.toml`, `PrivacyPolicy` in `rsrewind-core`):
 monitor matches an exclusion rule**, not only the foreground window. This is intentionally
 conservative: if a password manager is open in a background window on a monitor you're otherwise
 using for something else, that whole monitor's capture is skipped for that tick rather than
-risking a screenshot that happens to include it. The matching rule name is recorded (e.g.
-`process:1Password.exe`) as a `privacy_skip` event, with no pixels attached — the fact that
-capture was skipped, and why, is itself visible in your history, but what was on screen is not.
+risking a screenshot that happens to include it. A skipped tick stores no pixels and no text. As of 2026-10-08 the recorder only
+**counts** skips (visible in `rsrewind status`); it does not yet write a `privacy_skip` event naming the
+matching rule to your history, although the event kind exists for it. Writing that event (rule name only,
+never what matched) is open work.
+
+**Where the rules cannot be enforced, rsRewind does not record.** Enforcing "any visible window"
+needs the list of every visible window with its position (and, for each kind of rule, its title
+or process name). Windows provides all of it. A platform that cannot (for example a Wayland
+desktop without a window-list protocol) makes the recorder **refuse to start** unless you set
+`unenforced_ok = true` under `[privacy]`. If you do, `rsrewind status` and `rsrewind doctor`
+say **"privacy rules NOT enforced"** for as long as the newest recording session ran that way,
+and history exported from such a session does not claim window titles. The key defaults to
+`false` and is not written into a new `config.toml`. Whatever the platform, information the
+recorder cannot get on a given tick (a failed window enumeration, unknown idle time) means
+nothing is stored for that tick. (No platform other than Windows records yet.)
 
 These defaults are **suggestions, not a mandatory policy** — every rule can be edited or removed
 in `config.toml`, and you can add your own. `config.toml` rejects unknown keys (a typo like

@@ -15,6 +15,18 @@ use serde::{Deserialize, Serialize};
 pub struct PrivacyPolicy {
     pub excluded_processes: Vec<String>,
     pub excluded_title_patterns: Vec<String>,
+    /// Allows recording on a platform where these rules cannot be enforced (the window list, or a
+    /// field a rule needs, is unavailable: see [`crate::Capabilities::privacy_gaps`]). Off by
+    /// default: such a recorder refuses to start. When on, `status` and `doctor` say "privacy
+    /// rules NOT enforced" for as long as such a session is the latest one, and exported segments
+    /// do not claim `window_titles`. Not written into a default `config.toml` (where every rule
+    /// is enforceable, it would only invite flipping it); the refusal message names it.
+    #[serde(skip_serializing_if = "is_false")]
+    pub unenforced_ok: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +64,7 @@ impl PrivacyPolicy {
             excluded_title_patterns: ["*InPrivate*", "*Incognito*", "*Private Browsing*"]
                 .map(String::from)
                 .to_vec(),
+            unenforced_ok: false,
         }
     }
 
@@ -181,6 +194,7 @@ mod tests {
         let policy = PrivacyPolicy {
             excluded_processes: vec![String::new()],
             excluded_title_patterns: vec![String::new()],
+            ..Default::default()
         };
         assert_eq!(
             policy.evaluate(Some(&app("x.exe")), Some(&win("t"))),

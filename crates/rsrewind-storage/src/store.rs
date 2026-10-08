@@ -3,7 +3,8 @@ use crate::migrations::{self, MIGRATIONS, Migration, MigrationOutcome};
 use crate::{Result, StorageError};
 use rsrewind_core::{
     ApplicationContext, ApplicationId, CaptureState, DataDir, EventId, EventKind, MonitorId,
-    MonitorInfo, OcrBlock, SessionId, Timestamp, VisualStateId, WindowContext, WindowId,
+    MonitorInfo, OcrBlock, SessionCapabilities, SessionId, Timestamp, VisualStateId, WindowContext,
+    WindowId,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -288,6 +289,43 @@ impl Store {
             params![started_at.0, hostname, app_version],
         )?;
         Ok(SessionId(self.conn.last_insert_rowid()))
+    }
+
+    /// Records what the platform could see during `session` (stored in `settings`, keyed by the
+    /// session id; no schema change). Read back by `status`/`doctor` and by export, which never
+    /// claims a capability any exported session lacked.
+    pub fn record_session_capabilities(
+        &self,
+        session: SessionId,
+        capabilities: &SessionCapabilities,
+    ) -> Result<()> {
+        let value = serde_json::to_string(capabilities)?;
+        Self::set_setting(&self.conn, &session_capabilities_key(session), &value)
+    }
+
+    pub fn session_capabilities(&self, session: SessionId) -> Result<Option<SessionCapabilities>> {
+        let key = session_capabilities_key(session);
+        match self.setting(&key)? {
+            None => Ok(None),
+            Some(value) => serde_json::from_str(&value)
+                .map(Some)
+                .map_err(|_| StorageError::Corrupt(format!("setting {key}"))),
+        }
+    }
+
+    /// The newest recording session, with its capabilities if it recorded any. A store whose
+    /// newest session ran with privacy rules unenforced keeps saying so (`status`, `doctor`)
+    /// until a session that enforces them starts.
+    pub fn latest_session_capabilities(&self) -> Result<Option<(SessionId, SessionCapabilities)>> {
+        let latest: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(id) FROM sessions", [], |row| row.get(0))?;
+        let Some(latest) = latest.map(SessionId) else {
+            return Ok(None);
+        };
+        Ok(self
+            .session_capabilities(latest)?
+            .map(|capabilities| (latest, capabilities)))
     }
 
     pub fn end_session(&self, session: SessionId, ended_at: Timestamp) -> Result<()> {
@@ -1351,4 +1389,8 @@ fn relative_media_path(root: &Path, path: &Path) -> Option<String> {
         .map(|c| c.as_os_str().to_str())
         .collect::<Option<Vec<_>>>()?;
     Some(parts.join("/"))
+}
+
+fn session_capabilities_key(session: SessionId) -> String {
+    format!("session.{}.capabilities", session.0)
 }

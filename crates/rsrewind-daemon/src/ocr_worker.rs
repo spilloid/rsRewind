@@ -2,7 +2,7 @@
 //! not memory, and survives restarts. The channel from the persist thread is only a doorbell.
 
 use crate::counters::{self, Counters};
-use rsrewind_ocr::OcrEngine;
+use crate::platform::OcrFactory;
 use rsrewind_storage::{OcrStatus, StorageError, Store, media};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,13 +14,13 @@ const IDLE_POLL: Duration = Duration::from_secs(5);
 
 pub fn run(
     store: Store,
-    language: Option<String>,
+    engine: OcrFactory,
     wake: Receiver<()>,
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
 ) {
-    crate::win::lower_current_thread_priority();
-    let engine = match OcrEngine::new(language.as_deref()) {
+    // The factory runs here, on the OCR thread: thread priority and COM apartment are per thread.
+    let mut engine = match engine() {
         Ok(engine) => engine,
         Err(error) => {
             // States stay `pending`; `rsrewind doctor` explains how to install a language.
@@ -57,7 +57,7 @@ pub fn run(
             let outcome = std::fs::read(&item.media_path)
                 .map_err(|e| format!("read image: {e}"))
                 .and_then(|bytes| media::decode_webp(&bytes).map_err(|e| e.to_string()))
-                .and_then(|frame| engine.recognize(&frame).map_err(|e| e.to_string()));
+                .and_then(|frame| engine.recognize(&frame));
             match outcome {
                 Ok(output) => {
                     // The result is bound to the exact file it was computed from: if the row was
@@ -66,7 +66,7 @@ pub fn run(
                         item.id,
                         &item.relative_path,
                         &output.blocks,
-                        "windows.media.ocr",
+                        engine.engine_name(),
                         output.elapsed_ms,
                     ) {
                         Ok(()) => {
@@ -81,7 +81,7 @@ pub fn run(
                 }
                 Err(message) => {
                     counters::bump(&counters.ocr_failed);
-                    // The message names the failure (I/O, decode, WinRT HRESULT), never the text.
+                    // The message names the failure (I/O, decode, engine error code), never the text.
                     tracing::warn!(id = %item.id, error = %message, "OCR failed");
                     if let Err(error) = store.mark_ocr(
                         item.id,
