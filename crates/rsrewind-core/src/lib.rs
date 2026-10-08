@@ -4,6 +4,7 @@
 //! either side of a boundary (capture → daemon → storage → query → UI/CLI) agree on these types so
 //! that none of them has to know how the others are implemented.
 
+pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod event;
@@ -15,6 +16,7 @@ pub mod search;
 pub mod source;
 pub mod time;
 
+pub use capabilities::{Capabilities, SessionCapabilities};
 pub use config::Config;
 pub use error::{CoreError, Result};
 pub use event::{
