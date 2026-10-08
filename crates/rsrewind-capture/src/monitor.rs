@@ -28,6 +28,18 @@ impl MonitorHandle {
         Self(handle.0 as usize)
     }
 
+    /// The handle as an opaque integer, for callers that key monitors without naming Windows
+    /// types (the recorder's platform seam). Round-trips through [`Self::from_raw`].
+    pub fn to_raw(self) -> usize {
+        self.0
+    }
+
+    /// Rebuilds a handle from [`Self::to_raw`]. Sound for any value: the handle is never
+    /// dereferenced, and Windows rejects a stale or invented one with an error.
+    pub fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+
     pub(crate) fn hmonitor(self) -> HMONITOR {
         HMONITOR(self.0 as *mut core::ffi::c_void)
     }

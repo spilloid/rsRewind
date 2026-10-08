@@ -7,12 +7,20 @@
 //! change-detector verdict. The first frame of monitor 0 is written to `%TEMP%` as raw BGRA plus
 //! a small text file with its dimensions.
 
+#[cfg(windows)]
 use rsrewind_capture::{
     ChangeDetection, ChangeDetector, Fingerprint, MonitorCapturer, enable_dpi_awareness,
     foreground, idle_millis, monitors, visible_windows,
 };
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("the capture probe uses Windows.Graphics.Capture and runs on Windows only");
+}
+
+#[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let frames: u32 = args.next().and_then(|a| a.parse().ok()).unwrap_or(3);
