@@ -16,7 +16,7 @@ pub const MAX_CARDS: usize = 180;
 /// How strongly depth shrinks a card: scale at depth `z` is `1 / (1 + z * PERSPECTIVE)`.
 const PERSPECTIVE: f32 = 2.6;
 /// Moments newer than the cursor fade out over this much depth in front of the camera.
-const Z_AHEAD: f32 = 0.12;
+const Z_AHEAD: f32 = 0.07;
 /// Vanishing point height, and where the front row of cards sits, as fractions of the height.
 const HORIZON: f32 = 0.30;
 const FRONT_Y: f32 = 0.66;
@@ -155,7 +155,8 @@ impl Camera {
                 let alpha = if z >= 0.0 {
                     1.0 - 0.82 * z
                 } else {
-                    1.0 + z / Z_AHEAD
+                    // Already past: a faint ghost, so it never hides the moment in focus.
+                    0.45 * (1.0 + z / Z_AHEAD)
                 };
                 let rect = geometry.card(card.lane, z);
                 (alpha > 0.03 && rect.intersects(width, height)).then_some(Placed {

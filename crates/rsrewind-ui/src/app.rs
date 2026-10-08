@@ -1159,6 +1159,7 @@ impl App {
                 text(detail.ocr_text.clone())
                     .size(12)
                     .color(t.text_2)
+                    .width(Fill)
                     .into()
             };
             info = info
@@ -1254,7 +1255,18 @@ fn source_name(source: &SourceInfo) -> String {
 }
 
 fn app_and_window(app: Option<&str>, window: Option<&str>) -> String {
-    let app = app.map(|a| a.strip_suffix(".exe").unwrap_or(a));
+    let app = app.map(|a| {
+        a.strip_suffix(".exe")
+            .or_else(|| a.strip_suffix(".EXE"))
+            .unwrap_or(a)
+    });
+    // Most window titles already end with the application's name ("Inbox — Mail"); say it once.
+    if let (Some(a), Some(w)) = (app, window)
+        && !a.is_empty()
+        && w.to_lowercase().contains(&a.to_lowercase())
+    {
+        return w.to_owned();
+    }
     match (app, window) {
         (Some(a), Some(w)) if !w.is_empty() => format!("{a} — {w}"),
         (Some(a), _) => a.to_owned(),
@@ -1308,6 +1320,20 @@ mod tests {
             vec![("a".to_owned(), true), ("b".to_owned(), true)]
         );
         assert!(split_matches("").is_empty());
+    }
+
+    #[test]
+    fn the_application_is_named_once() {
+        assert_eq!(
+            app_and_window(Some("Huddle.exe"), Some("#facilities — Huddle")),
+            "#facilities — Huddle"
+        );
+        assert_eq!(
+            app_and_window(Some("EXCEL.EXE"), Some("Budget.xlsx")),
+            "EXCEL — Budget.xlsx"
+        );
+        assert_eq!(app_and_window(Some("pwsh.exe"), None), "pwsh");
+        assert_eq!(app_and_window(None, None), "Unknown application");
     }
 
     #[test]
