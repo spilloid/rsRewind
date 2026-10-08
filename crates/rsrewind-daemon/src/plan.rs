@@ -186,6 +186,7 @@ mod tests {
         let policy = PrivacyPolicy {
             excluded_processes: vec!["KeePassXC.exe".into()],
             excluded_title_patterns: vec![],
+            ..Default::default()
         };
         let editor = (
             ApplicationContext {

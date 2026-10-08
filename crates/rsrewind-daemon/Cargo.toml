@@ -10,12 +10,13 @@ publish.workspace = true
 [dependencies]
 rsrewind-core.workspace = true
 rsrewind-storage.workspace = true
+# Portable parts only off Windows: change detection and the window/rect shapes.
+rsrewind-capture.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-rsrewind-capture.workspace = true
 rsrewind-ocr.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
@@ -23,6 +24,11 @@ windows = { workspace = true, features = [
     "Win32_System_Threading",
     "Win32_System_Console",
 ] }
+
+[dev-dependencies]
+rsrewind-query.workspace = true
+rsrewind-segment.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
