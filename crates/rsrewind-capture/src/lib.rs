@@ -1,4 +1,6 @@
-//! Screen capture and desktop context for rsRewind (Windows only).
+//! Screen capture and desktop context for rsRewind. The capture, window and idle backends are
+//! Windows-only; change detection and the window/rect shapes ([`VisibleWindow`], [`ScreenRect`])
+//! are portable so the recorder loop builds and is tested on every platform.
 //!
 //! - [`monitors`] / [`enable_dpi_awareness`]: what displays exist, in physical pixels.
 //! - [`MonitorCapturer`]: Windows.Graphics.Capture per monitor, newest-frame-only, CPU copy.
@@ -11,6 +13,7 @@
 //! `Debug` impl redacts them.
 
 pub mod change;
+mod context;
 
 #[cfg(windows)]
 mod error;
@@ -26,6 +29,7 @@ mod wide;
 mod window;
 
 pub use change::{ChangeDetection, ChangeDetector, Fingerprint, FingerprintError};
+pub use context::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow};
 #[cfg(windows)]
 pub use error::{CaptureError, Result, is_access_denied, is_recoverable_hresult};
 #[cfg(windows)]
@@ -35,4 +39,4 @@ pub use monitor::{DpiAwareness, MonitorHandle, enable_dpi_awareness, monitors};
 #[cfg(windows)]
 pub use wgc::{Adapter, MonitorCapturer};
 #[cfg(windows)]
-pub use window::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow, foreground, visible_windows};
+pub use window::{foreground, visible_windows};

@@ -249,11 +249,21 @@ concern with no storage knowledge.
 ## 5. Platform capabilities
 
 Segments declare `capabilities` (`ocr`, `window_titles`, `process_names`, `multi_monitor`, ...).
-Today they are strings so a macOS (ScreenCaptureKit) or Linux (portal/PipeWire) probe can declare
-fewer without a format change. The domain structs keep their Windows-flavoured field names for
-now; the rule to hold is that nothing in storage, query or replication may *require* a process
-name or window title. Capture backends stay behind `rsrewind-capture`. No macOS/Linux capture work
-is proposed here.
+They are strings so a macOS (ScreenCaptureKit) or Linux (portal/PipeWire) probe can declare fewer
+without a format change. The domain structs keep their Windows-flavoured field names for now; the
+rule to hold is that nothing in storage, query or replication may *require* a process name or
+window title.
+
+**Implemented (2026-10-08, platform seam):** the recorder's platform reports a typed
+`rsrewind_core::Capabilities` (window list, titles, process names, multi-monitor, OCR); each
+recording session stores what it had (`SessionCapabilities`, in `settings` as
+`session.<id>.capabilities`), and `export_segment` narrows the build's tags to what *every*
+session in the segment had. `window_titles` is claimed only together with the window list, so a
+session recorded where the any-visible-window rule could not be enforced (it needed
+`privacy.unenforced_ok = true` to run at all) never lets a consumer infer privacy coverage.
+Sessions recorded before this existed narrow nothing. Capture backends sit behind the daemon's
+platform traits (ARCHITECTURE.md, "Platform seam and capabilities"); Windows is the only backend so
+far.
 
 ## 6. Staged plan
 

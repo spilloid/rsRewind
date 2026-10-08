@@ -184,6 +184,19 @@ mod tests {
     }
 
     #[test]
+    fn unenforced_privacy_is_opt_in_and_not_advertised() -> std::result::Result<(), String> {
+        assert!(!Config::default().privacy.unenforced_ok);
+        let config = Config::parse("[privacy]\nunenforced_ok = true\n")?;
+        assert!(config.privacy.unenforced_ok);
+        // Opting in replaces nothing else: the rules a user relies on stay as configured.
+        assert_eq!(config.privacy.excluded_processes, Vec::<String>::new());
+        // The default file does not mention it (where rules are enforceable it is irrelevant).
+        let text = toml::to_string_pretty(&Config::default()).map_err(|e| e.to_string())?;
+        assert!(!text.contains("unenforced_ok"));
+        Ok(())
+    }
+
+    #[test]
     fn typos_are_rejected() {
         assert!(Config::parse("[privacy]\nexcluded_proceses = [\"x.exe\"]\n").is_err());
     }

@@ -2820,8 +2820,11 @@ dependencies = [
  "rsrewind-capture",
  "rsrewind-core",
  "rsrewind-ocr",
+ "rsrewind-query",
+ "rsrewind-segment",
  "rsrewind-storage",
  "serde_json",
+ "tempfile",
  "tracing",
  "windows 0.62.2",
 ]

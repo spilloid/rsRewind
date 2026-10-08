@@ -8,17 +8,25 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- **Full-window image viewer.** Double-click a card in the room, or the picture in the detail pane,
-  to see that moment's screenshot at full resolution: fit to the window by default, scroll (or
-  pinch) to zoom toward the pointer, drag to pan, double-click or `1` / `0` for 100 % / fit, `+` /
-  `-`, `←` / `→` for the previous / next moment in the same source, Esc or a click on the backdrop to
-  close. Words matching the current search are outlined in gold from the recognized-text boxes.
-  Full-resolution pictures decode off the UI thread, one at a time (reduced to fit 4096 px), and
-  their GPU textures are freed as soon as they leave the screen.
-- `Ctrl+F` or `/` jumps to the search box.
-- `rsrewind ui --appearance light|dark` forces an appearance (default `system`: follow Windows).
-- `History::later` in `rsrewind-query`: observations after a cursor, oldest first (the forward
-  counterpart of `recent`), in the same cross-source order.
+- **Platform seam for the recorder.** The capture loop, persist thread and OCR thread are now
+  portable and reach the desktop only through traits (`rsrewind_daemon::platform`: frame source,
+  screen context, idle clock, OCR backend, clock, lifecycle/single instance). Windows behaviour,
+  config, schema and CLI output are unchanged; Windows remains the only platform that records.
+- **Capabilities are explicit.** `rsrewind_core::Capabilities` states what a platform can see. The
+  recorder refuses to start where the privacy rules cannot be enforced unless the new
+  `privacy.unenforced_ok = true` is set (default `false`); `status`, `status --json` and `doctor`
+  then report "privacy rules NOT enforced", and exported segments never claim `window_titles` for
+  such a session. Each session's capabilities are stored in `settings` (no schema change).
+- **Recorder tests that exercise the recorder.** Deterministic fakes (fake clock, scripted frames
+  and windows, in-memory OCR) drive the real capture loop and, end to end, `run_with` with its real
+  persist/OCR threads and SQLite: privacy skip before persist, any-visible-window rule, pause
+  ordering, idle, fail-closed start, non-blocking capture on a full queue, shutdown order. They run
+  on Linux and Windows.
+
+### Changed
+
+- `rsrewind-capture`: `VisibleWindow`/`ScreenRect` moved to a portable module (same public
+  paths); `MonitorHandle::to_raw`/`from_raw`; the `probe` example is a stub off Windows.
 
 ## [0.0.2] - 2026-10-06
 

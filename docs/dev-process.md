@@ -128,3 +128,35 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   clipped transport row, overlapping lane labels, unused space under the floor; dropped thumbnail
   requests are now retried. Not verified: real recorded history, multi-monitor, light mode, DPI
   other than 125 %.
+
+### 2026-10-08 — Platform seam (Linux port, step 1)
+
+- **Routing:** Opus implementer (privacy-sensitive capture path and thread pipeline, STD-001), on
+  branch `feat/platform-seam`; board motion `rsrewind-linux-wayland-port` provisional answers
+  honoured (fail closed without `privacy.unenforced_ok`, persistent "NOT enforced" badge in
+  `status`/`doctor`, no `window_titles` claim, no network code, control in SQLite). No Linux
+  capture/OCR yet.
+- **What changed:** `rsrewind-daemon/src/platform.rs` traits (frame source, capture backend,
+  screen context with `Capabilities`, idle clock, clock, lifecycle/single instance, OCR backend);
+  recorder/persist/OCR loops un-gated; Windows adapters in `windows_platform.rs`;
+  `Capabilities`/`SessionCapabilities` and `privacy.unenforced_ok` in core; per-session
+  capabilities in `settings` and export narrowing in storage; CLI badge. No schema change.
+- **Tests:** 11 tick-level + 3 end-to-end recorder tests on deterministic fakes (plus one ignored
+  test pinning F9), 2 storage tests, 1 CLI test. Mutation-checked: 11 recorder mutants killed, 2
+  survived and documented (`docs/remediation-status.md`), 1 storage mutant killed. Building the
+  end-to-end test found that on the fake clock the capture loop outruns the real persist thread
+  and drops jobs on the 4-deep queue (correct behaviour, but it made the run
+  scheduling-dependent); that test uses a deeper queue via `run_with_queue`.
+- **Windows verification (kubert, rustc 1.98.1):** `cargo fmt --check`, `build --workspace`,
+  `test --workspace` (daemon 21 passed + 1 ignored, storage 63, cli 12+1+3, ui 22, ...) and
+  `clippy --workspace --all-targets --all-features -D warnings` all green. Real recorder smoke on a
+  throwaway data dir with `idle_after_secs = 86400`: 4 screens, 63 OCR lines, `recent`/`search
+  platypus` find the Notepad text, `export --settle-minutes 1` sealed 6 events / 4 states, import
+  into a second root, `search platypus` on the replica finds it. `status`/`doctor` output carried
+  no new lines (rules enforced). All data, logs and tasks deleted afterwards.
+- **Harness finding:** piping `rsrewind start` through `cmd /c ... | Out-File` hangs until the
+  daemon exits, because the detached daemon inherits the pipe handle; redirect `start` to a file.
+- **Linux:** core, segment, storage, query, capture (portable part), daemon and cli build, test
+  and clippy clean; the OCR and UI crates are not built there (Windows-only dependencies / not
+  needed).
+

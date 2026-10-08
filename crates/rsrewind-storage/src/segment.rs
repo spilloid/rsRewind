@@ -16,8 +16,8 @@ use crate::store::{Store, insert_state_row, upsert_window_row, write_ocr_rows};
 use crate::{NewVisualState, Result, StorageError};
 use rsrewind_core::paths::media_relative_path;
 use rsrewind_core::{
-    ApplicationId, DataDir, EventKind, MonitorId, MonitorInfo, OcrBlock, Timestamp, VisualStateId,
-    WindowContext, WindowId,
+    ApplicationId, DataDir, EventKind, MonitorId, MonitorInfo, OcrBlock, SessionId, Timestamp,
+    VisualStateId, WindowContext, WindowId,
 };
 use rsrewind_segment::{
     ApplicationRec, EventRec, ExportCursor, FORMAT_VERSION, Manifest, MonitorRec, OcrRec, OcrState,
@@ -124,7 +124,7 @@ pub enum ImportOutcome {
 impl Store {
     // ----- settings ----------------------------------------------------------------------------
 
-    fn setting(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
@@ -134,7 +134,7 @@ impl Store {
             .flatten())
     }
 
-    fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<()> {
+    pub(crate) fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<()> {
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -399,11 +399,7 @@ impl Store {
                 label: options.label.to_owned(),
                 platform: options.platform.to_owned(),
                 app_version: options.app_version.to_owned(),
-                capabilities: options
-                    .capabilities
-                    .iter()
-                    .map(|c| (*c).to_owned())
-                    .collect(),
+                capabilities: self.segment_capabilities(options.capabilities, &build)?,
             },
             seq,
             created_at: options.now.0,
@@ -603,6 +599,24 @@ impl Store {
         build.sessions.push(rec);
         build.session_index.insert(id, i);
         Ok(i)
+    }
+
+    /// The build's capability tags narrowed to what every session in the segment recorded it
+    /// could see. A session from before capabilities were recorded narrows nothing (it ran the
+    /// one recorder that existed then, whose tags are the build's own).
+    fn segment_capabilities(
+        &self,
+        build_tags: &[&str],
+        build: &ManifestBuilder,
+    ) -> Result<Vec<String>> {
+        let mut tags: Vec<String> = build_tags.iter().map(|c| (*c).to_owned()).collect();
+        for &session in build.session_index.keys() {
+            if let Some(recorded) = self.session_capabilities(SessionId(session))? {
+                let allowed = recorded.capabilities.segment_tags();
+                tags.retain(|tag| allowed.contains(&tag.as_str()));
+            }
+        }
+        Ok(tags)
     }
 
     fn intern_monitor(&self, build: &mut ManifestBuilder, id: i64) -> Result<u32> {

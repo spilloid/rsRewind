@@ -702,3 +702,102 @@ fn the_outbox_scan_reports_time_ranges_and_quarantines_bad_files() -> TestResult
     );
     Ok(())
 }
+
+// ----- capabilities --------------------------------------------------------------------------
+
+fn full_options(now: i64) -> ExportOptions<'static> {
+    ExportOptions {
+        capabilities: &["ocr", "window_titles", "process_names", "multi_monitor"],
+        ..options(now)
+    }
+}
+
+#[test]
+fn a_session_without_a_window_list_never_exports_a_window_titles_claim() -> TestResult {
+    let f = fixture()?;
+    let limited = rsrewind_core::Capabilities {
+        list_windows: false,
+        ..rsrewind_core::Capabilities::WINDOWS
+    };
+    let mut policy = rsrewind_core::PrivacyPolicy::suggested_defaults();
+    policy.unenforced_ok = true;
+    let recorded = rsrewind_core::SessionCapabilities::new(limited, &policy);
+    assert!(!recorded.privacy_enforced);
+    f.store.record_session_capabilities(f.session, &recorded)?;
+    assert_eq!(
+        f.store.latest_session_capabilities()?,
+        Some((f.session, recorded))
+    );
+
+    record(&f, T0 + 1_000, 1, "text")?;
+    let out = f._tmp.path().join("outbox");
+    let report = f
+        .store
+        .export_segment(&out, &full_options(T0 + 10 * SETTLE))?
+        .ok_or("expected a segment")?;
+    let caps = open_segment(&report.path)?
+        .manifest()
+        .source
+        .capabilities
+        .clone();
+    assert_eq!(caps, ["ocr", "process_names", "multi_monitor"]);
+    Ok(())
+}
+
+#[test]
+fn a_fully_capable_or_unrecorded_session_exports_the_build_tags_unchanged() -> TestResult {
+    let f = fixture()?;
+    assert_eq!(f.store.latest_session_capabilities()?, None);
+    record(&f, T0 + 1_000, 1, "text")?;
+    let out = f._tmp.path().join("outbox");
+    let report = f
+        .store
+        .export_segment(&out, &full_options(T0 + 10 * SETTLE))?
+        .ok_or("expected a segment")?;
+    let caps = open_segment(&report.path)?
+        .manifest()
+        .source
+        .capabilities
+        .clone();
+    assert_eq!(
+        caps,
+        ["ocr", "window_titles", "process_names", "multi_monitor"]
+    );
+
+    let session = f
+        .store
+        .begin_session(Timestamp(T0 + 20 * SETTLE), "host", "0.1.0")?;
+    f.store.record_session_capabilities(
+        session,
+        &rsrewind_core::SessionCapabilities::new(
+            rsrewind_core::Capabilities::WINDOWS,
+            &rsrewind_core::PrivacyPolicy::suggested_defaults(),
+        ),
+    )?;
+    let window = f.window("Teams.exe", "Chat")?;
+    let at = T0 + 20 * SETTLE + 1_000;
+    let state = f.persist(f.monitor, at, 9)?;
+    f.store.record_observation(&Observation {
+        session,
+        monitor: f.monitor,
+        visual_state: state,
+        application: Some(window.0),
+        window: Some(window.1),
+        at: Timestamp(at),
+        max_gap_ms: 1_500,
+    })?;
+    let report = f
+        .store
+        .export_segment(&out, &full_options(T0 + 40 * SETTLE))?
+        .ok_or("expected a second segment")?;
+    let caps = open_segment(&report.path)?
+        .manifest()
+        .source
+        .capabilities
+        .clone();
+    assert_eq!(
+        caps,
+        ["ocr", "window_titles", "process_names", "multi_monitor"]
+    );
+    Ok(())
+}

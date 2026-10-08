@@ -33,6 +33,10 @@ out of scope for an ordinary PR and needs a design discussion first, not a code 
   never capture first and filter afterward.
 - A monitor is skipped entirely when *any* visible window on it matches an exclusion rule, not
   just the foreground window.
+- Where a platform cannot enforce that (its `Capabilities` lack the window list, or a field a rule
+  needs), the recorder refuses to start unless the user sets `privacy.unenforced_ok = true`, and
+  `status`/`doctor` then say "privacy rules NOT enforced". Unknown information (a failed window
+  enumeration, unknown idle time) means do not record. Never fake a capability.
 - The recorder's capture state is always discoverable (`rsrewind status`); there is no hidden or
   stealth mode, under any flag, ever.
 - Uninstalling never silently deletes recording history. Deleting history is always a separate,
@@ -60,7 +64,8 @@ binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 **No `unwrap()`/`expect()` in runtime code.** Tests may use `?` with `Box<dyn Error>`. A justified
 `expect()` on a true invariant needs a `// SAFETY:`-style comment explaining why it cannot fail.
 `unsafe` is permitted only inside Windows API wrapper functions, each block with its own
-`// SAFETY:` comment.
+`// SAFETY:` comment (and, when another platform gets backends, only inside that platform's
+equivalent OS API wrappers behind the platform seam).
 
 ## Build commands
 
@@ -90,9 +95,10 @@ crates/rsrewind-core/      shared domain types, config, paths, privacy rules —
 crates/rsrewind-segment/   sealed history segment file format (replication unit) — implemented
 crates/rsrewind-storage/   SQLite schema, migrations, media I/O, segment export/import — implemented
 crates/rsrewind-query/     read-only search/timeline queries + cross-source history facade — implemented
-crates/rsrewind-capture/   Windows capture, change detection — code present, Windows-only, unverified
-crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — code present, Windows-only, unverified
-crates/rsrewind-daemon/    recorder orchestration, threading model — code present, Windows-only; Unit B open
+crates/rsrewind-capture/   Windows capture backends (Windows-only); change detection and window shapes (portable)
+crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — Windows-only
+crates/rsrewind-daemon/    recorder loop, persist/OCR threads, platform seam (platform.rs) — portable, tested on
+                           fakes (src/tests/); Windows backends in windows_platform.rs; Unit B partly open
 crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows-only)
 crates/rsrewind-ui/        desktop UI: Iced chrome + custom wgpu rewind viewport — implemented; Windows-verified on synthetic history only
 docs/mvp-contract.md       the orchestrator's pre-implementation contract for the first slice

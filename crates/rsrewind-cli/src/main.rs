@@ -328,6 +328,27 @@ struct StatusReport {
     data_dir: String,
     counters: std::collections::BTreeMap<String, u64>,
     stats: rsrewind_storage::StorageStats,
+    /// Present only when the newest recording session could not enforce the privacy rules (it ran
+    /// with `privacy.unenforced_ok`): names what the platform was missing. Absent otherwise, so
+    /// output where the rules are enforced is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    privacy_unenforced: Option<String>,
+}
+
+/// Why the newest recording session did not enforce the privacy rules, or `None` if it did (or
+/// no session recorded its capabilities). An unreadable record counts as not enforced: the badge
+/// must never disappear because of a fault.
+pub(crate) fn privacy_unenforced(store: &Store) -> Option<String> {
+    match store.latest_session_capabilities() {
+        Ok(Some((_, recorded))) if !recorded.privacy_enforced => Some(format!(
+            "this platform could not provide the {}",
+            recorded.privacy_gaps.join(", ")
+        )),
+        Ok(_) => None,
+        Err(error) => Some(format!(
+            "could not read what the recorder could see: {error}"
+        )),
+    }
 }
 
 fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
@@ -370,6 +391,7 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
         data_dir: data.root().display().to_string(),
         counters: live.map(|s| s.counters.clone()).unwrap_or_default(),
         stats: store.stats()?,
+        privacy_unenforced: privacy_unenforced(&store),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -391,6 +413,9 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
             .map(|p| format!("   (pid {p})"))
             .unwrap_or_default()
     );
+    if let Some(why) = &report.privacy_unenforced {
+        println!("⚠ Privacy rules NOT enforced: {why} (privacy.unenforced_ok = true).");
+    }
     let s = &report.stats;
     println!("Data      {}", report.data_dir);
     println!(

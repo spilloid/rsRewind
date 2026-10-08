@@ -15,18 +15,25 @@
 //!
 //! The capture thread keeps a third connection only to read pause/resume control and write the
 //! heartbeat. Control and status flow through SQLite; the recorder opens no sockets or pipes.
+//!
+//! Everything above is portable and talks to the desktop only through [`platform`]: the Windows
+//! adapters live in `windows_platform.rs` (`run` on Windows), and the tests drive the same loop
+//! with deterministic fakes. Any other platform has no backends yet.
 
 pub mod counters;
-pub mod plan;
-
-#[cfg(windows)]
 mod ocr_worker;
-#[cfg(windows)]
 mod persist;
-#[cfg(windows)]
+pub mod plan;
+pub mod platform;
 mod recorder;
 #[cfg(windows)]
 pub mod win;
-
 #[cfg(windows)]
-pub use recorder::{RunOptions, run};
+mod windows_platform;
+
+#[cfg(test)]
+mod tests;
+
+pub use recorder::{RunOptions, run_with};
+#[cfg(windows)]
+pub use windows_platform::{WindowsInstance, run};
