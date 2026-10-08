@@ -7,6 +7,13 @@ on:
       - main
 
 jobs:
+  docs:
+    name: docs are current (STD-003)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-docs.sh
+
   test:
     name: fmt, clippy, test, build
     runs-on: windows-latest

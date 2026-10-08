@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Many machines</title>
+<meta name="description" content="Record several machines and browse them together in one rsRewind: sealed segments, no network code.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <a class="brand" href="index.html">rs<span>Rewind</span></a>
+  <nav aria-label="Site">
+    <a href="index.html">Overview</a>
+    <a href="install.html">Install</a>
+    <a href="probes.html" aria-current="page">Many machines</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="https://github.com/spilloid/rsRewind">Source</a>
+  </nav>
+</header>
+<section>
+  <div class="kicker">Probes and a central PC</div>
+  <h1>Many machines, one rewind room</h1>
+  <p class="lede">Any machine running rsRewind can be a probe. It keeps recording on its own, seals finished history into files, and you carry those files to your main PC. There they appear as extra lanes next to your own history.</p>
+</section>
+
+<section>
+  <h2>Why files, not a live stream</h2>
+  <div class="grid">
+    <div class="card"><h3>Survives bad networks</h3><p>A probe never waits on the link. If the network or the main PC is down, it keeps recording locally and the files pile up until you move them.</p></div>
+    <div class="card"><h3>Safe to repeat</h3><p>Copy the same file twice, in any order, after a crash: importing it again changes nothing. Every file carries a checksum, so a half-copied file is refused, never half-imported.</p></div>
+    <div class="card"><h3>You choose the road</h3><p>LAN share, WireGuard, a sync tool, a USB stick. rsRewind adds no network code of its own, so there is nothing new to expose.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Set it up</h2>
+  <ol class="steps">
+    <li><strong>On each probe:</strong> install rsRewind and run <code>rsrewind start</code>. It is the same recorder as always.</li>
+    <li><strong>Seal history.</strong> Run <code>rsrewind export</code>. It writes segment files to <code>%LOCALAPPDATA%\rsRewind\outbox</code>, covering only moments that have been quiet for five minutes. Run it by hand or on a schedule:
+<pre><code>schtasks /create /tn "rsRewind export" /sc hourly /tr "\"%LOCALAPPDATA%\Programs\rsRewind\rsrewind.exe\" export"</code></pre></li>
+    <li><strong>Move the files</strong> to the main PC however you like, for example <code>robocopy "%LOCALAPPDATA%\rsRewind\outbox" \\main-pc\rsrewind-inbox</code>. Copying a file again later is harmless.</li>
+    <li><strong>On the main PC:</strong> <code>rsrewind import \\main-pc\rsrewind-inbox</code>. Each probe gets its own store under <code>sources\&lt;id&gt;</code>; <code>rsrewind sources</code> lists them.</li>
+    <li><strong>Look.</strong> <code>rsrewind ui</code> shows every machine as its own lane, and search covers all of them.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>What to know</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Situation</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>Probe is offline for days</td><td>It keeps recording. Seal and move the files when you can; a long gap becomes several files.</td></tr>
+      <tr><td>The same file arrives twice</td><td>The second import says "already imported" and changes nothing.</td></tr>
+      <tr><td>A file is damaged or cut short</td><td>Refused with a message. Nothing is imported.</td></tr>
+      <tr><td>A probe is reinstalled and loses its data folder</td><td>It shows up as a new machine. Nothing is merged or overwritten.</td></tr>
+      <tr><td>A backup is restored on a probe</td><td>Files that reuse an old sequence number with different content are refused.</td></tr>
+      <tr><td>You delete history on the main PC</td><td>It stays deleted, even if the same files are delivered again.</td></tr>
+      <tr><td>You delete history on a probe</td><td>That machine forgets it and removes matching unsent files. Copies already delivered stay on the main PC. <code>rsrewind forget</code> tells you how many moments had already been sealed.</td></tr>
+    </tbody></table></div>
+  <div class="callout warn"><p><strong>Trust the folder.</strong> Files are checked for damage, not for who made them. Anyone who can write into the import folder can pose as a probe. Keep that folder and the <code>sources</code> folder as private as the history itself. Authenticating probes is planned.</p></div>
+  <p class="note">Design and threat model: <a href="https://github.com/spilloid/rsRewind/blob/main/docs/design/distributed.md">docs/design/distributed.md</a>.</p>
+</section>
+<footer>
+  <span>rsRewind is MIT licensed. A Spillers Technology project.</span>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/SECURITY.md">Security</a>
+  <a href="https://github.com/spilloid/rsRewind/issues">Issues</a>
+  <span>This site loads nothing from other servers.</span>
+</footer>
+</div>
+</body>
+</html>

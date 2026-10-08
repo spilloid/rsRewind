@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install rsRewind</title>
+<meta name="description" content="Install, verify and first run of rsRewind v0.0.2 on Windows 11.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <a class="brand" href="index.html">rs<span>Rewind</span></a>
+  <nav aria-label="Site">
+    <a href="index.html">Overview</a>
+    <a href="install.html" aria-current="page">Install</a>
+    <a href="probes.html">Many machines</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="https://github.com/spilloid/rsRewind">Source</a>
+  </nav>
+</header>
+<section>
+  <div class="kicker">Version 0.0.2 · Windows 11 (x64)</div>
+  <h1>Install</h1>
+  <p class="lede">Two downloads, both signed. The installer is per-user and needs no administrator rights.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/rsrewind-v0.0.2-x64.msi">Installer (.msi)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/rsrewind-v0.0.2-windows-amd64.zip">Portable (.zip)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/SHA256SUMS.txt">SHA256SUMS.txt</a>
+  </div>
+  <p class="note">This is a pre-release, so GitHub's "latest release" button will not show it. Use the links above.</p>
+</section>
+
+<section>
+  <h2>Verify before you run it</h2>
+  <p>rsRewind records your screen, so check what you downloaded. In PowerShell, in the folder you saved the files to:</p>
+<pre><code>Get-FileHash .\rsrewind-v0.0.2-x64.msi -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt          # the hash above must match its line
+
+Get-AuthenticodeSignature .\rsrewind-v0.0.2-x64.msi | Format-List Status,SignerCertificate</code></pre>
+  <p>Status must be <code>Valid</code> and the signer <code>CN=Joseph Spillers</code>, with a Microsoft timestamp. The same applies to <code>rsrewind.exe</code> inside the zip. If either check fails, do not run it, and please <a href="https://github.com/spilloid/rsRewind/issues">open an issue</a>.</p>
+</section>
+
+<section>
+  <h2>First run</h2>
+  <ol class="steps">
+    <li><strong>Install.</strong> The installer puts <code>rsrewind.exe</code> in <code>%LOCALAPPDATA%\Programs\rsRewind</code>. With the zip, put the exe wherever you like.</li>
+    <li><strong>Check the setup.</strong> <code>rsrewind doctor</code> reports whether capture works, whether Windows text recognition has a language installed, and how much disk is free.</li>
+    <li><strong>Record.</strong> <code>rsrewind start</code>, work normally for a few minutes, then <code>rsrewind status</code>.</li>
+    <li><strong>Look back.</strong> <code>rsrewind ui</code> opens the rewind room. Search at the top; click a result to jump to that moment.</li>
+  </ol>
+  <p>History lives in <code>%LOCALAPPDATA%\rsRewind</code>. Uninstalling never deletes it. To delete recent history, use <code>rsrewind forget 15m --yes</code>; it removes the screenshots, the recognized text and the window titles together.</p>
+</section>
+
+<section>
+  <h2>Good to know</h2>
+  <div class="grid">
+    <div class="card"><h3>Idle means paused</h3><p>After five minutes without input nothing new is stored. Change <code>idle_after_secs</code> in <code>config.toml</code> if you want otherwise.</p></div>
+    <div class="card"><h3>Privacy exclusions</h3><p>Password managers and private browser windows are excluded by default. A monitor is skipped entirely if any visible window on it matches. <a href="privacy.html">Details</a>.</p></div>
+    <div class="card"><h3>Disk use</h3><p>Defaults keep 90 days and cap storage at 50 GB. Both are settings, and <code>rsrewind doctor</code> warns when space is tight.</p></div>
+  </div>
+</section>
+<footer>
+  <span>rsRewind is MIT licensed. A Spillers Technology project.</span>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/spilloid/rsRewind/blob/main/SECURITY.md">Security</a>
+  <a href="https://github.com/spilloid/rsRewind/issues">Issues</a>
+  <span>This site loads nothing from other servers.</span>
+</footer>
+</div>
+</body>
+</html>

@@ -320,19 +320,46 @@ jobs:
             echo "No CHANGELOG.md section for $VERSION" >&2
             exit 1
           fi
+          REPO='${{ github.repository }}'
+          BASE="https://github.com/$REPO/releases/download/v$VERSION"
+          ZIP="rsrewind-v$VERSION-windows-amd64.zip"
+          MSI="rsrewind-v$VERSION-x64.msi"
           {
             echo "# rsRewind v$VERSION"
             echo
             cat section.md
+            echo
             echo "---"
             echo
-            echo "**Verify before use:** every file is listed in \`SHA256SUMS.txt\` (check with"
-            echo "\`Get-FileHash <file> -Algorithm SHA256\`) and the executable and MSI carry an"
-            echo "Authenticode signature. This is a pre-release; it is promoted to Latest by hand after"
-            echo "the published assets are verified."
+            echo "## Download"
             echo
-            echo "Everything stays on your machine: rsRewind has no cloud component and no network"
-            echo "code in the recording path. Privacy policy: [PRIVACY.md](https://github.com/${{ github.repository }}/blob/v$VERSION/PRIVACY.md)."
+            echo "| File | What it is | SHA-256 |"
+            echo "|---|---|---|"
+            echo "| [\`$MSI\`]($BASE/$MSI) | Per-user installer (no administrator rights) | \`$(awk -v f="$MSI" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo "| [\`$ZIP\`]($BASE/$ZIP) | Portable: \`rsrewind.exe\`, LICENSE, README | \`$(awk -v f="$ZIP" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo
+            echo "## Verify before you run it"
+            echo
+            echo "In PowerShell, in the folder you saved the files to:"
+            echo
+            echo '```powershell'
+            echo "Get-FileHash .\\$MSI -Algorithm SHA256        # must match the table above and SHA256SUMS.txt"
+            echo "Get-AuthenticodeSignature .\\$MSI | Format-List Status,SignerCertificate"
+            echo '```'
+            echo
+            echo "Status must be \`Valid\` and the signer \`CN=Joseph Spillers\` with a Microsoft timestamp. The"
+            echo "same applies to \`rsrewind.exe\`. If a check fails, do not run it; please open an issue."
+            echo
+            echo "## Next steps and docs"
+            echo
+            echo "- Install and first run: https://spilloid.github.io/rsRewind/install.html"
+            echo "- Several machines in one view: https://spilloid.github.io/rsRewind/probes.html"
+            echo "- Privacy policy: [PRIVACY.md](https://github.com/$REPO/blob/v$VERSION/PRIVACY.md); security reports: [SECURITY.md](https://github.com/$REPO/blob/v$VERSION/SECURITY.md)"
+            echo "- Full history of changes: [CHANGELOG.md](https://github.com/$REPO/blob/v$VERSION/CHANGELOG.md)"
+            echo
+            echo "Everything stays on your machine: rsRewind has no cloud component and no network code in"
+            echo "the recording path. This is a pre-release; it is promoted to Latest by hand after the"
+            echo "published assets are verified."
           } > notes.md
       - name: Create prerelease
         env:

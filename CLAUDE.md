@@ -152,3 +152,22 @@ Routing table for this repo:
 - A dispatcher's own report is a claim, not proof the underlying tool call happened as described.
 - Cost/quality data (tokens, time, defects found vs. real) is a deliverable of a review round, not
   overhead to skip when busy.
+
+## Things to re-verify before trusting them
+
+Claims that cannot be checked mechanically live here with a date (STD-003 rule 4). A claim without a
+date is not allowed; re-verify it or delete it.
+
+- **2026-10-07:** Windows 10 support is unverified. Only Windows 11 (build 26200) has been run.
+- **2026-10-07:** `rsrewind doctor` reports capture as failed when run from a non-interactive session
+  (SSH: `GraphicsCaptureSession::IsSupported ... 0x80070424`) and passes in an interactive one. The
+  installed v0.0.2 was last confirmed capturing from a scheduled task bound to the console session.
+- **2026-10-07:** The rewind UI has been run on Windows with synthetic history only; real recorded
+  history, multiple monitors, light mode and display scaling other than 125% are unverified.
+- **2026-10-07:** The segment import path (`rsrewind import`) has had unit tests, mutation checks and
+  one real Windows record-export-import run, and no independent security review.
+- **2026-10-07:** The 8-hour acceptance run for v0.1.0 (ROADMAP) has not been run.
+- **2026-10-07:** Installer upgrade and uninstall behavior in `docs/installer.md` has not been
+  re-tested since v0.0.2; only a fresh per-user install was confirmed.
+- **2026-10-07:** The recorder-side privacy findings in `docs/remediation-status.md` (Unit B) are
+  open; every statement about privacy guarantees applies to the design, not to a reviewed build.

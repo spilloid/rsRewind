@@ -116,3 +116,34 @@ and see `docs/dev-process.md` for this repo's own log and routing table):
 
 See `docs/dev-process.md` for the log of actual rounds (unit, risk tier, model, outcome) this
 repository accrues under this process.
+
+## Release runbook
+
+Shipping includes a documentation step, not a follow-up (STD-003 rule 3). In order:
+
+1. **Version.** Bump `workspace.package.version` in `Cargo.toml` and refresh `Cargo.lock`.
+2. **Changelog.** Move `[Unreleased]` into a dated `## [X.Y.Z] - YYYY-MM-DD` section. It becomes the
+   GitHub release notes, so it must stand alone for someone who has not read the repository:
+   a one-paragraph summary, `### Added` / `### Changed` / `### Fixed` / `### Security` as they apply,
+   and **`### Known issues`** and **`### Upgrade notes`** (write "none" if none). Anything the release
+   does not yet do safely goes in a warning block at the top, as 0.0.1 and 0.0.2 do.
+3. **User-facing docs describe the current app.** Update the README's `**Current release: vX.Y.Z**`
+   line and its CLI table, the website under `site/` (version, download links, any changed
+   behavior, and screenshots if the UI visibly changed; screenshots must be synthetic), `PRIVACY.md`
+   if recording, retention, deletion or export behavior changed, and `ARCHITECTURE.md` /
+   `docs/design/*` if the design changed.
+4. **Mechanical check.** `scripts/check-docs.sh` must pass: it compares the version in `Cargo.toml`,
+   `CHANGELOG.md`, `README.md` and `site/`, rejects links to other versions, rejects third-party
+   requests on the site, and checks referenced images exist. CI runs it on every PR.
+5. **Standards and quarantine.** Reconcile `docs/standards.md`, and re-date or retire the items in
+   CLAUDE.md's "Things to re-verify before trusting them".
+6. **Gate.** PR green on Windows CI (`fmt`, `clippy -D warnings`, `test`, `build`). Run the Release
+   workflow from `main` with `dry_run=true` when signing, packaging or the notes template changed.
+7. **Tag.** Merge, then tag `vX.Y.Z` on the merge commit. The workflow tests, builds, signs the EXE
+   and MSI, assembles the ZIP, writes `SHA256SUMS.txt`, and publishes a **prerelease** only if every
+   signature and checksum verifies.
+8. **Verify the published release** as a user would: download the assets, `sha256sum -c
+   SHA256SUMS.txt`, `Get-AuthenticodeSignature` on the EXE and MSI, install the MSI on a real
+   Windows machine, run `rsrewind --version` and `rsrewind doctor` in an interactive session.
+9. **Promote** the prerelease to Latest only after step 8, and only when the release notes' Known
+   issues are acceptable to ship under that label. Then confirm the Pages deploy shows the new version.

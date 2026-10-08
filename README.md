@@ -5,27 +5,28 @@ screens, keeps a visual record of what changed, runs OCR over it, and lets you s
 history by text, app, window title, or time — entirely on your own machine. There is no cloud
 component, no required network service, and no telemetry.
 
-## Status: pre-release development software
+**Current release: v0.0.2** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
+[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.2) ·
+[website](https://spilloid.github.io/rsRewind/)
 
-**rsRewind is early, unreleased, and not ready for use on a machine you care about.**
 
-As of this writing the workspace contains the shared domain types (`rsrewind-core`) and the
-architecture contract (`docs/mvp-contract.md`) that the rest of the crates are being built
-against. The capture, storage, OCR, query, daemon, CLI, and UI crates are scaffolded but not
-yet implemented — the `rsrewind.exe` binary currently only prints a placeholder string. Nothing
-in this README's "Usage" section works yet; it documents the contract the implementation is
-being built to, and is written so that section can be verified command-by-command as each piece
-lands rather than rewritten from scratch.
 
-Do not install this on a system where you would be upset by:
+## Status: pre-release, working end to end
 
-- a recorder that captures continuously, including things you forgot were on screen;
-- a prerelease bug losing or corrupting your recorded history;
-- data stored **unencrypted at rest** (see [Privacy and data handling](#privacy-and-data-handling));
-- no published code-signed binaries yet (see [code signing](docs/code-signing.md)).
+rsRewind records, indexes and searches your screen on Windows 11, opens a rewind window over the
+history, and can merge history from other machines. It is a **pre-release**: signed binaries are
+published, but it is **not ready for use on a machine or in a session you are not comfortable
+recording.**
 
-See `ROADMAP.md` for what "done" looks like at each version, and `docs/dev-process.md` for how
-this repository's AI-assisted implementation work is reviewed before it ships.
+- Recorder-side privacy gaps found by the adversarial review of the first slice are **not fixed**
+  (see `docs/remediation-status.md`, Unit B).
+- Data is stored **unencrypted at rest** (see [Privacy and data handling](#privacy-and-data-handling)).
+- Importing history from other machines checks integrity, not authenticity, and has not had an
+  independent security review.
+- The rewind window has been verified on Windows with synthetic history only.
+
+See `ROADMAP.md` for what "done" looks like at each version, `CHANGELOG.md` for what changed, and
+`docs/dev-process.md` for how this repository's AI-assisted work is reviewed.
 
 ## What it is, concretely
 
@@ -46,12 +47,12 @@ It is explicitly **not**:
 
 ## Supported OS
 
-- **Windows 11** — primary target; all capture, OCR and UI APIs are developed and expected to be
-  verified against current Windows 11.
-- **Windows 10** — expected to work where the underlying Windows APIs (Windows.Graphics.Capture,
-  Windows.Media.Ocr, per-monitor-v2 DPI awareness) are available, but this is **unverified**: no
-  testing has been done on Windows 10 yet.
-- No other OS is supported. rsRewind is Windows-only by design (see `ARCHITECTURE.md`).
+- **Windows 11** — the supported platform. Verified on Windows 11 build 26200.
+- **Windows 10** — expected to work where Windows.Graphics.Capture, Windows.Media.Ocr and
+  per-monitor-v2 DPI awareness exist, but **unverified**.
+- **Linux (Plasma Wayland) and macOS** — planned, not built. History *imported* from other machines
+  can be browsed on any platform that builds `rsrewind-query` and `rsrewind-ui`; only the recorder
+  is Windows-only. See `docs/design/distributed.md`.
 
 ## Build requirements
 
@@ -60,9 +61,8 @@ It is explicitly **not**:
 - **MSVC Build Tools** (the "Desktop development with C++" workload from Visual Studio Build
   Tools) and the **Windows 11 SDK** — required to link against the Windows APIs the `windows`
   crate wraps.
-- **Windows App Runtime 2.4** (the `Microsoft.WindowsAppRuntime.2` framework package) — required
-  only to *run* `rsrewind ui` (it uses `windows-reactor`/WinUI 3). It is not required to build or
-  run the recorder, the CLI, or the test suite.
+- No extra runtime is needed to run `rsrewind ui`: it is a native Rust window (Iced + wgpu) and
+  needs only a working GPU driver.
 
 If `cargo`/`rustc` are installed via `rustup` but not on your shell's `PATH`, prefix commands
 with the toolchain's `bin` directory, e.g. (PowerShell):
@@ -84,51 +84,45 @@ cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run the CLI once it has subcommands implemented
 cargo run -p rsrewind-cli -- status
 ```
 
 There is one executable, `rsrewind.exe`, with subcommands — see [CLI commands](#cli-commands)
-below. There is no separate installer required for development; see `docs/installer.md` for the
-planned MSI packaging.
+below. Releases ship a signed MSI and a portable ZIP; see `docs/installer.md`.
 
 ## CLI commands
 
-Design per `docs/mvp-contract.md`; **not yet implemented** (`rsrewind-cli`'s `main.rs` is
-currently a placeholder). This section documents the committed shape so each command can be
-checked off as it lands, rather than written up after the fact.
-
 | Command | Purpose |
 |---|---|
-| `rsrewind daemon` | Run the recorder in the foreground (for debugging/service hosting). |
-| `rsrewind start` | Spawn the recorder as a detached background process with no visible console window. |
-| `rsrewind stop` | Signal the running recorder to shut down gracefully. |
-| `rsrewind status [--json]` | Show whether the recorder is running, recording, or paused, plus basic counters. |
-| `rsrewind pause [--minutes N]` | Pause capture, optionally for a fixed duration; omit `--minutes` to pause indefinitely until `resume`. |
-| `rsrewind resume` | Resume capture immediately. |
-| `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized OCR text, with optional app/title/time filters. |
-| `rsrewind recent [--limit] [--json]` | List the most recent observations, newest first. |
-| `rsrewind doctor [--json]` | Report environment/health issues: missing OCR language pack, schema problems, orphaned files, etc. |
-| `rsrewind ui` | Launch the WinUI 3 desktop UI as a separate process. |
-| `rsrewind data-dir` | Print the resolved data directory path. |
+| `rsrewind start` / `stop` | Start the recorder in the background / stop it gracefully. |
+| `rsrewind daemon` | Run the recorder in this console (debugging). |
+| `rsrewind status [--json]` | Whether it is recording or paused, plus counters. Always available; there is no hidden mode. |
+| `rsrewind pause [--minutes N]` / `resume` | Pause capture, optionally for a fixed time. |
+| `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized text. |
+| `rsrewind recent [--limit] [--json]` | The most recent moments, newest first. |
+| `rsrewind forget <since> --yes` | Permanently delete recent history (screenshots, text, window titles). |
+| `rsrewind ui` | Open the rewind window (its own process; `--foreground` stays attached). |
+| `rsrewind export` | Seal settled history into segment files for another machine. |
+| `rsrewind import <files or folders>` | Merge segment files from other machines (safe to repeat). |
+| `rsrewind sources` | List the machines whose history this one holds. |
+| `rsrewind doctor [--json]` | Check capture, OCR, disk, database, privacy rules and replication. |
+| `rsrewind data-dir` | Print the data folder. |
 
-Human-readable output is meant to read naturally; `--json` emits the stable `rsrewind-core`
-query types (`SearchHit`, `TimelineEntry`, etc. — see `crates/rsrewind-core/src/search.rs`) for
-scripts and agents to consume.
-
-Example `search` output (per the product brief's intended format — illustrative, not yet
-produced by a working binary):
+Human-readable output reads naturally; `--json` emits the stable `rsrewind-core` query types
+(`SearchHit`, `TimelineEntry`, ...) for scripts and agents.
 
 ```
-$ rsrewind search "Q3 budget" --app Outlook.exe --limit 3
-2026-09-30 20:32:11  Outlook.exe  "Q3 Budget Review - Message"       "...the [Q3 budget] numbers need..."
-2026-09-30 18:04:52  Outlook.exe  "RE: Q3 Budget Review"             "...attached is the revised [Q3 budget]..."
-2026-09-29 11:17:03  Outlook.exe  "Q3 Budget Review - Message"       "...before we finalize the [Q3 budget]..."
+$ rsrewind search konica toner
+2026-10-06 21:37:56
+Application: WindowsTerminal
+Window: zebra crossing schedule
+"... [konica] bizhub C360 [toner] low ..."
+Image: C:\Users\you\AppData\Local\rsRewind\media\2026\10\07\20261007T013756157Z_m1.webp  (id 4)
 ```
 
-Each row is: local timestamp / application / window title / matching snippet, with the matched
-text bracketed. `search` and `recent` never execute user-supplied SQL — see `ARCHITECTURE.md`'s
-query architecture section.
+`search` and `recent` never execute user-supplied SQL — see `ARCHITECTURE.md`'s query
+architecture section. Several machines in one view: see **[Many machines](https://spilloid.github.io/rsRewind/probes.html)**
+and `docs/design/distributed.md`.
 
 ## Where your data lives
 
@@ -141,7 +135,9 @@ Everything rsRewind records stays under:
   media\YYYY\MM\DD\*.webp     — screenshots, one file per stored visual change
   logs\                       — application logs (never contain captured screen text; see PRIVACY.md)
   backups\                    — automatic pre-migration database backups
-  models\                     — any local models the recorder downloads for its own use
+  outbox\                     — sealed segments waiting to be carried to another machine (`export`)
+  sources\<id>\              — one full store per imported machine (`import`)
+  models\                     — reserved; nothing is downloaded
 ```
 
 This folder is portable: move it, back it up, or copy it to another machine (set
