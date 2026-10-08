@@ -190,8 +190,8 @@ meeting context, a manual bookmark) can attach to the same timeline via new `Eve
 without reshaping how time-range queries, retention, or deletion work. Other event kinds already
 defined in `rsrewind-core` (`Paused`, `Resumed`, `PrivacySkip`, `IdleStart`/`IdleEnd`,
 `RecorderStart`/`RecorderStop`) record recorder lifecycle and privacy decisions on the same
-timeline — a `PrivacySkip` event records *that* capture was skipped and why, without storing any
-pixels.
+timeline. `PrivacySkip` is defined to record *that* capture was skipped and why, without storing any
+pixels, but the recorder does not write it yet: skips are only counted (status quo as of 2026-10-08).
 
 `EventKind` is stored as a stable lowercase string (`as_str`/`parse`), not an integer, so adding a
 new kind later never means renumbering values already written to disk.
