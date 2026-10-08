@@ -127,7 +127,9 @@ impl Desktop {
 
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicking test thread poisons the lock; the data is still what the test wrote.
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub struct FakeContext {
@@ -185,7 +187,7 @@ impl FrameSource for FakeFrames {
         Ok(desktop
             .pending
             .get_mut(&self.display)
-            .and_then(|queue| queue.drain(..).last()))
+            .and_then(|queue| queue.drain(..).next_back()))
     }
 }
 
@@ -338,10 +340,6 @@ pub fn monitor(index: u64) -> (DisplayHandle, MonitorInfo) {
     )
 }
 
-pub fn device(index: u64) -> String {
-    format!(r"\\.\DISPLAY{}", index + 1)
-}
-
 /// A window covering `[left, right)` horizontally, full height.
 pub fn window(process: &str, title: &str, pid: u32, left: i32, right: i32) -> VisibleWindow {
     VisibleWindow {
@@ -360,7 +358,13 @@ pub fn window(process: &str, title: &str, pid: u32, left: i32, right: i32) -> Vi
 
 /// A window filling monitor `index`.
 pub fn window_on(process: &str, title: &str, pid: u32, index: i32) -> VisibleWindow {
-    window(process, title, pid, index * W as i32, (index + 1) * W as i32)
+    window(
+        process,
+        title,
+        pid,
+        index * W as i32,
+        (index + 1) * W as i32,
+    )
 }
 
 pub fn focus(process: &str, title: &str, pid: u32) -> FocusContext {

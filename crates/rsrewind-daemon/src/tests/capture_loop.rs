@@ -26,6 +26,7 @@ struct Harness {
     counters: Arc<Counters>,
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn config() -> Config {
     let mut config = Config::default();
     config.privacy = PrivacyPolicy {

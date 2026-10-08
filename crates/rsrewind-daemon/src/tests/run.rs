@@ -4,6 +4,7 @@
 //! exact tick. The only wait is a condition variable on the OCR thread's progress.
 
 use super::fakes::*;
+use crate::recorder::run_with_queue;
 use crate::{RunOptions, run_with};
 use rsrewind_core::{
     Capabilities, CaptureState, Config, DataDir, PrivacyPolicy, SearchQuery, Timestamp,
@@ -26,6 +27,7 @@ fn ms(s: f64) -> i64 {
     FakeClock::wall_at(secs(s)).0
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn config(unenforced_ok: bool) -> Config {
     let mut config = Config::default();
     config.privacy = PrivacyPolicy {
@@ -217,7 +219,9 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
         });
     }
 
-    run_with(
+    // A queue deep enough that the real persist thread never has to keep pace with the fake
+    // clock: every job of the run is accepted, so what is stored depends only on the script.
+    run_with_queue(
         RunOptions {
             data: data.clone(),
             config: config(false),
@@ -229,11 +233,15 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
             secs(10.0),
             Some(fake_ocr(probe.clone())),
         ),
+        64,
     )?;
 
     // Shutdown order: by the time run_with returns, the OCR thread has finished (its backend is
     // dropped), the session is closed at the stop instant, and the last heartbeat says stopped.
-    assert!(probe.dropped.load(Ordering::SeqCst), "OCR thread not joined");
+    assert!(
+        probe.dropped.load(Ordering::SeqCst),
+        "OCR thread not joined"
+    );
     assert_eq!(probe.created.load(Ordering::SeqCst), 1);
     let store = Store::open_existing(&data)?;
     let status = store.read_status()?.ok_or("no heartbeat")?;
@@ -241,6 +249,7 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
     assert_eq!(status.counters.get("persisted_states"), Some(&4));
     assert_eq!(status.counters.get("privacy_skips"), Some(&2));
     assert_eq!(status.counters.get("paused_ticks"), Some(&2));
+    assert_eq!(status.counters.get("dropped_queue_full"), Some(&0));
     let stats = store.stats()?;
     assert_eq!((stats.visual_states, stats.pending_ocr), (4, 0));
 

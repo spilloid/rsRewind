@@ -51,6 +51,18 @@ fn unenforced_refusal(gaps: &[&str]) -> String {
 /// Refuses to start (before touching the data folder) when the platform cannot enforce the
 /// configured privacy rules and `privacy.unenforced_ok` is not set.
 pub fn run_with(options: RunOptions, platform: Platform) -> anyhow::Result<()> {
+    run_with_queue(options, platform, PERSIST_QUEUE)
+}
+
+/// [`run_with`] with a chosen persist queue depth. End-to-end tests on the fake clock use a deeper
+/// queue: their ticks take microseconds of real time, so the real persist thread could otherwise
+/// fall behind and the run would depend on thread scheduling. Dropping on a full queue is tested
+/// tick by tick instead (`tests::capture_loop`).
+pub(crate) fn run_with_queue(
+    options: RunOptions,
+    platform: Platform,
+    queue_depth: usize,
+) -> anyhow::Result<()> {
     let RunOptions { data, config } = options;
     let capabilities = platform.capabilities();
     let session_caps = SessionCapabilities::new(capabilities, &config.privacy);
@@ -107,7 +119,7 @@ pub fn run_with(options: RunOptions, platform: Platform) -> anyhow::Result<()> {
         None => (None, None),
     };
 
-    let (jobs_tx, jobs_rx) = sync_channel::<Job>(PERSIST_QUEUE);
+    let (jobs_tx, jobs_rx) = sync_channel::<Job>(queue_depth);
     let persist_thread = {
         let data = data.clone();
         let counters = counters.clone();
