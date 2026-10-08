@@ -325,6 +325,46 @@ fn recent_merges_every_source_newest_first_and_pages_without_gaps_or_repeats() -
 }
 
 #[test]
+fn later_walks_forward_in_the_same_order_and_meets_recent_exactly() -> TestResult {
+    let c = central()?;
+    let history = History::open(&c.root);
+    let everything = history.recent(SourceFilter::All, 200, None)?;
+    let oldest_first: Vec<TimelineEntry> = everything.iter().rev().cloned().collect();
+    // From every entry, the next one forward is exactly its successor in the total order, even
+    // inside the four-way tie at T0 (equal timestamps, colliding row ids across stores).
+    for (i, entry) in oldest_first.iter().enumerate() {
+        let next = history.later(SourceFilter::All, 1, entry.cursor())?;
+        assert_eq!(next.first(), oldest_first.get(i + 1), "after entry {i}");
+    }
+    // Paging forward with any page size visits everything once, oldest first.
+    for page in 1..=4 {
+        let mut seen = Vec::new();
+        let mut after = TimelineCursor::at_or_before(Timestamp(T0 - SEC));
+        loop {
+            let batch = history.later(SourceFilter::All, page, after)?;
+            let Some(last) = batch.last() else { break };
+            after = last.cursor();
+            seen.extend(batch);
+            assert!(
+                seen.len() <= oldest_first.len(),
+                "page size {page} repeats entries"
+            );
+        }
+        assert_eq!(seen, oldest_first, "page size {page}");
+    }
+    // A filter keeps it to one lane: stepping through FRONT-DESK-PC's moments in order.
+    let front = history.later(
+        SourceFilter::Remote(c.front),
+        10,
+        TimelineCursor::at_or_before(Timestamp(T0 - SEC)),
+    )?;
+    assert_eq!(front.len(), 4);
+    assert!(front.iter().all(|e| e.source == Some(c.front)));
+    assert!(front.windows(2).all(|w| w[0].cursor() < w[1].cursor()));
+    Ok(())
+}
+
+#[test]
 fn a_cursor_at_a_time_starts_there_on_every_source() -> TestResult {
     let c = central()?;
     let history = History::open(&c.root);

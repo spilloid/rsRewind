@@ -333,6 +333,17 @@ thumbnails from a GPU texture LRU bounded at 128 MB (on-screen textures are neve
 thumbnails are cached on the CPU in a separate 96 MB LRU. Search hits cue the room to the hit's
 matching observation (not its first capture) with a 180 ms settle rather than a fly-through.
 
+**Image viewer.** Double-clicking a card or the detail picture replaces the window's contents with
+one screenshot over a dark backdrop (`viewer/`). As with the timeline, the view math (fit, zoom
+toward the pointer, clamped pan, 100 %/fit toggle where 100 % is one image pixel per physical
+pixel, OCR-box mapping, search-phrase matching for the gold outlines) is pure and unit-tested in
+`viewer::model`; `viewer/mod.rs` is the shader widget and `app/viewer.rs` the application side.
+The full-resolution picture is decoded on the frame pool, at most one is held, a superseded decode
+is aborted (the decoder skips cancelled requests), and its texture uses its own `TexKey` so it
+never displaces thumbnails and is freed in `Pipeline::trim` the frame it leaves the screen.
+Stepping uses `History::later` / `recent` filtered to the picture's source, skipping repeated
+observations of the same picture.
+
 ## Replication (probes and a central instance)
 
 Full analysis, options considered and threat model: `docs/design/distributed.md`. In short:

@@ -5,6 +5,8 @@
 //! Every query runs on the history worker; the update loop only sends questions and applies
 //! answers, so the window stays responsive whatever SQLite is doing.
 
+mod viewer;
+
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
 use crate::timeline::cache::ByteLru;
@@ -12,8 +14,8 @@ use crate::timeline::model::{self, Camera, Filament};
 use crate::timeline::{self, FrameKey, Moment, Room, Strip};
 use crate::worker::{Answer, Ask, FrameAnswer, FramePool, HistoryWorker};
 use iced::widget::{
-    button, column, container, image, pin, responsive, rich_text, row, scrollable, shader, space,
-    span, stack, text, text_input,
+    button, column, container, image, mouse_area, pin, responsive, rich_text, row, scrollable,
+    shader, space, span, stack, text, text_input,
 };
 use iced::{
     Alignment, Color, ContentFit, Element, Fill, FillPortion, Font, Length, Subscription, Task,
@@ -42,21 +44,27 @@ const NOMINAL: (f32, f32) = (1280.0, 640.0);
 /// The short settle when cueing to a moment (the brief: ~100-180 ms, no fake scrubbing).
 const CUE_MS: f32 = 180.0;
 const SEARCH_LIMIT: u32 = 100;
+/// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
+const SEARCH_ID: &str = "search";
 
-pub fn run(data: DataDir) -> iced::Result {
-    iced::application(move || App::boot(data.clone()), App::update, App::view)
-        .title(App::title)
-        .theme(App::theme)
-        .subscription(App::subscription)
-        .default_font(UI_FONT)
-        .window(window::Settings {
-            size: iced::Size::new(1280.0, 800.0),
-            min_size: Some(iced::Size::new(960.0, 600.0)),
-            maximized: true,
-            position: window::Position::Centered,
-            ..window::Settings::default()
-        })
-        .run()
+pub fn run(data: DataDir, appearance: crate::Appearance) -> iced::Result {
+    iced::application(
+        move || App::boot(data.clone(), appearance),
+        App::update,
+        App::view,
+    )
+    .title(App::title)
+    .theme(App::theme)
+    .subscription(App::subscription)
+    .default_font(UI_FONT)
+    .window(window::Settings {
+        size: iced::Size::new(1280.0, 800.0),
+        min_size: Some(iced::Size::new(960.0, 600.0)),
+        maximized: true,
+        position: window::Position::Centered,
+        ..window::Settings::default()
+    })
+    .run()
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +86,14 @@ pub enum Message {
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
+    /// Double-click on the detail pane's picture.
+    OpenSelected,
+    Viewer(crate::viewer::Event),
+    ViewerPicture(u64, FrameAnswer),
+    ViewerDetail(u64, Answer),
+    ViewerStepped(u64, bool, Answer),
+    CloseViewer,
+    ScaleFactor(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +111,7 @@ struct Selection {
 
 pub struct App {
     tokens: Tokens,
+    appearance: crate::Appearance,
     worker: Option<HistoryWorker>,
     frames: Option<FramePool>,
     fatal: Option<String>,
@@ -133,17 +150,27 @@ pub struct App {
     detail: Option<VisualDetail>,
     detail_picture: Option<(FrameKey, image::Handle)>,
     cue_seq: u64,
+
+    /// The full-window image viewer, when open.
+    viewer: Option<viewer::ViewerState>,
+    viewer_seq: u64,
+    /// The window's scale factor (physical / logical pixels), for the viewer's 100 %.
+    scale_factor: f32,
 }
 
 impl App {
-    fn boot(data: DataDir) -> (Self, Task<Message>) {
+    fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
         };
         let now = Timestamp::now().0 as f64;
         let app = Self {
-            tokens: Tokens::DARK,
+            tokens: match appearance {
+                crate::Appearance::Light => Tokens::LIGHT,
+                crate::Appearance::Dark | crate::Appearance::System => Tokens::DARK,
+            },
+            appearance,
             worker,
             frames,
             fatal,
@@ -175,12 +202,17 @@ impl App {
             detail: None,
             detail_picture: None,
             cue_seq: 0,
+            viewer: None,
+            viewer_seq: 0,
+            scale_factor: 1.0,
         };
         let sources = app.ask(Ask::Sources, Message::Sources);
-        (
-            app,
-            Task::batch([sources, iced::system::theme().map(Message::Appearance)]),
-        )
+        let theme = if appearance == crate::Appearance::System {
+            iced::system::theme().map(Message::Appearance)
+        } else {
+            Task::none()
+        };
+        (app, Task::batch([sources, theme]))
     }
 
     fn title(&self) -> String {
@@ -192,10 +224,10 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![
-            keyboard::listen().map(Message::Key),
-            iced::system::theme_changes().map(Message::Appearance),
-        ];
+        let mut subs = vec![keyboard::listen().map(Message::Key)];
+        if self.appearance == crate::Appearance::System {
+            subs.push(iced::system::theme_changes().map(Message::Appearance));
+        }
         if self.cue.is_some() {
             subs.push(window::frames().map(Message::Frame));
         }
@@ -212,7 +244,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Appearance(mode) => {
-                self.tokens = Tokens::for_mode(mode);
+                if self.appearance == crate::Appearance::System {
+                    self.tokens = Tokens::for_mode(mode);
+                }
                 Task::none()
             }
             Message::Sources(Answer::Sources { sources, problems }) => {
@@ -315,6 +349,19 @@ impl App {
             }
             Message::Timeline(timeline::Event::Hover(index)) => {
                 self.hovered = index;
+                Task::none()
+            }
+            Message::Timeline(timeline::Event::Open(frame)) => self.open_from_room(frame),
+            Message::OpenSelected => self.open_selected(),
+            Message::Viewer(event) => self.viewer_event(event),
+            Message::ViewerPicture(seq, answer) => self.viewer_picture(seq, answer),
+            Message::ViewerDetail(seq, answer) => self.viewer_detail(seq, answer),
+            Message::ViewerStepped(seq, forward, answer) => {
+                self.viewer_stepped(seq, forward, answer)
+            }
+            Message::CloseViewer => self.close_viewer(),
+            Message::ScaleFactor(factor) => {
+                self.scale_factor = factor;
                 Task::none()
             }
             Message::Timeline(timeline::Event::Select(index)) => {
@@ -429,6 +476,15 @@ impl App {
                     }
                 }
                 Task::none()
+            }
+            Message::Key(keyboard::Event::KeyPressed { key, .. }) if self.viewer.is_some() => {
+                self.viewer_key(key.as_ref()).unwrap_or_else(Task::none)
+            }
+            // Ctrl+F or `/` jumps to the search box (a `/` typed into the box is the box's own).
+            Message::Key(keyboard::Event::KeyPressed { key, modifiers, .. })
+                if is_find_key(key.as_ref(), modifiers) =>
+            {
+                iced::widget::operation::focus(SEARCH_ID)
             }
             Message::Key(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
                 keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
@@ -660,6 +716,14 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let t = self.tokens;
+        // The viewer takes the whole window: nothing behind it is laid out, drawn, or focused.
+        if let Some(v) = &self.viewer {
+            return container(self.viewer_view(v))
+                .style(move |_| t.bar())
+                .width(Fill)
+                .height(Fill)
+                .into();
+        }
         let body: Element<'_, Message> = if let Some(error) = &self.fatal {
             empty_state(t, "Could not open history.", error)
         } else if self.sources_loaded && self.sources.is_empty() {
@@ -698,6 +762,7 @@ impl App {
             text("Rewind").size(22).color(t.text),
         ];
         let search = text_input("Search anything you remember…", &self.query)
+            .id(SEARCH_ID)
             .on_input(Message::Query)
             .padding([9, 16])
             .size(15)
@@ -947,8 +1012,9 @@ impl App {
                 .on_press(message)
         };
         row![
-            control("◀  Earlier", Message::Step(false)),
-            control("Later  ▶", Message::Step(true)),
+            // Plain arrows: Windows' font fallback draws the triangles as emoji tiles.
+            control("←  Earlier", Message::Step(false)),
+            control("Later  →", Message::Step(true)),
             control("Latest", Message::Latest),
             space::horizontal(),
             text(format!("depth {}", age_label(self.camera.depth_ms)))
@@ -1047,11 +1113,15 @@ impl App {
             .into();
         };
         let picture: Element<'_, Message> = match &self.detail_picture {
-            Some((key, handle)) if *key == selection.frame => image(handle.clone())
-                .content_fit(ContentFit::Contain)
-                .width(Fill)
-                .height(Length::Fixed(200.0))
-                .into(),
+            Some((key, handle)) if *key == selection.frame => mouse_area(
+                image(handle.clone())
+                    .content_fit(ContentFit::Contain)
+                    .width(Fill)
+                    .height(Length::Fixed(200.0)),
+            )
+            .on_double_click(Message::OpenSelected)
+            .interaction(iced::mouse::Interaction::ZoomIn)
+            .into(),
             _ => container(text("Loading picture…").size(12).color(t.text_3))
                 .center_x(Fill)
                 .height(Length::Fixed(200.0))
@@ -1090,6 +1160,7 @@ impl App {
                 text(detail.ocr_text.clone())
                     .size(12)
                     .color(t.text_2)
+                    .width(Fill)
                     .into()
             };
             info = info
@@ -1142,6 +1213,15 @@ fn snippet<'a>(t: Tokens, raw: &str) -> Element<'a, Message> {
     rich_text(spans).into()
 }
 
+/// Ctrl+F (Cmd+F on macOS) or a bare `/`.
+fn is_find_key(key: keyboard::Key<&str>, modifiers: keyboard::Modifiers) -> bool {
+    match key {
+        keyboard::Key::Character("f" | "F") => modifiers.command(),
+        keyboard::Key::Character("/") => !modifiers.command() && !modifiers.alt(),
+        _ => false,
+    }
+}
+
 /// `"a [b] c"` -> `[("a ", false), ("b", true), (" c", false)]`.
 pub(crate) fn split_matches(raw: &str) -> Vec<(String, bool)> {
     let mut parts = Vec::new();
@@ -1176,7 +1256,18 @@ fn source_name(source: &SourceInfo) -> String {
 }
 
 fn app_and_window(app: Option<&str>, window: Option<&str>) -> String {
-    let app = app.map(|a| a.strip_suffix(".exe").unwrap_or(a));
+    let app = app.map(|a| {
+        a.strip_suffix(".exe")
+            .or_else(|| a.strip_suffix(".EXE"))
+            .unwrap_or(a)
+    });
+    // Most window titles already end with the application's name ("Inbox — Mail"); say it once.
+    if let (Some(a), Some(w)) = (app, window)
+        && !a.is_empty()
+        && w.to_lowercase().contains(&a.to_lowercase())
+    {
+        return w.to_owned();
+    }
     match (app, window) {
         (Some(a), Some(w)) if !w.is_empty() => format!("{a} — {w}"),
         (Some(a), _) => a.to_owned(),
@@ -1230,6 +1321,30 @@ mod tests {
             vec![("a".to_owned(), true), ("b".to_owned(), true)]
         );
         assert!(split_matches("").is_empty());
+    }
+
+    #[test]
+    fn the_application_is_named_once() {
+        assert_eq!(
+            app_and_window(Some("Huddle.exe"), Some("#facilities — Huddle")),
+            "#facilities — Huddle"
+        );
+        assert_eq!(
+            app_and_window(Some("EXCEL.EXE"), Some("Budget.xlsx")),
+            "EXCEL — Budget.xlsx"
+        );
+        assert_eq!(app_and_window(Some("pwsh.exe"), None), "pwsh");
+        assert_eq!(app_and_window(None, None), "Unknown application");
+    }
+
+    #[test]
+    fn find_shortcuts() {
+        use keyboard::{Key, Modifiers};
+        assert!(is_find_key(Key::Character("f"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("f"), Modifiers::empty()));
+        assert!(is_find_key(Key::Character("/"), Modifiers::empty()));
+        assert!(!is_find_key(Key::Character("/"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("g"), Modifiers::CTRL));
     }
 
     #[test]

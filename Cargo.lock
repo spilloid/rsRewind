@@ -2842,6 +2842,7 @@ dependencies = [
 name = "rsrewind-query"
 version = "0.0.2"
 dependencies = [
+ "ab_glyph",
  "chrono",
  "rsrewind-core",
  "rsrewind-segment",

@@ -43,6 +43,8 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 webp = "0.3"
 tempfile = "3"
+# Glyph rasterizing for the synthetic-history example only (never shipped code).
+ab_glyph = "0.2"
 sha2 = "0.10"
 getrandom = "0.3"
 # Recorder crates use the `windows` 0.62 projection. The UI crate uses no Windows bindings of its

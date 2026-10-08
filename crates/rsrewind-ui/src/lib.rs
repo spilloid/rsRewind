@@ -11,12 +11,30 @@ mod app;
 mod style;
 mod thumb;
 mod timeline;
+mod viewer;
 mod worker;
 
 use rsrewind_core::DataDir;
 
-/// Opens the window on the history in `data` and returns when it is closed.
+/// Light or dark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Appearance {
+    /// Follow the operating system, and change with it.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// Opens the window on the history in `data`, following the system's appearance, and returns
+/// when it is closed.
 pub fn run(data: DataDir) -> anyhow::Result<()> {
-    tracing::info!("opening the rsRewind window");
-    app::run(data).map_err(|error| anyhow::anyhow!("the rsRewind window failed: {error}"))
+    run_with(data, Appearance::System)
+}
+
+/// [`run`] with the appearance chosen.
+pub fn run_with(data: DataDir, appearance: Appearance) -> anyhow::Result<()> {
+    tracing::info!(?appearance, "opening the rsRewind window");
+    app::run(data, appearance)
+        .map_err(|error| anyhow::anyhow!("the rsRewind window failed: {error}"))
 }

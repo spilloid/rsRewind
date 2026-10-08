@@ -22,6 +22,24 @@ pub const TEXTURE_BUDGET_BYTES: usize = 128 * 1024 * 1024;
 const FLOATS: usize = 20;
 const STRIDE: u64 = (FLOATS * 4) as u64;
 
+/// Which texture: a moment's card thumbnail, or its full-resolution picture in the viewer. The two
+/// never share a texture, and full-resolution ones are dropped as soon as they leave the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TexKey {
+    pub frame: FrameKey,
+    pub full: bool,
+}
+
+impl TexKey {
+    pub fn thumb(frame: FrameKey) -> Self {
+        Self { frame, full: false }
+    }
+
+    pub fn full(frame: FrameKey) -> Self {
+        Self { frame, full: true }
+    }
+}
+
 /// One quad to draw, in logical pixels relative to the widget.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quad {
@@ -34,7 +52,7 @@ pub struct Quad {
     pub border_width: f32,
     pub opacity: f32,
     pub glow: f32,
-    pub texture: Option<FrameKey>,
+    pub texture: Option<TexKey>,
 }
 
 impl Quad {
@@ -59,7 +77,7 @@ pub struct Cards {
     pub quads: Vec<Quad>,
     /// Pixels for every texture the quads reference that the CPU cache still holds. Uploaded only
     /// if the GPU cache does not already have them.
-    pub pictures: Vec<(FrameKey, Arc<Bgra>)>,
+    pub pictures: Vec<(TexKey, Arc<Bgra>)>,
 }
 
 impl std::fmt::Debug for Cards {
@@ -77,7 +95,7 @@ struct Slot {
     globals_bind: wgpu::BindGroup,
     instances: Option<wgpu::Buffer>,
     capacity: u64,
-    draws: Vec<Option<FrameKey>>,
+    draws: Vec<Option<TexKey>>,
 }
 
 struct Texture {
@@ -98,8 +116,8 @@ pub struct Pipeline {
     /// colours are passed as written, blending like CSS.)
     linear_colors: bool,
     slots: HashMap<u64, Slot>,
-    textures: ByteLru<FrameKey, Texture>,
-    on_screen: HashSet<FrameKey>,
+    textures: ByteLru<TexKey, Texture>,
+    on_screen: HashSet<TexKey>,
 }
 
 impl shader::Pipeline for Pipeline {
@@ -216,7 +234,19 @@ impl shader::Pipeline for Pipeline {
     }
 
     fn trim(&mut self) {
-        // End of frame: what was on screen may be evicted from now on if it leaves.
+        // End of frame. A full-resolution picture is only kept while it is on screen (it can be
+        // tens of megabytes); thumbnails stay cached up to the budget.
+        let on_screen = &self.on_screen;
+        let gone: Vec<TexKey> = self
+            .textures
+            .keys()
+            .filter(|k| k.full && !on_screen.contains(k))
+            .copied()
+            .collect();
+        for key in gone {
+            self.textures.remove(&key);
+        }
+        // What was on screen may be evicted from now on if it leaves.
         self.on_screen.clear();
     }
 }
