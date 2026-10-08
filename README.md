@@ -9,6 +9,8 @@ component, no required network service, and no telemetry.
 [release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.2) ·
 [website](https://spilloid.github.io/rsRewind/)
 
+![rsRewind: the rewind room, screenshots in 3D with one lane per machine (made-up data)](site/img/room-dark.png)
+
 
 
 ## Status: pre-release, working end to end
