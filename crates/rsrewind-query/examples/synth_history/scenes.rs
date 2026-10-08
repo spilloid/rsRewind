@@ -368,7 +368,7 @@ fn browser_frame(x: &mut Ctx, title: &str, url: &str, tabs: &[&str]) -> (i32, i3
     }
     x.c.rect(cx, cy + 44, cw, 46, hex(0xfbfaf8));
     x.c.round(cx + 110, cy + 52, cw - 220, 30, 15.0, hex(0xefede9), 1.0);
-    x.deco(Face::Ui, 18.0, cx + 20, cy + 55, "←  →  ⟳", hex(0x77737c));
+    nav_buttons(x, cx + 20, cy + 58, hex(0x77737c));
     x.t(
         Face::Ui,
         14.0,
@@ -379,6 +379,21 @@ fn browser_frame(x: &mut Ctx, title: &str, url: &str, tabs: &[&str]) -> (i32, i3
     );
     x.c.rect(cx, cy + 90, cw, 1, hex(0xe3e0da));
     (cx, cy + 91, cw, ch - 91)
+}
+
+/// Back, forward and reload, drawn as shapes (glyph coverage for arrows varies by font).
+fn nav_buttons(x: &mut Ctx, left: i32, top: i32, ink: Rgb) {
+    for k in 0..6 {
+        // Back: a chevron pointing left; forward: pointing right.
+        x.c.rect(left + 6 - k, top + 2 + k, 2, 2, ink);
+        x.c.rect(left + k, top + 8 + k, 2, 2, ink);
+        x.c.rect(left + 30 + k, top + 2 + k, 2, 2, ink);
+        x.c.rect(left + 36 - k, top + 8 + k, 2, 2, ink);
+    }
+    // Reload: a ring with a gap.
+    x.c.round(left + 56, top + 1, 14, 14, 7.0, ink, 1.0);
+    x.c.round(left + 58, top + 3, 10, 10, 5.0, hex(0xfbfaf8), 1.0);
+    x.c.rect(left + 65, top, 6, 6, hex(0xfbfaf8));
 }
 
 fn supply_order(x: &mut Ctx) -> (String, &'static str) {
