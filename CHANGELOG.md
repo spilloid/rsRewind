@@ -6,27 +6,85 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-08
+
+**Third pre-release: look closer.** The rewind window gets a full-window image viewer, and the
+recorder is restructured so other platforms can follow. Everything in 0.0.1 and 0.0.2 still
+applies, including their warning: recorder-side privacy gaps from the adversarial review are **not
+fixed yet**, so this is still not ready for sensitive desktops. Importing history from other machines
+still has had no independent security review.
+
 ### Added
 
-- **Platform seam for the recorder.** The capture loop, persist thread and OCR thread are now
-  portable and reach the desktop only through traits (`rsrewind_daemon::platform`: frame source,
-  screen context, idle clock, OCR backend, clock, lifecycle/single instance). Windows behaviour,
-  config, schema and CLI output are unchanged; Windows remains the only platform that records.
-- **Capabilities are explicit.** `rsrewind_core::Capabilities` states what a platform can see. The
-  recorder refuses to start where the privacy rules cannot be enforced unless the new
-  `privacy.unenforced_ok = true` is set (default `false`); `status`, `status --json` and `doctor`
-  then report "privacy rules NOT enforced", and exported segments never claim `window_titles` for
-  such a session. Each session's capabilities are stored in `settings` (no schema change).
-- **Recorder tests that exercise the recorder.** Deterministic fakes (fake clock, scripted frames
-  and windows, in-memory OCR) drive the real capture loop and, end to end, `run_with` with its real
-  persist/OCR threads and SQLite: privacy skip before persist, any-visible-window rule, pause
-  ordering, idle, fail-closed start, non-blocking capture on a full queue, shutdown order. They run
-  on Linux and Windows.
+- **Image viewer.** Double-click a card in the room, or the picture in the detail pane, to open the
+  screenshot full window. It fits the window by default; the wheel zooms toward the pointer, dragging
+  pans, double-click or `1` / `0` toggles 100% and fit, `+` / `-` zoom, Esc or a click outside closes
+  it, and ← / → step to the previous or next moment on the same machine. Words that match your search
+  are outlined in gold. Full-size pictures decode off the UI thread and only one is held at a time.
+- Ctrl+F or `/` focuses the search box. `rsrewind ui --appearance system|light|dark` chooses the
+  look; the default follows the system.
+- **Platform seam for the recorder.** The capture loop, persist thread and OCR thread are portable
+  and reach the desktop only through traits. Windows behaviour, config, schema and CLI output are
+  unchanged; Windows is still the only platform that records.
+- **Capabilities are explicit.** Where a platform cannot list windows, the recorder refuses to start
+  unless `privacy.unenforced_ok = true` is set (default `false`; the Windows recorder never needs
+  it). `status`, `status --json` and `doctor` then report "privacy rules NOT enforced", and exported
+  segments never claim window titles for such a session.
+- `History::later` in `rsrewind-query`, the forward step in the cross-source order.
+- Recorder tests that drive the real capture loop with fake clocks, desktops and OCR (privacy skip
+  before persist, any-visible-window rule, pause ordering, idle, fail-closed start, non-blocking
+  capture on a full queue, shutdown order). They run on Linux and Windows.
+- The `synth_history` example now draws convincing, entirely fictional desktops for demos and tests.
+- A website at https://spilloid.github.io/rsRewind/ (install and verification, many-machine setup,
+  privacy) and a documentation check that fails CI if the version differs between `Cargo.toml`, the
+  changelog, the README and the site.
 
 ### Changed
 
-- `rsrewind-capture`: `VisibleWindow`/`ScreenRect` moved to a portable module (same public
-  paths); `MonitorHandle::to_raw`/`from_raw`; the `probe` example is a stub off Windows.
+- Moments newer than the cursor appear as small faint ghosts instead of covering the room.
+- Transport buttons use plain ← → arrows (Windows drew the triangles as blue emoji tiles).
+- The application name is not repeated when the window title already contains it; recognized text in
+  the detail pane wraps to the pane.
+- `rsrewind-capture`: `VisibleWindow` / `ScreenRect` moved to a portable module (same public paths).
+- Release notes now include a download table with SHA-256 per file and verification commands.
+
+### Known issues
+
+- **Recorder privacy gaps from the first adversarial review are still open** (frame/privacy-check
+  provenance, fail-closed handling of unreadable window information on Windows, pause
+  acknowledgement, writer feedback). See `docs/remediation-status.md`, Unit B. Not suitable for
+  sensitive desktops.
+- **No encryption at rest.** Anyone who can read the data folder can read the history.
+- **Imported segments are checked for damage, not for authorship**, and the import path has had no
+  independent security review. Keep the folders segments pass through as private as the history.
+- `rsrewind forget` cannot reach copies already moved to another machine; it reports how many of the
+  deleted moments had already been sealed.
+- Privacy skips are counted (`rsrewind status`) but not written to your history as events, although
+  earlier documentation said they were.
+- `rsrewind doctor` reports capture as failed when run from a non-interactive session (for example
+  over SSH). Run it from your logged-in desktop.
+- `rsrewind search` pointed at a data folder that holds only imported machines reports "no
+  database"; point `--data-dir` at `sources\<id>`, or use `rsrewind ui`, which reads them all.
+- `rsrewind start` hangs if its output is piped through another program (the background recorder
+  inherits the pipe). Redirect to a file instead.
+- The rewind window has been checked on Windows with synthetic history only. Touchpad pinch, more
+  than one monitor, light mode on every setup and display scaling other than 100% and 125% are
+  unverified; the strip under the room marks only the moments loaded around the cursor.
+- Windows 10 is unverified. Linux and macOS recorders do not exist yet.
+- With default settings nothing new is stored after five minutes without keyboard or mouse input
+  (`capture.idle_after_secs`).
+
+### Upgrade notes
+
+- From 0.0.2: no database migration and no required settings change. `privacy.unenforced_ok` is a new
+  optional key; leave it unset on Windows.
+- `status` and `doctor` print the "privacy rules NOT enforced" line only when it applies, so output
+  is unchanged for ordinary Windows use.
+
+### Security
+
+- Documentation corrected: PRIVACY.md and ARCHITECTURE.md claimed a `privacy_skip` event is written
+  for each skip; the recorder only counts them.
 
 ## [0.0.2] - 2026-10-06
 

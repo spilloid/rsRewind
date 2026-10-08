@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Install rsRewind</title>
-<meta name="description" content="Install, verify and first run of rsRewind v0.0.2 on Windows 11.">
+<meta name="description" content="Install, verify and first run of rsRewind v0.0.3 on Windows 11.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -21,13 +21,13 @@
   </nav>
 </header>
 <section>
-  <div class="kicker">Version 0.0.2 · Windows 11 (x64)</div>
+  <div class="kicker">Version 0.0.3 · Windows 11 (x64)</div>
   <h1>Install</h1>
   <p class="lede">Two downloads, both signed. The installer is per-user and needs no administrator rights.</p>
   <div class="cta">
-    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/rsrewind-v0.0.2-x64.msi">Installer (.msi)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/rsrewind-v0.0.2-windows-amd64.zip">Portable (.zip)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.2/SHA256SUMS.txt">SHA256SUMS.txt</a>
+    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.3/rsrewind-v0.0.3-x64.msi">Installer (.msi)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.3/rsrewind-v0.0.3-windows-amd64.zip">Portable (.zip)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.3/SHA256SUMS.txt">SHA256SUMS.txt</a>
   </div>
   <p class="note">This is a pre-release, so GitHub's "latest release" button will not show it. Use the links above.</p>
 </section>
@@ -35,10 +35,10 @@
 <section>
   <h2>Verify before you run it</h2>
   <p>rsRewind records your screen, so check what you downloaded. In PowerShell, in the folder you saved the files to:</p>
-<pre><code>Get-FileHash .\rsrewind-v0.0.2-x64.msi -Algorithm SHA256
+<pre><code>Get-FileHash .\rsrewind-v0.0.3-x64.msi -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt          # the hash above must match its line
 
-Get-AuthenticodeSignature .\rsrewind-v0.0.2-x64.msi | Format-List Status,SignerCertificate</code></pre>
+Get-AuthenticodeSignature .\rsrewind-v0.0.3-x64.msi | Format-List Status,SignerCertificate</code></pre>
   <p>Status must be <code>Valid</code> and the signer <code>CN=Joseph Spillers</code>, with a Microsoft timestamp. The same applies to <code>rsrewind.exe</code> inside the zip. If either check fails, do not run it, and please <a href="https://github.com/spilloid/rsRewind/issues">open an issue</a>.</p>
 </section>
 
