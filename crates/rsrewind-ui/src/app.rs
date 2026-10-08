@@ -1012,8 +1012,9 @@ impl App {
                 .on_press(message)
         };
         row![
-            control("◀  Earlier", Message::Step(false)),
-            control("Later  ▶", Message::Step(true)),
+            // Plain arrows: Windows' font fallback draws the triangles as emoji tiles.
+            control("←  Earlier", Message::Step(false)),
+            control("Later  →", Message::Step(true)),
             control("Latest", Message::Latest),
             space::horizontal(),
             text(format!("depth {}", age_label(self.camera.depth_ms)))
