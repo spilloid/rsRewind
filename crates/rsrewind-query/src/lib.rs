@@ -296,6 +296,22 @@ impl QueryDb {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Observation events strictly after the raw bound `(started_at, event_id)`, **oldest first**:
+    /// the forward counterpart of [`QueryDb::recent_before`], same total order, same bound
+    /// convention (`(t, i64::MIN)` includes everything started at `t`, `(t, i64::MAX)` nothing).
+    pub(crate) fn later_than(&self, limit: u32, bound: (i64, i64)) -> Result<Vec<TimelineEntry>> {
+        let sql = format!(
+            "{TIMELINE_SELECT}
+             WHERE e.kind = 'observation' AND (e.started_at, e.id) > (?1, ?2)
+             ORDER BY e.started_at ASC, e.id ASC LIMIT ?3"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![bound.0, bound.1, clamp_limit(limit)], |row| {
+            self.timeline_entry(row)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// The observation covering `at` (latest-started if several monitors cover it), otherwise the
     /// nearest one that started before it.
     pub fn at(&self, at: Timestamp) -> Result<Option<TimelineEntry>> {

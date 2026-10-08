@@ -232,6 +232,25 @@ impl History {
         Ok(entries)
     }
 
+    /// Observations strictly after `after`, **oldest first**, across the selected sources: the
+    /// forward direction of [`History::recent`], in the same total order (stepping to the next
+    /// moment, where `recent` steps to the previous one).
+    pub fn later(
+        &self,
+        filter: SourceFilter,
+        limit: u32,
+        after: TimelineCursor,
+    ) -> Result<Vec<TimelineEntry>> {
+        let limit = clamp_limit(limit);
+        let mut entries = Vec::new();
+        for lane in self.lanes(filter) {
+            entries.extend(lane.db.later_than(limit, project(after, lane.source))?);
+        }
+        entries.sort_by_key(TimelineEntry::cursor);
+        entries.truncate(limit as usize);
+        Ok(entries)
+    }
+
     /// The observation covering `at` (latest-started across sources if several do), otherwise the
     /// nearest one that started before it.
     pub fn at(&self, at: Timestamp, filter: SourceFilter) -> Result<Option<TimelineEntry>> {
@@ -381,8 +400,10 @@ fn clean_label(label: Option<String>) -> Option<String> {
         .filter(|l| !l.trim().is_empty())
 }
 
-/// The per-store bound equivalent to "strictly after `cursor`" in the newest-first, cross-source
-/// order `(started_at, source, event_id)`.
+/// The per-store bound equivalent to `cursor` in the cross-source order
+/// `(started_at, source, event_id)`: a candidate is below the cursor exactly when its
+/// `(started_at, event_id) < bound`, and above it exactly when `> bound` (used for both paging
+/// directions).
 fn project(cursor: TimelineCursor, lane: Option<SourceId>) -> (i64, i64) {
     let t = cursor.started_at.0;
     match lane.cmp(&cursor.source) {
@@ -522,6 +543,11 @@ mod tests {
                         candidate < cursor,
                         (t, id) < bound,
                         "lane {lane:?} t {t} id {id}"
+                    );
+                    assert_eq!(
+                        candidate > cursor,
+                        (t, id) > bound,
+                        "forward: lane {lane:?} t {t} id {id}"
                     );
                 }
             }
