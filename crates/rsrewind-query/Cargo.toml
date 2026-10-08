@@ -24,6 +24,8 @@ rsrewind-storage.workspace = true
 rsrewind-segment.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
+# examples/synth_history.rs draws text into its fictional screenshots.
+ab_glyph.workspace = true
 
 [lints]
 workspace = true
