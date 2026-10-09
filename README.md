@@ -1,12 +1,12 @@
 # rsRewind
 
-A Windows-native, local-first screen-history recorder written in Rust. rsRewind watches your
+A local-first screen-history recorder for Windows and KDE Plasma, written in Rust. rsRewind watches your
 screens, keeps a visual record of what changed, runs OCR over it, and lets you search your own
 history by text, app, window title, or time — entirely on your own machine. There is no cloud
 component, no required network service, and no telemetry.
 
-**Current release: v0.0.3** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
-[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.3) ·
+**Current release: v0.0.4** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
+[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.4) ·
 [website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind: the rewind room, screenshots in 3D with one lane per machine (made-up data)](site/img/room-dark.png)
@@ -15,7 +15,8 @@ component, no required network service, and no telemetry.
 
 ## Status: pre-release, working end to end
 
-rsRewind records, indexes and searches your screen on Windows 11, opens a rewind window over the
+rsRewind records, indexes and searches your screen on Windows 11 (and records on KDE Plasma under
+Wayland, without text recognition yet), opens a rewind window over the
 history, and can merge history from other machines. It is a **pre-release**: signed binaries are
 published, but it is **not ready for use on a machine or in a session you are not comfortable
 recording.**
@@ -52,9 +53,11 @@ It is explicitly **not**:
 - **Windows 11** — the supported platform. Verified on Windows 11 build 26200.
 - **Windows 10** — expected to work where Windows.Graphics.Capture, Windows.Media.Ocr and
   per-monitor-v2 DPI awareness exist, but **unverified**.
-- **Linux (Plasma Wayland) and macOS** — planned, not built. History *imported* from other machines
-  can be browsed on any platform that builds `rsrewind-query` and `rsrewind-ui`; only the recorder
-  is Windows-only. See `docs/design/distributed.md`.
+- **Linux, KDE Plasma 6 on Wayland** — records (screenshots, window titles, privacy rules, idle and
+  lock), since v0.0.4, verified on one machine. No text recognition yet: moments are stored and
+  browsable but not searchable by text. Other Linux desktops can run the window, `search`, `import`
+  and the rest, but not the recorder.
+- **macOS** — planned, not built.
 
 ## Build requirements
 
@@ -100,8 +103,8 @@ below. Releases ship a signed MSI and a portable ZIP; see `docs/installer.md`.
 | `rsrewind daemon` | Run the recorder in this console (debugging). |
 | `rsrewind status [--json]` | Whether it is recording or paused, plus counters. Always available; there is no hidden mode. |
 | `rsrewind pause [--minutes N]` / `resume` | Pause capture, optionally for a fixed time. |
-| `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized text. |
-| `rsrewind recent [--limit] [--json]` | The most recent moments, newest first. |
+| `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized text, on this machine and every imported one. |
+| `rsrewind recent [--limit] [--json]` | The most recent moments across all machines, newest first. |
 | `rsrewind forget <since> --yes` | Permanently delete recent history (screenshots, text, window titles). |
 | `rsrewind ui` | Open the rewind window (its own process; `--foreground` stays attached). |
 | `rsrewind export` | Seal settled history into segment files for another machine. |

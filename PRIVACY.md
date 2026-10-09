@@ -48,7 +48,9 @@ rules (`[privacy]` in `config.toml`, `PrivacyPolicy` in `rsrewind-core`):
 - **`excluded_processes`** — exact, case-insensitive executable-name matches (e.g.
   `1Password.exe`). The suggested defaults cover common password managers and Windows' own
   credential UI: `1Password.exe`, `Bitwarden.exe`, `KeePass.exe`, `KeePassXC.exe`,
-  `Dashlane.exe`, `CredentialUIBroker.exe`, `LogonUI.exe`, `consent.exe`.
+  `Dashlane.exe`, `CredentialUIBroker.exe`, `LogonUI.exe`, `consent.exe`, and on Linux (where the
+  name is the executable's file name) `keepassxc`, `1password`, `bitwarden`,
+  `polkit-kde-authentication-agent-1`, `pinentry-qt`, `pinentry-qt5`, `ksecretd`.
 - **`excluded_title_patterns`** — case-insensitive glob patterns against the window title (`*`
   matches any run of characters, `?` matches exactly one — no regex, so a rule you write is a
   rule you can predict). The suggested defaults catch private-browsing windows by their title:
@@ -65,14 +67,21 @@ never what matched) is open work.
 
 **Where the rules cannot be enforced, rsRewind does not record.** Enforcing "any visible window"
 needs the list of every visible window with its position (and, for each kind of rule, its title
-or process name). Windows provides all of it. A platform that cannot (for example a Wayland
+or process name). Windows provides all of it, and so does KDE Plasma on Wayland, where KWin
+reports every window on the current virtual desktop that is not minimized. A platform that cannot (for example a Wayland
 desktop without a window-list protocol) makes the recorder **refuse to start** unless you set
 `unenforced_ok = true` under `[privacy]`. If you do, `rsrewind status` and `rsrewind doctor`
 say **"privacy rules NOT enforced"** for as long as the newest recording session ran that way,
 and history exported from such a session does not claim window titles. The key defaults to
 `false` and is not written into a new `config.toml`. Whatever the platform, information the
 recorder cannot get on a given tick (a failed window enumeration, unknown idle time) means
-nothing is stored for that tick. (No platform other than Windows records yet.)
+nothing is stored for that tick. On Plasma a locked screen counts as idle, so the lock screen is never
+recorded.
+
+**Linux screenshot permission.** KWin lets a program take screenshots only if a `.desktop` file names
+it. The recorder writes `~/.local/share/applications/rsrewind-recorder.desktop` (naming its own
+path) each time it starts. That file is a standing permission for that program path; delete it to
+withdraw it.
 
 These defaults are **suggestions, not a mandatory policy** — every rule can be edited or removed
 in `config.toml`, and you can add your own. `config.toml` rejects unknown keys (a typo like

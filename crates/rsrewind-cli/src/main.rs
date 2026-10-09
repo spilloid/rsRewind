@@ -7,10 +7,8 @@ mod timespec;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-#[cfg(windows)]
-use rsrewind_core::Config;
-use rsrewind_core::{CaptureState, DataDir, SearchQuery, Timestamp};
-use rsrewind_query::QueryDb;
+use rsrewind_core::{CaptureState, Config, DataDir, SearchQuery, Timestamp};
+use rsrewind_query::{History, SourceFilter};
 use rsrewind_storage::{RecorderStatus, StorageError, Store};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -197,13 +195,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn load_config(data: &DataDir) -> Result<Config> {
     Config::write_default_if_missing(&data.config_file())?;
     Ok(Config::load_or_default(&data.config_file())?)
 }
 
-#[cfg(windows)]
 fn init_logging(
     data: &DataDir,
     config: &Config,
@@ -233,11 +230,13 @@ fn init_logging(
     Ok(guard)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn daemon(data: &DataDir) -> Result<ExitCode> {
     data.ensure()?;
     let config = load_config(data)?;
     let _guard = init_logging(data, &config, true, "rsrewind")?;
+    #[cfg(target_os = "linux")]
+    authorize_screenshots()?;
     rsrewind_daemon::run(rsrewind_daemon::RunOptions {
         data: data.clone(),
         config,
@@ -245,30 +244,25 @@ fn daemon(data: &DataDir) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn start(data: &DataDir) -> Result<ExitCode> {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
     if let Some(status) = live_status(data)? {
         println!("rsRewind is already recording (pid {}).", status.pid);
         return Ok(ExitCode::SUCCESS);
     }
     data.ensure()?;
     load_config(data)?;
-    let exe = std::env::current_exe().context("locate rsrewind.exe")?;
-    let child = std::process::Command::new(exe)
+    let exe = std::env::current_exe().context("locate the rsrewind executable")?;
+    let mut command = std::process::Command::new(exe);
+    command
         .arg("--data-dir")
         .arg(data.root())
         .arg("daemon")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
-        .spawn()
-        .context("start the recorder")?;
+        .stderr(std::process::Stdio::null());
+    detach(&mut command);
+    let child = command.spawn().context("start the recorder")?;
     let pid = child.id();
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -287,9 +281,9 @@ fn start(data: &DataDir) -> Result<ExitCode> {
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn stop(data: &DataDir) -> Result<ExitCode> {
-    if !rsrewind_daemon::win::signal_stop()? {
+    if !signal_stop(data)? {
         println!("rsRewind is not recording in this session.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -302,6 +296,49 @@ fn stop(data: &DataDir) -> Result<ExitCode> {
     }
     println!("Stop requested; the recorder is finishing its current work.");
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(windows)]
+fn signal_stop(_: &DataDir) -> Result<bool> {
+    Ok(rsrewind_daemon::win::signal_stop()?)
+}
+
+/// SIGTERM to the pid in a live heartbeat. The recorder finishes its tick, flushes and exits.
+#[cfg(target_os = "linux")]
+fn signal_stop(data: &DataDir) -> Result<bool> {
+    let Some(status) = live_status(data)? else {
+        return Ok(false);
+    };
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &status.pid.to_string()])
+        .status()
+        .context("run kill")?;
+    Ok(sent.success())
+}
+
+/// KWin answers screenshot requests only for executables named in a `.desktop` file that lists
+/// the ScreenShot2 interface. Written (or rewritten, if the executable moved) on every recorder
+/// start, so the grant always names exactly the binary that is running; `rsrewind status` shows
+/// that recording is on, as always.
+#[cfg(target_os = "linux")]
+fn authorize_screenshots() -> Result<()> {
+    let exe = std::env::current_exe().context("locate the rsrewind executable")?;
+    let apps = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .context("HOME is not set")?
+        .join("applications");
+    let path = apps.join("rsrewind-recorder.desktop");
+    let entry = rsrewind_capture::kwin::desktop_entry(&exe);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(entry.as_str()) {
+        std::fs::create_dir_all(&apps).with_context(|| format!("create {}", apps.display()))?;
+        std::fs::write(&path, entry).with_context(|| format!("write {}", path.display()))?;
+        tracing::info!(path = %path.display(), "installed the KWin screenshot authorization");
+        // KWin reads application entries lazily; give it a moment before the first capture.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    Ok(())
 }
 
 /// The recorder's heartbeat, if it is recent and not a final "stopped" beat.
@@ -491,12 +528,12 @@ fn search(
         title_contains: title,
         limit,
     };
-    let db = open_query(data)?;
-    let hits = db.search(&query)?;
+    let history = open_history(data)?;
+    let hits = history.search(&query, SourceFilter::All)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&hits)?);
     } else {
-        print!("{}", render::search_hits(&hits));
+        print!("{}", render::search_hits(&hits, &source_labels(&history)?));
     }
     Ok(if hits.is_empty() {
         ExitCode::from(1)
@@ -506,23 +543,42 @@ fn search(
 }
 
 fn recent(data: &DataDir, limit: u32, json: bool) -> Result<ExitCode> {
-    let db = open_query(data)?;
-    let entries = db.recent(limit, None)?;
+    let history = open_history(data)?;
+    let entries = history.recent(SourceFilter::All, limit, None)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
-        print!("{}", render::timeline(&entries));
+        print!("{}", render::timeline(&entries, &source_labels(&history)?));
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn open_query(data: &DataDir) -> Result<QueryDb> {
-    QueryDb::open(data).with_context(|| {
-        format!(
-            "no rsRewind history in {} yet (start recording with `rsrewind start`)",
+/// This machine's history and every imported source, read together. A store that exists but
+/// cannot be used is reported on stderr and skipped, never attributed to another source.
+fn open_history(data: &DataDir) -> Result<History> {
+    let history = History::open(data);
+    for problem in history.problems() {
+        eprintln!(
+            "rsrewind: skipped {}: {}",
+            problem.data_dir.display(),
+            render::plain(&problem.reason)
+        );
+    }
+    if history.sources()?.is_empty() {
+        bail!(
+            "no rsRewind history in {} yet (start recording with `rsrewind start`, or bring in another machine's with `rsrewind import`)",
             data.root().display()
-        )
-    })
+        );
+    }
+    Ok(history)
+}
+
+fn source_labels(history: &History) -> Result<render::SourceLabels> {
+    Ok(history
+        .sources()?
+        .into_iter()
+        .filter_map(|info| Some((info.source?, info.label)))
+        .collect())
 }
 
 fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
@@ -590,8 +646,12 @@ enum Appearance {
     Dark,
 }
 
-#[cfg(windows)]
 fn ui(data: &DataDir, foreground: bool, appearance: Appearance) -> Result<ExitCode> {
+    let appearance_arg = match appearance {
+        Appearance::System => "system",
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    };
     if foreground {
         // Read the config without creating one: the viewer writes nothing to the data folder
         // except its own log.
@@ -605,44 +665,48 @@ fn ui(data: &DataDir, foreground: bool, appearance: Appearance) -> Result<ExitCo
         rsrewind_ui::run_with(data.clone(), appearance)?;
         return Ok(ExitCode::SUCCESS);
     }
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    let exe = std::env::current_exe().context("find rsrewind.exe")?;
-    let child = std::process::Command::new(exe)
+    let exe = std::env::current_exe().context("find the rsrewind executable")?;
+    let mut command = std::process::Command::new(exe);
+    command
         .arg("--data-dir")
         .arg(data.root())
-        .args(["ui", "--foreground", "--appearance"])
-        .arg(match appearance {
-            Appearance::System => "system",
-            Appearance::Light => "light",
-            Appearance::Dark => "dark",
-        })
+        .args(["ui", "--foreground", "--appearance", appearance_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        .spawn()
-        .context("start the rsRewind window")?;
+        .stderr(std::process::Stdio::null());
+    detach(&mut command);
+    let child = command.spawn().context("start the rsRewind window")?;
     println!("Opened the rsRewind window (process {}).", child.id());
     Ok(ExitCode::SUCCESS)
 }
 
-#[cfg(not(windows))]
+/// No console, and out of the starting terminal's process group, so closing that terminal or
+/// pressing Ctrl+C in it does not close the window.
+#[cfg(windows)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(unix)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn daemon(_: &DataDir) -> Result<ExitCode> {
-    bail!("the recorder runs on Windows only")
+    bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn start(_: &DataDir) -> Result<ExitCode> {
-    bail!("the recorder runs on Windows only")
+    bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn stop(_: &DataDir) -> Result<ExitCode> {
-    bail!("the recorder runs on Windows only")
-}
-#[cfg(not(windows))]
-fn ui(_: &DataDir, _foreground: bool, _appearance: Appearance) -> Result<ExitCode> {
-    bail!("the UI runs on Windows only")
+    bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
 
 pub fn human_bytes(bytes: u64) -> String {

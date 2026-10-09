@@ -58,6 +58,14 @@ impl PrivacyPolicy {
                 "CredentialUIBroker.exe",
                 "LogonUI.exe",
                 "consent.exe",
+                // Linux executable names (`/proc/<pid>/exe`).
+                "keepassxc",
+                "1password",
+                "bitwarden",
+                "polkit-kde-authentication-agent-1",
+                "pinentry-qt",
+                "pinentry-qt5",
+                "ksecretd",
             ]
             .map(String::from)
             .to_vec(),

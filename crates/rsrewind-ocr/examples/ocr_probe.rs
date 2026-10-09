@@ -3,12 +3,21 @@
 //!
 //! Run with: `cargo run -p rsrewind-ocr --example ocr_probe`
 
+#[cfg(windows)]
 use std::error::Error;
 
+#[cfg(windows)]
 use rsrewind_ocr::{OcrEngine, render_text_to_frame};
 
+#[cfg(windows)]
 const PROBE_TEXT: &str = "Hello rsRewind OCR 12345";
 
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("the OCR probe uses Windows.Media.Ocr and runs on Windows only");
+}
+
+#[cfg(windows)]
 fn main() -> Result<(), Box<dyn Error>> {
     let languages = OcrEngine::available_languages();
     println!("available OCR languages ({}):", languages.len());

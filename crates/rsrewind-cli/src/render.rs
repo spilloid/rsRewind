@@ -1,6 +1,7 @@
 //! Human-readable output. JSON output serializes the core types directly and lives in `main.rs`.
 
-use rsrewind_core::{SearchHit, TimelineEntry};
+use rsrewind_core::{SearchHit, SourceId, TimelineEntry};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// Matches the README example:
@@ -11,7 +12,20 @@ use std::fmt::Write as _;
 /// Window: Jonathan Redmon
 /// "...TAP should work once Web Sign-In is enabled..."
 /// ```
-pub fn search_hits(hits: &[SearchHit]) -> String {
+/// Display names of imported sources (`None` when the probe sent no label).
+pub type SourceLabels = HashMap<SourceId, Option<String>>;
+
+/// How a source is named in human output: its label and short id, so two probes with the same
+/// host name stay distinguishable. Labels arrive from other machines and are made printable.
+pub fn machine(source: SourceId, labels: &SourceLabels) -> String {
+    match labels.get(&source).and_then(Option::as_deref) {
+        Some(label) => format!("{} ({})", plain(label), source.short()),
+        None => source.short(),
+    }
+}
+
+/// History from another machine gets a `Machine:` line; this machine's hits print as before.
+pub fn search_hits(hits: &[SearchHit], labels: &SourceLabels) -> String {
     if hits.is_empty() {
         return "No matches.\n".into();
     }
@@ -21,6 +35,9 @@ pub fn search_hits(hits: &[SearchHit]) -> String {
             out.push('\n');
         }
         let _ = writeln!(out, "{}", hit.timestamp);
+        if let Some(source) = hit.source {
+            let _ = writeln!(out, "Machine: {}", machine(source, labels));
+        }
         let _ = writeln!(
             out,
             "Application: {}",
@@ -42,12 +59,20 @@ pub fn search_hits(hits: &[SearchHit]) -> String {
     out
 }
 
-pub fn timeline(entries: &[TimelineEntry]) -> String {
+/// A machine column appears only when some entry came from another machine.
+pub fn timeline(entries: &[TimelineEntry], labels: &SourceLabels) -> String {
     if entries.is_empty() {
         return "Nothing recorded yet.\n".into();
     }
+    let any_remote = entries.iter().any(|e| e.source.is_some());
     let mut out = String::new();
     for entry in entries {
+        if any_remote {
+            let name = entry
+                .source
+                .map_or_else(|| "this machine".to_string(), |s| machine(s, labels));
+            let _ = write!(out, "{:<24}  ", truncate(&name, 24));
+        }
         let span_secs = (entry.ended_at.as_millis() - entry.started_at.as_millis()).max(0) / 1000;
         let _ = writeln!(
             out,
@@ -117,8 +142,34 @@ mod tests {
     }
 
     #[test]
+    fn remote_hits_name_their_machine_and_local_output_is_unchanged() {
+        let source = SourceId::from_bytes([0xab; 16]);
+        let labels: SourceLabels = [(source, Some("kubert\u{1b}[2J".to_string()))].into();
+        let local = search_hits(&[hit()], &labels);
+        assert!(!local.contains("Machine:"), "{local}");
+        let mut remote = hit();
+        remote.source = Some(source);
+        let text = search_hits(&[remote], &labels);
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let line = format!("Machine: kubert?[2J ({})\n", source.short());
+        assert!(text.contains(&line), "{text}");
+        let unlabeled = search_hits(&[remote_hit(source)], &SourceLabels::new());
+        assert!(
+            unlabeled.contains(&format!("Machine: {}\n", source.short())),
+            "{unlabeled}"
+        );
+    }
+
+    fn remote_hit(source: SourceId) -> SearchHit {
+        SearchHit {
+            source: Some(source),
+            ..hit()
+        }
+    }
+
+    #[test]
     fn renders_search_like_the_readme() {
-        let text = search_hits(&[hit()]);
+        let text = search_hits(&[hit()], &SourceLabels::new());
         assert!(text.contains("Application: Teams\n"), "{text}");
         assert!(text.contains("Window: Jonathan Redmon\n"), "{text}");
         // Newlines in the snippet collapse to spaces; the renderer adds no ellipses of its own.
@@ -133,7 +184,7 @@ mod tests {
     fn snippet_ellipses_come_from_the_query_layer_and_pass_through() {
         let mut cut = hit();
         cut.snippet = "…TAP should work once\n[Web] Sign-In is enabled…".into();
-        let text = search_hits(&[cut]);
+        let text = search_hits(&[cut], &SourceLabels::new());
         assert!(
             text.contains("\"…TAP should work once [Web] Sign-In is enabled…\"\n"),
             "{text}"
@@ -142,8 +193,11 @@ mod tests {
 
     #[test]
     fn empty_results_say_so() {
-        assert_eq!(search_hits(&[]), "No matches.\n");
-        assert_eq!(timeline(&[]), "Nothing recorded yet.\n");
+        assert_eq!(search_hits(&[], &SourceLabels::new()), "No matches.\n");
+        assert_eq!(
+            timeline(&[], &SourceLabels::new()),
+            "Nothing recorded yet.\n"
+        );
     }
 
     #[test]
@@ -152,7 +206,7 @@ mod tests {
         hostile.window_title = Some("\u{1b}]0;pwned\u{7}title".into());
         hostile.application = Some("a\u{1b}[2Jb.exe".into());
         hostile.snippet = "x\u{1b}[31mred\u{9b}".into();
-        let out = search_hits(&[hostile]);
+        let out = search_hits(&[hostile], &SourceLabels::new());
         assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "{out:?}");
         assert!(out.contains("title"));
     }

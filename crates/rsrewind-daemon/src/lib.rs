@@ -21,6 +21,8 @@
 //! with deterministic fakes. Any other platform has no backends yet.
 
 pub mod counters;
+#[cfg(target_os = "linux")]
+pub mod linux_platform;
 mod ocr_worker;
 mod persist;
 pub mod plan;
@@ -34,6 +36,8 @@ mod windows_platform;
 #[cfg(test)]
 mod tests;
 
+#[cfg(target_os = "linux")]
+pub use linux_platform::run;
 pub use recorder::{RunOptions, run_with};
 #[cfg(windows)]
 pub use windows_platform::{WindowsInstance, run};

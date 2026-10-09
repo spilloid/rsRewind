@@ -16,6 +16,7 @@ rsrewind-core.workspace = true
 rsrewind-storage.workspace = true
 rsrewind-segment.workspace = true
 rsrewind-query.workspace = true
+rsrewind-ui.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -25,11 +26,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rsrewind-daemon.workspace = true
+rsrewind-capture.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 rsrewind-daemon.workspace = true
 rsrewind-capture.workspace = true
 rsrewind-ocr.workspace = true
-rsrewind-ui.workspace = true
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
 
 [dev-dependencies]

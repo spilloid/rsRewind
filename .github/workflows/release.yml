@@ -237,9 +237,39 @@ jobs:
           path: out/*.msi
           if-no-files-found: error
 
+  # Linux (KDE Plasma on Wayland records; every other command and the window work on any desktop).
+  # Not code-signed: Linux has no Authenticode equivalent the user would check. Integrity is the
+  # SHA-256 in SHA256SUMS.txt, published with the same release as the signed Windows files.
+  linux:
+    name: Build Linux binary
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --release -p rsrewind-cli
+      - name: Package tarball
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          name="rsrewind-v$VERSION-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/rsrewind LICENSE README.md "dist/$name/"
+          tar -C dist -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-payload
+          path: rsrewind-v*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
   checksums:
     name: Checksums
-    needs: [build, msi]
+    needs: [build, msi, linux]
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -250,11 +280,15 @@ jobs:
         with:
           name: msi-payload
           path: payload
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-payload
+          path: payload
       - name: Write SHA256SUMS.txt
         shell: pwsh
         run: |
           Set-Location payload
-          $files = Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.msi' }
+          $files = Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.msi', '.gz' }
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($f.Name)"
@@ -272,7 +306,7 @@ jobs:
   # and a dry run never reaches this job at all.
   publish:
     name: Publish GitHub Release (prerelease)
-    needs: [build, msi, checksums]
+    needs: [build, msi, linux, checksums]
     if: needs.build.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -291,6 +325,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: msi-payload
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-payload
           path: assets
       - uses: actions/download-artifact@v4
         with:
@@ -324,6 +362,7 @@ jobs:
           BASE="https://github.com/$REPO/releases/download/v$VERSION"
           ZIP="rsrewind-v$VERSION-windows-amd64.zip"
           MSI="rsrewind-v$VERSION-x64.msi"
+          TGZ="rsrewind-v$VERSION-linux-x86_64.tar.gz"
           {
             echo "# rsRewind v$VERSION"
             echo
@@ -337,6 +376,7 @@ jobs:
             echo "|---|---|---|"
             echo "| [\`$MSI\`]($BASE/$MSI) | Per-user installer (no administrator rights) | \`$(awk -v f="$MSI" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
             echo "| [\`$ZIP\`]($BASE/$ZIP) | Portable: \`rsrewind.exe\`, LICENSE, README | \`$(awk -v f="$ZIP" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo "| [\`$TGZ\`]($BASE/$TGZ) | Linux x86-64: \`rsrewind\` (records on KDE Plasma, Wayland; not code-signed), LICENSE, README | \`$(awk -v f="$TGZ" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
             echo
             echo "## Verify before you run it"
             echo
@@ -349,6 +389,12 @@ jobs:
             echo
             echo "Status must be \`Valid\` and the signer \`CN=Joseph Spillers\` with a Microsoft timestamp. The"
             echo "same applies to \`rsrewind.exe\`. If a check fails, do not run it; please open an issue."
+            echo
+            echo "On Linux, check the tarball against SHA256SUMS.txt (it is not code-signed):"
+            echo
+            echo '```sh'
+            echo "sha256sum --check --ignore-missing SHA256SUMS.txt"
+            echo '```'
             echo
             echo "## Next steps and docs"
             echo
@@ -367,7 +413,7 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           gh release create "v$VERSION" \
-            assets/*.zip assets/*.msi assets/SHA256SUMS.txt \
+            assets/*.zip assets/*.msi assets/*.tar.gz assets/SHA256SUMS.txt \
             --title "rsRewind v$VERSION" \
             --prerelease \
             --notes-file notes.md
