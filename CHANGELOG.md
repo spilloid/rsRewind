@@ -6,6 +6,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Recording on KDE Plasma (Wayland).** `rsrewind daemon` / `start` / `stop` work on Linux under
+  Plasma 6: screenshots from KWin (native resolution), the visible-window list and focus from a
+  short KWin script (so the any-visible-window privacy rule is enforced, as on Windows), idle time
+  from the compositor, and a locked screen counts as idle. On first start the recorder installs
+  `~/.local/share/applications/rsrewind-recorder.desktop`, which is how KWin decides which program
+  may take screenshots. There is no Linux OCR engine yet: moments are stored with text recognition
+  `pending` and become searchable once one exists.
+- `rsrewind ui` runs on Linux (it was already portable; the command refused).
+- `rsrewind search` and `recent` read this machine and every imported machine together, and name the
+  machine a result came from. A data folder that holds only imported machines now works.
+- Linux names in the suggested privacy exclusions (KeePassXC, 1Password, Bitwarden, the KDE polkit
+  prompt, pinentry, the KDE secret service). Existing `config.toml` files keep their own lists.
+- Default data folder outside Windows: `$XDG_DATA_HOME/rsRewind` (usually
+  `~/.local/share/rsRewind`), `~/Library/Application Support/rsRewind` on macOS.
+
+### Changed
+
+- The whole workspace builds on Linux (the OCR crate is now empty outside Windows).
+
 ## [0.0.3] - 2026-10-08
 
 **Third pre-release: look closer.** The rewind window gets a full-window image viewer, and the

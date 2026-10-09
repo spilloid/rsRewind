@@ -1,5 +1,6 @@
 //! Ignored by default: requires a Windows OCR language pack to be installed. Run explicitly
 //! with `cargo test -p rsrewind-ocr -- --ignored`.
+#![cfg(windows)]
 
 use std::error::Error;
 

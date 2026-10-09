@@ -1,6 +1,6 @@
 [package]
 name = "rsrewind-capture"
-description = "Screen capture (Windows.Graphics.Capture), focus/window context, idle time and change detection for rsRewind"
+description = "Screen capture (Windows.Graphics.Capture, KWin on Linux), focus/window context, idle time and change detection for rsRewind"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,15 @@ publish.workspace = true
 rsrewind-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+# KDE Plasma on Wayland: KWin over the session bus, idle time from ext-idle-notify-v1. Both are
+# pure Rust (no libdbus or libwayland headers needed to build).
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+serde.workspace = true
+serde_json.workspace = true
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

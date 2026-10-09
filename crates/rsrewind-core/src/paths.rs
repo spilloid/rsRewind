@@ -1,7 +1,8 @@
 //! The data directory layout.
 //!
 //! ```text
-//! %LOCALAPPDATA%\rsRewind\
+//! %LOCALAPPDATA%\rsRewind\        (Linux: $XDG_DATA_HOME/rsRewind, else ~/.local/share/rsRewind;
+//!                                 macOS: ~/Library/Application Support/rsRewind)
 //!   config.toml
 //!   recall.db (+ -wal, -shm)
 //!   media\2026\09\30\20260930T201404123Z_m2.webp
@@ -31,7 +32,8 @@ impl DataDir {
         Self { root: root.into() }
     }
 
-    /// `%RSREWIND_DATA_DIR%` if set, else `<LocalAppData known folder>\rsRewind`.
+    /// `%RSREWIND_DATA_DIR%` if set, else `<LocalAppData known folder>\rsRewind` (see the module
+    /// docs for the other platforms).
     pub fn resolve() -> Result<Self> {
         if let Some(root) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
             return Ok(Self::new(root));
@@ -243,15 +245,69 @@ fn local_app_data() -> Result<PathBuf> {
     }
 }
 
+/// The per-user data folder outside Windows: `~/Library/Application Support` on macOS, the XDG
+/// data home elsewhere.
 #[cfg(not(windows))]
 fn local_app_data() -> Result<PathBuf> {
-    Err(CoreError::DataDir(format!(
-        "rsRewind is Windows-only; set {DATA_DIR_ENV} to run its portable parts elsewhere"
-    )))
+    unix_data_home(
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_DATA_HOME"),
+        cfg!(target_os = "macos"),
+    )
+}
+
+/// A relative or empty `XDG_DATA_HOME` is ignored, as the XDG spec requires.
+#[cfg_attr(windows, allow(dead_code))]
+fn unix_data_home(
+    home: Option<std::ffi::OsString>,
+    xdg_data_home: Option<std::ffi::OsString>,
+    macos: bool,
+) -> Result<PathBuf> {
+    let home = home
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| CoreError::DataDir(format!("HOME is not set; set {DATA_DIR_ENV} instead")));
+    if macos {
+        return Ok(home?.join("Library").join("Application Support"));
+    }
+    match xdg_data_home.map(PathBuf::from) {
+        Some(dir) if dir.is_absolute() => Ok(dir),
+        _ => Ok(home?.join(".local").join("share")),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    // Unix path semantics: on Windows `/data` is not absolute (no drive), and the function is unused.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_data_home_follows_xdg_and_ignores_relative_values() {
+        let home = Some("/home/u".into());
+        let at =
+            |xdg: Option<&str>, macos| unix_data_home(home.clone(), xdg.map(Into::into), macos);
+        assert_eq!(
+            at(None, false).ok(),
+            Some(PathBuf::from("/home/u/.local/share"))
+        );
+        assert_eq!(at(Some("/data"), false).ok(), Some(PathBuf::from("/data")));
+        assert_eq!(
+            at(Some("rel/dir"), false).ok(),
+            Some(PathBuf::from("/home/u/.local/share"))
+        );
+        assert_eq!(
+            at(Some(""), false).ok(),
+            Some(PathBuf::from("/home/u/.local/share"))
+        );
+        assert_eq!(
+            at(Some("/data"), true).ok(),
+            Some(PathBuf::from("/home/u/Library/Application Support"))
+        );
+        assert!(unix_data_home(None, Some("/data".into()), false).is_ok());
+        assert!(unix_data_home(None, None, false).is_err());
+        assert!(unix_data_home(Some("".into()), None, false).is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -95,14 +95,16 @@ crates/rsrewind-core/      shared domain types, config, paths, privacy rules —
 crates/rsrewind-segment/   sealed history segment file format (replication unit) — implemented
 crates/rsrewind-storage/   SQLite schema, migrations, media I/O, segment export/import — implemented
 crates/rsrewind-query/     read-only search/timeline queries + cross-source history facade — implemented
-crates/rsrewind-capture/   Windows capture backends (Windows-only); change detection and window shapes (portable)
+crates/rsrewind-capture/   Windows capture backends; KDE Plasma backends (kwin.rs, wayland_idle.rs); change detection
+                           and window shapes (portable)
 crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — Windows-only
 crates/rsrewind-daemon/    recorder loop, persist/OCR threads, platform seam (platform.rs) — portable, tested on
-                           fakes (src/tests/); Windows backends in windows_platform.rs; Unit B partly open
-crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows-only)
+                           fakes (src/tests/); Windows backends in windows_platform.rs, Plasma in linux_platform.rs; Unit B partly open
+crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows and Plasma only)
 crates/rsrewind-ui/        desktop UI: Iced chrome + custom wgpu rewind viewport — implemented; Windows-verified on synthetic history only
 docs/mvp-contract.md       the orchestrator's pre-implementation contract for the first slice
 docs/design/distributed.md probe / central-instance architecture, options, threat model, stages
+docs/design/probe-visualizer.md  the plan to a full-featured probe/visualizer split (milestones V1-V6, gaps, tray)
 docs/dev-process.md        STD-001 log: routing decisions and outcomes for this repo
 docs/standards.md          company standards (STD-001..008) adoption status for this repo
 docs/installer.md          MSI installer design and status
@@ -175,5 +177,8 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-07:** The 8-hour acceptance run for v0.1.0 (ROADMAP) has not been run.
 - **2026-10-07:** Installer upgrade and uninstall behavior in `docs/installer.md` has not been
   re-tested since v0.0.2; only a fresh per-user install was confirmed.
+- **2026-10-08:** The Plasma recorder has run only on one machine (Plasma 6.7.5, one 2496x1664 screen
+  at 135 %, Bazzite). Multiple screens, other scales, KWin restarts mid-run, and other compositors are
+  untested. On excluded ticks KWin still takes the frame and the recorder drops it from memory.
 - **2026-10-07:** The recorder-side privacy findings in `docs/remediation-status.md` (Unit B) are
   open; every statement about privacy guarantees applies to the design, not to a reviewed build.

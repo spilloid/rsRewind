@@ -19,8 +19,12 @@ mod context;
 mod error;
 #[cfg(windows)]
 mod idle;
+#[cfg(target_os = "linux")]
+pub mod kwin;
 #[cfg(windows)]
 mod monitor;
+#[cfg(target_os = "linux")]
+pub mod wayland_idle;
 #[cfg(windows)]
 mod wgc;
 #[cfg(windows)]

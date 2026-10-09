@@ -8,6 +8,7 @@
 //! need to see OCR output while debugging, use `tracing::debug!` and say in a comment why that
 //! call site is safe (e.g. gated behind a local-only debug build, not the daemon's normal log
 //! path).
+#![cfg(windows)]
 
 mod bitmap;
 mod engine;
