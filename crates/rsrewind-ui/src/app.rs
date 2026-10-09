@@ -7,6 +7,7 @@
 
 mod viewer;
 
+use crate::gaps;
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
 use crate::timeline::cache::ByteLru;
@@ -22,7 +23,7 @@ use iced::{
     alignment, keyboard, theme, window,
 };
 use rsrewind_core::{
-    DataDir, SearchHit, SearchQuery, SourceId, TimelineEntry, Timestamp, VisualDetail,
+    DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineEntry, Timestamp, VisualDetail,
 };
 use rsrewind_query::{SourceFilter, SourceInfo, SourceKind, SourceProblem};
 use std::collections::{HashMap, HashSet};
@@ -44,6 +45,8 @@ const NOMINAL: (f32, f32) = (1280.0, 640.0);
 /// The short settle when cueing to a moment (the brief: ~100-180 ms, no fake scrubbing).
 const CUE_MS: f32 = 180.0;
 const SEARCH_LIMIT: u32 = 100;
+/// How far back gaps are looked up (from now). Older gaps are not shown yet.
+const GAP_HORIZON_MS: i64 = 30 * 86_400_000;
 /// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
 const SEARCH_ID: &str = "search";
 
@@ -75,6 +78,7 @@ pub enum Message {
     Searched(u64, Answer),
     Filter(SourceFilter),
     Window(u64, Answer),
+    Gaps(u64, Answer),
     Thumb(FrameKey, FrameAnswer),
     Timeline(timeline::Event),
     Cue(usize),
@@ -140,6 +144,11 @@ pub struct App {
     window_center: Option<f64>,
     moments: Vec<Moment>,
     hovered: Option<usize>,
+    /// Gaps over the recent history (see `load_gaps`), oldest first.
+    gaps: Vec<Gap>,
+    gaps_seq: u64,
+    /// What the last step jumped over, and where it landed (shown while the camera stays there).
+    skipped: Option<(Vec<Gap>, f64)>,
 
     thumbs: ByteLru<FrameKey, Arc<Bgra>>,
     pending: HashSet<FrameKey>,
@@ -194,6 +203,9 @@ impl App {
             window_center: None,
             moments: Vec::new(),
             hovered: None,
+            gaps: Vec::new(),
+            gaps_seq: 0,
+            skipped: None,
             thumbs: ByteLru::new(),
             pending: HashSet::new(),
             broken: HashSet::new(),
@@ -261,7 +273,7 @@ impl App {
                     .collect();
                 self.fit_bounds();
                 self.camera.cursor = self.last;
-                self.refresh_window(true)
+                Task::batch([self.refresh_window(true), self.load_gaps()])
             }
             Message::Sources(Answer::Failed(error)) => {
                 self.fatal = Some(error);
@@ -301,7 +313,7 @@ impl App {
                     self.detail = None;
                     self.detail_picture = None;
                 }
-                Task::batch([self.refresh_window(true), self.search()])
+                Task::batch([self.refresh_window(true), self.search(), self.load_gaps()])
             }
             Message::Window(seq, answer) => {
                 if seq != self.window_seq {
@@ -311,6 +323,14 @@ impl App {
                     self.set_moments(entries);
                 }
                 self.load_thumbs()
+            }
+            Message::Gaps(seq, answer) => {
+                if seq == self.gaps_seq
+                    && let Answer::Gaps(gaps) = answer
+                {
+                    self.gaps = gaps;
+                }
+                Task::none()
             }
             Message::Thumb(key, answer) => {
                 self.pending.remove(&key);
@@ -448,6 +468,12 @@ impl App {
                     .filter(|m| m.entry.started_at.0 == target)
                     .max_by_key(|m| m.entry.cursor())
                     .map(|m| m.entry.clone());
+                let jumped: Vec<Gap> =
+                    gaps::crossed(&self.gaps, self.filter, self.camera.cursor as i64, target)
+                        .into_iter()
+                        .cloned()
+                        .collect();
+                self.skipped = (!jumped.is_empty()).then_some((jumped, target as f64));
                 self.cue_to(target as f64);
                 match entry {
                     Some(entry) => Task::batch([self.select(&entry), self.refresh_window(false)]),
@@ -522,6 +548,58 @@ impl App {
             self.first = first.0 as f64;
             self.last = last.0 as f64;
         }
+    }
+
+    /// Gaps over the most recent [`GAP_HORIZON_MS`] of the admitted history, up to now (an imported
+    /// machine's gaps stop at the last thing it sent). Reloaded with the source list or filter.
+    fn load_gaps(&mut self) -> Task<Message> {
+        if !self.sources_loaded {
+            return Task::none();
+        }
+        self.gaps_seq += 1;
+        let seq = self.gaps_seq;
+        let to = Timestamp::now();
+        let from = Timestamp((self.first as i64).max(to.0 - GAP_HORIZON_MS));
+        self.ask(
+            Ask::Gaps {
+                filter: self.filter,
+                from,
+                to,
+            },
+            move |a| Message::Gaps(seq, a),
+        )
+    }
+
+    /// Lines explaining the gaps the camera is in, or the ones the last step jumped over.
+    fn gap_notes(&self) -> Vec<(String, bool)> {
+        let cursor = self.cue.map_or(self.camera.cursor, |c| c.to);
+        let jumped = self
+            .skipped
+            .as_ref()
+            .filter(|(_, landed)| (landed - cursor).abs() < 1.0)
+            .map(|(gaps, _)| gaps.iter().collect::<Vec<_>>());
+        let (gaps, verb) = match jumped {
+            Some(gaps) => (gaps, "Skipped: "),
+            None => (gaps::at(&self.gaps, self.filter, cursor as i64), ""),
+        };
+        gaps.into_iter()
+            .map(|g| {
+                let who = if self.lanes.len() > 1 {
+                    format!("{} · ", self.lane_label(g.source))
+                } else {
+                    String::new()
+                };
+                (
+                    format!(
+                        "{who}{verb}{} ({} to {})",
+                        gaps::sentence(g),
+                        format_time(g.from.0),
+                        format_time(g.to.0)
+                    ),
+                    gaps::is_warning(g.reason),
+                )
+            })
+            .collect()
     }
 
     /// Jumps to `target` with a short settle: the camera starts a little after the moment and
@@ -935,6 +1013,22 @@ impl App {
                 .x(16.0)
                 .y(12.0),
             );
+            let notes = self.gap_notes();
+            if !notes.is_empty() {
+                let lines = notes.into_iter().map(|(line, warning)| {
+                    text(line)
+                        .size(12)
+                        .color(if warning { t.rose } else { t.text_2 })
+                        .into()
+                });
+                layers = layers.push(
+                    pin(container(column(lines).spacing(2))
+                        .padding([6, 10])
+                        .style(move |_| t.panel()))
+                    .x(16.0)
+                    .y(56.0),
+                );
+            }
             if let Some(index) = self.hovered
                 && let Some(moment) = self.moments.get(index)
             {
@@ -988,8 +1082,22 @@ impl App {
             .iter()
             .map(|m| (m.entry.started_at.0 as f64, t.lane(m.accent)))
             .collect();
+        let gaps = self
+            .gaps
+            .iter()
+            .filter(|g| self.filter.admits(g.source))
+            .map(|g| {
+                let color = if gaps::is_warning(g.reason) {
+                    t.rose
+                } else {
+                    t.text_3
+                };
+                (g.from.0 as f64, g.to.0 as f64, color)
+            })
+            .collect();
         let strip = shader(Strip {
             filament,
+            gaps,
             marks,
             cursor: self.camera.cursor,
             tokens: t,

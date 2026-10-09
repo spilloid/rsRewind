@@ -8,6 +8,7 @@
 //! (CLAUDE.md, enforced by `rsrewind-query/tests/ui_boundary.rs`).
 
 mod app;
+mod gaps;
 mod style;
 mod thumb;
 mod timeline;

@@ -57,7 +57,7 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 "the UI crashing cannot stop recording" true by construction rather than by convention.
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
-`status`, `pause`, `resume`, `search`, `recent`, `forget`, `export`, `import`, `sources`,
+`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `forget`, `export`, `import`, `sources`,
 `doctor`, `ui`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 
@@ -170,8 +170,11 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-07:** `rsrewind doctor` reports capture as failed when run from a non-interactive session
   (SSH: `GraphicsCaptureSession::IsSupported ... 0x80070424`) and passes in an interactive one. The
   installed v0.0.2 was last confirmed capturing from a scheduled task bound to the console session.
-- **2026-10-07:** The rewind UI has been run on Windows with synthetic history only; real recorded
-  history, multiple monitors, light mode and display scaling other than 125% are unverified.
+- **2026-10-08:** The rewind UI has been run on real recorded history once (Linux, Plasma, one source,
+  ~900 moments): it renders, gap bands and notes show. On the first opening thumbnails stayed blank for
+  20 s+ twice, later openings were quick; not explained (not the `/home` symlink: A/B tested). On
+  Windows it has seen synthetic history only. Multiple monitors, light mode and scaling other than
+  125 % are unverified.
 - **2026-10-07:** The segment import path (`rsrewind import`) has had unit tests, mutation checks and
   one real Windows record-export-import run, and no independent security review.
 - **2026-10-07:** The 8-hour acceptance run for v0.1.0 (ROADMAP) has not been run.

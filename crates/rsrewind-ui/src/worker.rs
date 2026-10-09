@@ -14,7 +14,7 @@ use crate::thumb::{self, Bgra};
 use crate::timeline::FrameKey;
 use iced::futures::channel::oneshot;
 use rsrewind_core::{
-    DataDir, SearchHit, SearchQuery, SourceId, TimelineCursor, TimelineEntry, Timestamp,
+    DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineCursor, TimelineEntry, Timestamp,
     VisualDetail, VisualStateId,
 };
 use rsrewind_query::{History, MediaReader, SourceFilter, SourceInfo, SourceProblem};
@@ -57,6 +57,12 @@ pub enum Ask {
         forward: bool,
         limit: u32,
     },
+    /// Stretches of `[from, to)` with nothing recorded, and why.
+    Gaps {
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    },
 }
 
 impl Ask {
@@ -69,6 +75,7 @@ impl Ask {
             Self::At { .. } => 3,
             Self::Detail { .. } => 4,
             Self::Step { .. } => 5,
+            Self::Gaps { .. } => 6,
         }
     }
 }
@@ -84,6 +91,7 @@ pub enum Answer {
     At(Option<TimelineEntry>),
     Detail(Option<VisualDetail>),
     Step(Vec<TimelineEntry>),
+    Gaps(Vec<Gap>),
     /// A newer question of the same kind arrived first.
     Superseded,
     /// The query failed; the message is for display (no screen content in it).
@@ -210,6 +218,9 @@ fn answer(history: &History, ask: Ask) -> Answer {
             history.recent(filter, limit, Some(from))
         }
         .map_or_else(failed, Answer::Step),
+        Ask::Gaps { filter, from, to } => history
+            .gaps(filter, from, to, crate::gaps::MIN_GAP_MS)
+            .map_or_else(failed, Answer::Gaps),
         Ask::Detail { source, id } => history
             .visual_detail(source, id)
             .map_or_else(failed, Answer::Detail),
