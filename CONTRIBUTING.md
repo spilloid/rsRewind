@@ -145,5 +145,7 @@ Shipping includes a documentation step, not a follow-up (STD-003 rule 3). In ord
 8. **Verify the published release** as a user would: download the assets, `sha256sum -c
    SHA256SUMS.txt`, `Get-AuthenticodeSignature` on the EXE and MSI, install the MSI on a real
    Windows machine, run `rsrewind --version` and `rsrewind doctor` in an interactive session.
-9. **Promote** the prerelease to Latest only after step 8, and only when the release notes' Known
-   issues are acceptable to ship under that label. Then confirm the Pages deploy shows the new version.
+9. **Promote** the prerelease to a normal release and Latest after step 8. Anything the release does
+   not yet do safely must be in its Known issues *and* in a tracking issue linked from them (for
+   privacy, #12); that, not the pre-release label, is how users are warned (maintainer decision,
+   2026-10-08). Then confirm the Pages deploy shows the new version.
