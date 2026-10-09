@@ -16,7 +16,7 @@
 
 use crate::{QueryDb, QueryError, Result, clamp_limit};
 use rsrewind_core::{
-    BgraFrame, DataDir, MediaPathError, SearchHit, SearchQuery, SourceId, TimelineCursor,
+    BgraFrame, DataDir, Gap, MediaPathError, SearchHit, SearchQuery, SourceId, TimelineCursor,
     TimelineEntry, Timestamp, VisualDetail, VisualStateId,
 };
 use std::cmp::Ordering;
@@ -294,6 +294,31 @@ impl History {
         });
         hits.truncate(clamp_limit(query.limit) as usize);
         Ok(hits)
+    }
+
+    /// Gaps in `[from, to)` for each selected source, oldest first (see [`QueryDb::gaps`]). For an
+    /// imported source `to` stops at the last thing that source sent: time after it is history not
+    /// delivered yet, not a gap the probe had.
+    pub fn gaps(
+        &self,
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+        min_gap_ms: i64,
+    ) -> Result<Vec<Gap>> {
+        let mut gaps = Vec::new();
+        for lane in self.lanes(filter) {
+            let to = match lane.kind {
+                SourceKind::Local => to,
+                SourceKind::Replica => match lane.db.last_activity()? {
+                    Some(last) => to.min(last),
+                    None => continue,
+                },
+            };
+            gaps.extend(lane.db.gaps(from, to, min_gap_ms)?);
+        }
+        gaps.sort_by_key(|g| (g.from, g.source));
+        Ok(gaps)
     }
 
     /// Everything about one visual state of one source, as a single consistent snapshot.

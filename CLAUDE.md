@@ -57,7 +57,7 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 "the UI crashing cannot stop recording" true by construction rather than by convention.
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
-`status`, `pause`, `resume`, `search`, `recent`, `forget`, `export`, `import`, `sources`,
+`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `forget`, `export`, `import`, `sources`,
 `doctor`, `ui`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 

@@ -105,6 +105,7 @@ below. Releases ship a signed MSI and a portable ZIP; see `docs/installer.md`.
 | `rsrewind pause [--minutes N]` / `resume` | Pause capture, optionally for a fixed time. |
 | `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized text, on this machine and every imported one. |
 | `rsrewind recent [--limit] [--json]` | The most recent moments across all machines, newest first. |
+| `rsrewind gaps [--since] [--until] [--min-seconds] [--json]` | When nothing was recorded, and why (off, crashed, paused, idle or locked, ...). |
 | `rsrewind forget <since> --yes` | Permanently delete recent history (screenshots, text, window titles). |
 | `rsrewind ui` | Open the rewind window (its own process; `--foreground` stays attached). |
 | `rsrewind export` | Seal settled history into segment files for another machine. |

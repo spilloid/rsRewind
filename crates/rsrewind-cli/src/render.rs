@@ -1,6 +1,6 @@
 //! Human-readable output. JSON output serializes the core types directly and lives in `main.rs`.
 
-use rsrewind_core::{SearchHit, SourceId, TimelineEntry};
+use rsrewind_core::{Gap, SearchHit, SourceId, TimelineEntry};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -88,6 +88,68 @@ pub fn timeline(entries: &[TimelineEntry], labels: &SourceLabels) -> String {
     out
 }
 
+/// `2h 14m`, `5m`, `45s`.
+pub fn duration(millis: i64) -> String {
+    let secs = millis.max(0) / 1000;
+    let (d, h, m, s) = (secs / 86_400, secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    match (d, h, m) {
+        (0, 0, 0) => format!("{s}s"),
+        (0, 0, _) => format!("{m}m"),
+        (0, _, _) => format!("{h}h {m:02}m"),
+        _ => format!("{d}d {h}h"),
+    }
+}
+
+fn gap_line(gap: &Gap, labels: &SourceLabels) -> String {
+    let who = gap
+        .source
+        .map(|s| format!("{}: ", machine(s, labels)))
+        .unwrap_or_default();
+    format!(
+        "  ── {who}{} not recorded: {} ({} to {}) ──",
+        duration(gap.millis()),
+        gap.reason.describe(),
+        gap.from,
+        gap.to
+    )
+}
+
+/// `rsrewind gaps`, oldest first.
+pub fn gaps(gaps: &[Gap], labels: &SourceLabels) -> String {
+    if gaps.is_empty() {
+        return "No gaps: something was recorded throughout.\n".into();
+    }
+    let mut out = String::new();
+    for gap in gaps {
+        let _ = writeln!(out, "{}", gap_line(gap, labels).trim());
+    }
+    out
+}
+
+/// [`timeline`] (newest first) with a line for each gap, placed where the jump in time happens.
+pub fn timeline_with_gaps(
+    entries: &[TimelineEntry],
+    gaps: &[Gap],
+    labels: &SourceLabels,
+) -> String {
+    let rows = timeline(entries, labels);
+    if entries.is_empty() {
+        return rows;
+    }
+    let mut pending: Vec<&Gap> = gaps.iter().collect();
+    // Newest gap first, to walk alongside the newest-first rows.
+    pending.sort_by_key(|g| std::cmp::Reverse(g.to));
+    let mut out = String::new();
+    let mut next = pending.into_iter().peekable();
+    for (entry, row) in entries.iter().zip(rows.lines()) {
+        while let Some(gap) = next.next_if(|g| g.to > entry.started_at) {
+            let _ = writeln!(out, "{}", gap_line(gap, labels));
+        }
+        let _ = writeln!(out, "{row}");
+    }
+    out
+}
+
 /// `Teams.exe` reads better as `Teams`.
 pub fn display_app(process_name: Option<&str>) -> &str {
     match process_name {
@@ -124,7 +186,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsrewind_core::{Timestamp, VisualStateId};
+    use rsrewind_core::{EventId, GapReason, Timestamp, VisualStateId};
 
     fn hit() -> SearchHit {
         SearchHit {
@@ -139,6 +201,67 @@ mod tests {
             rank: -1.0,
             source: None,
         }
+    }
+
+    fn entry(at_secs: i64) -> TimelineEntry {
+        TimelineEntry {
+            event_id: EventId(at_secs),
+            visual_state_id: VisualStateId(at_secs),
+            started_at: Timestamp(at_secs * 1000),
+            ended_at: Timestamp(at_secs * 1000 + 5000),
+            application: Some("code".into()),
+            window_title: Some(format!("moment {at_secs}")),
+            monitor: None,
+            media_path: String::new(),
+            ocr_status: "pending".into(),
+            source: None,
+        }
+    }
+
+    fn gap(from_secs: i64, to_secs: i64, reason: GapReason) -> Gap {
+        Gap {
+            from: Timestamp(from_secs * 1000),
+            to: Timestamp(to_secs * 1000),
+            reason,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn gap_lines_sit_where_time_jumps() {
+        let entries = [entry(10_000), entry(1_000)];
+        let gaps = [
+            gap(1_005, 9_000, GapReason::RecorderOff),
+            gap(10_005, 12_000, GapReason::Idle),
+        ];
+        let text = timeline_with_gaps(&entries, &gaps, &SourceLabels::new());
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 4, "{text}");
+        // Newest first: the current idle stretch, the newer moment, the time off, the older one.
+        assert!(lines[0].contains("not recorded: idle or locked"), "{text}");
+        assert!(lines[1].contains("moment 10000"), "{text}");
+        assert!(
+            lines[2].contains("2h 13m not recorded: recorder off"),
+            "{text}"
+        );
+        assert!(lines[3].contains("moment 1000"), "{text}");
+        assert_eq!(
+            gaps_text(&[]),
+            "No gaps: something was recorded throughout.\n"
+        );
+    }
+
+    fn gaps_text(gaps: &[Gap]) -> String {
+        super::gaps(gaps, &SourceLabels::new())
+    }
+
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(duration(45_000), "45s");
+        assert_eq!(duration(5 * 60_000 + 59_000), "5m");
+        assert_eq!(duration(2 * 3_600_000 + 14 * 60_000), "2h 14m");
+        assert_eq!(duration(3 * 86_400_000 + 5 * 3_600_000), "3d 5h");
+        assert_eq!(duration(-5), "0s");
     }
 
     #[test]

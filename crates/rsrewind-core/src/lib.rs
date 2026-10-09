@@ -8,6 +8,7 @@ pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod gap;
 pub mod ids;
 pub mod paths;
 pub mod privacy;
@@ -23,6 +24,7 @@ pub use event::{
     ApplicationContext, BgraFrame, CaptureState, EventKind, FocusContext, MonitorInfo, OcrBlock,
     WindowContext,
 };
+pub use gap::{Gap, GapReason};
 pub use ids::{ApplicationId, EventId, MonitorId, SessionId, VisualStateId, WindowId};
 pub use paths::{DataDir, MediaPathError};
 pub use privacy::{PrivacyDecision, PrivacyPolicy};

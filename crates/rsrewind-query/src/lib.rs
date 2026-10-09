@@ -4,6 +4,7 @@
 //! modify the database even by accident, and callers never write SQL: user text goes through
 //! [`parse_query`] and is bound as a parameter, never spliced into a statement.
 
+mod gaps;
 pub mod history;
 mod parse;
 
@@ -11,8 +12,8 @@ pub use history::{History, MediaReader, SourceFilter, SourceInfo, SourceKind, So
 pub use parse::{FtsExpr, parse_query};
 
 use rsrewind_core::{
-    DataDir, EventId, MediaPathError, OcrBlock, SCHEMA_VERSION, SearchHit, SearchQuery, SourceId,
-    TimelineCursor, TimelineEntry, Timestamp, VisualDetail, VisualStateId,
+    DataDir, EventId, Gap, MediaPathError, OcrBlock, SCHEMA_VERSION, SearchHit, SearchQuery,
+    SourceId, TimelineCursor, TimelineEntry, Timestamp, VisualDetail, VisualStateId,
 };
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{
@@ -173,6 +174,93 @@ impl QueryDb {
                 row.get(0)
             })
             .optional()?)
+    }
+
+    /// Stretches of `[from, to)` with no observation on any monitor, at least `min_gap_ms` long,
+    /// each with the reason the recorder's sessions and markers give (see [`rsrewind_core::Gap`]).
+    /// Oldest first.
+    pub fn gaps(&self, from: Timestamp, to: Timestamp, min_gap_ms: i64) -> Result<Vec<Gap>> {
+        if to <= from {
+            return Ok(Vec::new());
+        }
+        let covered: Vec<(i64, i64)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT started_at, ended_at FROM events
+                 WHERE kind = 'observation' AND ended_at >= ?1 AND started_at <= ?2
+                 ORDER BY started_at",
+            )?;
+            let rows =
+                stmt.query_map(params![from.0, to.0], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let sessions: Vec<gaps::SessionSpan> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT s.id, s.started_at, s.ended_at,
+                        COALESCE((SELECT MAX(e.ended_at) FROM events e WHERE e.session_id = s.id),
+                                 s.started_at)
+                 FROM sessions s WHERE s.started_at <= ?1 ORDER BY s.started_at, s.id",
+            )?;
+            let rows = stmt.query_map([to.0], |row| {
+                Ok(gaps::SessionSpan {
+                    id: row.get(0)?,
+                    start: row.get(1)?,
+                    end: row.get(2)?,
+                    last_seen: row.get(3)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        // State at `from` depends on markers since the start of the session running then; older
+        // sessions cannot matter.
+        let since = sessions
+            .iter()
+            .rev()
+            .find(|s| s.start <= from.0)
+            .map_or(from.0, |s| s.start);
+        let markers: Vec<gaps::Marker> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT session_id, started_at, kind FROM events
+                 WHERE kind IN ('paused', 'resumed', 'idle_start', 'idle_end')
+                   AND started_at >= ?1 AND started_at <= ?2
+                 ORDER BY started_at, id",
+            )?;
+            let rows = stmt.query_map(params![since, to.0], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (session, at, kind) = row?;
+                if let Some(mark) = gaps::Mark::parse(&kind) {
+                    out.push(gaps::Marker { session, at, mark });
+                }
+            }
+            out
+        };
+        Ok(
+            gaps::classify((from.0, to.0), &covered, &sessions, &markers, min_gap_ms)
+                .into_iter()
+                .map(|(a, b, reason)| Gap {
+                    from: Timestamp(a),
+                    to: Timestamp(b),
+                    reason,
+                    source: self.source,
+                })
+                .collect(),
+        )
+    }
+
+    /// End of the last thing this store recorded (any event), if anything.
+    pub(crate) fn last_activity(&self) -> Result<Option<Timestamp>> {
+        Ok(self
+            .conn
+            .query_row("SELECT MAX(ended_at) FROM events", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?
+            .map(Timestamp))
     }
 
     /// Number of observations with a picture, and the time they span.

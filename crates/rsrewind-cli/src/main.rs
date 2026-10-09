@@ -79,6 +79,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show when nothing was recorded, and why (recorder off, paused, idle or locked, ...).
+    Gaps {
+        /// Start of the time range (default: 24 hours ago).
+        #[arg(long, default_value = "24h")]
+        since: String,
+        /// End of the time range (default: now).
+        #[arg(long)]
+        until: Option<String>,
+        /// Ignore gaps shorter than this.
+        #[arg(long, value_name = "N", default_value_t = 60)]
+        min_seconds: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Permanently delete everything recorded since a time (e.g. `forget 15m`).
     Forget {
         since: String,
@@ -173,6 +187,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
             json,
         } => search(&data, text.join(" "), app, title, since, until, limit, json),
         Command::Recent { limit, json } => recent(&data, limit, json),
+        Command::Gaps {
+            since,
+            until,
+            min_seconds,
+            json,
+        } => gaps(&data, &since, until.as_deref(), min_seconds, json),
         Command::Forget { since, yes } => forget(&data, &since, yes),
         Command::Doctor { json } => doctor::run(&data, json),
         Command::Export {
@@ -548,7 +568,46 @@ fn recent(data: &DataDir, limit: u32, json: bool) -> Result<ExitCode> {
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
-        print!("{}", render::timeline(&entries, &source_labels(&history)?));
+        // Gaps between the oldest moment shown and now, so a jump in time is never silent.
+        let gaps = match entries.last() {
+            Some(oldest) => history.gaps(
+                SourceFilter::All,
+                oldest.started_at,
+                Timestamp::now(),
+                DISPLAY_MIN_GAP_MS,
+            )?,
+            None => Vec::new(),
+        };
+        print!(
+            "{}",
+            render::timeline_with_gaps(&entries, &gaps, &source_labels(&history)?)
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Gaps shorter than this are not worth a line in human output.
+const DISPLAY_MIN_GAP_MS: i64 = 60_000;
+
+fn gaps(
+    data: &DataDir,
+    since: &str,
+    until: Option<&str>,
+    min_seconds: u32,
+    json: bool,
+) -> Result<ExitCode> {
+    let now = chrono::Local::now();
+    let from = timespec::parse_timespec(since, now).map_err(anyhow::Error::msg)?;
+    let to = match until {
+        Some(until) => timespec::parse_timespec(until, now).map_err(anyhow::Error::msg)?,
+        None => Timestamp::now(),
+    };
+    let history = open_history(data)?;
+    let gaps = history.gaps(SourceFilter::All, from, to, i64::from(min_seconds) * 1_000)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&gaps)?);
+    } else {
+        print!("{}", render::gaps(&gaps, &source_labels(&history)?));
     }
     Ok(ExitCode::SUCCESS)
 }
