@@ -404,8 +404,8 @@ jobs:
             echo "- Full history of changes: [CHANGELOG.md](https://github.com/$REPO/blob/v$VERSION/CHANGELOG.md)"
             echo
             echo "Everything stays on your machine: rsRewind has no cloud component and no network code in"
-            echo "the recording path. This is a pre-release; it is promoted to Latest by hand after the"
-            echo "published assets are verified."
+            echo "the recording path. Published first as a pre-release; it becomes a normal release once"
+            echo "these files are verified. Known privacy issues: https://github.com/$REPO/issues/12"
           } > notes.md
       - name: Create prerelease
         env:

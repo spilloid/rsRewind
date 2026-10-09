@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- Releases are normal GitHub releases. v0.0.2, v0.0.3 and v0.0.4 were first published as
+  pre-releases and were made normal releases on 2026-10-08, each with a notice at the top of its
+  notes listing the open privacy issues ([#12](https://github.com/spilloid/rsRewind/issues/12)). The release workflow still publishes a
+  pre-release first and it is promoted once its files are verified.
+
 ### Added
 
 - **Gaps are explained.** `rsrewind gaps [--since 24h] [--until] [--min-seconds 60] [--json]` lists every
@@ -28,7 +35,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [0.0.4] - 2026-10-08
 
-**Fourth pre-release: Linux.** rsRewind now records on KDE Plasma (Wayland) as well as Windows, the
+**Fourth release: Linux.** rsRewind now records on KDE Plasma (Wayland) as well as Windows, the
 rewind window runs on Linux, and `search` / `recent` read every machine's history together. Linux
 gets a plain tarball next to the signed Windows files.
 
@@ -63,8 +70,9 @@ gets a plain tarball next to the signed Windows files.
 
 ### Known issues
 
-- **Recorder privacy gaps from the first adversarial review are still open** (Unit B in
-  `docs/remediation-status.md`). Not suitable for sensitive desktops.
+- **Recorder privacy gaps from the first adversarial review are still open**, listed with workarounds
+  in [#12](https://github.com/spilloid/rsRewind/issues/12) (Unit B in `docs/remediation-status.md`). Not suitable for sensitive
+  desktops.
 - **No encryption at rest**, on any platform.
 - **No text recognition on Linux yet.** Linux moments are stored with OCR `pending`: they appear in
   `recent` and the window but not in `search` until a Linux engine lands (or the history is imported
@@ -104,7 +112,7 @@ gets a plain tarball next to the signed Windows files.
 
 ## [0.0.3] - 2026-10-08
 
-**Third pre-release: look closer.** The rewind window gets a full-window image viewer, and the
+**Third release: look closer.** The rewind window gets a full-window image viewer, and the
 recorder is restructured so other platforms can follow. Everything in 0.0.1 and 0.0.2 still
 applies, including their warning: recorder-side privacy gaps from the adversarial review are **not
 fixed yet**, so this is still not ready for sensitive desktops. Importing history from other machines
@@ -184,7 +192,7 @@ still has had no independent security review.
 
 ## [0.0.2] - 2026-10-06
 
-**Second pre-release: history from other machines, and a window to browse it.** Everything in
+**Second release: history from other machines, and a window to browse it.** Everything in
 0.0.1 still applies, including its warning below: recorder-side privacy gaps from the adversarial
 review are **not fixed yet**, so this is still not ready for sensitive desktops. The new import
 path takes files from other machines and has had tests and mutation checks but **no independent

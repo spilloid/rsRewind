@@ -13,16 +13,17 @@ component, no required network service, and no telemetry.
 
 
 
-## Status: pre-release, working end to end
+## Status: early releases, working end to end
 
 rsRewind records, indexes and searches your screen on Windows 11 (and records on KDE Plasma under
 Wayland, without text recognition yet), opens a rewind window over the
-history, and can merge history from other machines. It is a **pre-release**: signed binaries are
-published, but it is **not ready for use on a machine or in a session you are not comfortable
+history, and can merge history from other machines. Releases are normal, signed GitHub releases,
+but rsRewind is **not ready for use on a machine or in a session you are not comfortable
 recording.**
 
-- Recorder-side privacy gaps found by the adversarial review of the first slice are **not fixed**
-  (see `docs/remediation-status.md`, Unit B).
+- **Known privacy issues are open:** every way a recording can include, keep or misreport what it
+  shouldn't is listed, with workarounds, in [issue #12](https://github.com/spilloid/rsRewind/issues/12) (recorder findings
+  F2-F5, F9, F21 from the adversarial review; status in `docs/remediation-status.md`, Unit B).
 - Data is stored **unencrypted at rest** (see [Privacy and data handling](#privacy-and-data-handling)).
 - Importing history from other machines checks integrity, not authenticity, and has not had an
   independent security review.
