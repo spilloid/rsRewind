@@ -240,33 +240,80 @@ fn forget_span(minutes: u32) -> String {
     }
 }
 
-/// Icon colour for a state, as ARGB.
-pub fn icon_color(status: &Status) -> [u8; 4] {
+/// Which artwork the icon uses: red while recording, green while not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base {
+    Red,
+    Green,
+}
+
+/// A small mark in the bottom-right corner, so state never depends on colour alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Badge {
+    None,
+    /// Paused: two bars.
+    Pause,
+    /// Recorder not running: a square.
+    Stop,
+    /// Privacy rules not enforced, or the recorder is in trouble: an amber dot.
+    Warning,
+}
+
+pub fn look(status: &Status) -> (Base, Badge) {
     match status.recorder {
-        _ if status.privacy_unenforced => [255, 230, 120, 40],
-        Recorder::Recording => [255, 225, 60, 80],
-        Recorder::Paused { .. } => [255, 235, 180, 60],
-        Recorder::NotRunning => [255, 140, 140, 150],
-        Recorder::Error | Recorder::Unknown => [255, 160, 100, 220],
+        Recorder::Recording if status.privacy_unenforced => (Base::Red, Badge::Warning),
+        Recorder::Recording => (Base::Red, Badge::None),
+        Recorder::Paused { .. } => (Base::Green, Badge::Pause),
+        Recorder::NotRunning => (Base::Green, Badge::Stop),
+        Recorder::Error | Recorder::Unknown => (Base::Green, Badge::Warning),
     }
 }
 
-/// A `size`x`size` icon in ARGB32, network byte order (what StatusNotifierItem expects): a ring,
-/// filled when recording, hollow otherwise, so state is not told by colour alone.
-pub fn icon_argb(status: &Status, size: u32) -> Vec<u8> {
-    let [a, r, g, b] = icon_color(status);
-    let filled = matches!(status.recorder, Recorder::Recording);
-    let c = (size as f32 - 1.0) / 2.0;
-    let outer = size as f32 * 0.45;
-    let inner = if filled { 0.0 } else { size as f32 * 0.28 };
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt();
-            // One pixel of anti-aliasing on each edge.
-            let coverage = (outer - d + 0.5).clamp(0.0, 1.0) * (d - inner + 0.5).clamp(0.0, 1.0);
-            let alpha = (f32::from(a) * coverage).round() as u8;
-            out.extend_from_slice(&[alpha, r, g, b]);
+/// `rgba` (a `size`x`size` RGBA8 image) with `badge` drawn over its bottom-right corner, converted
+/// to ARGB32 in network byte order (what StatusNotifierItem expects).
+pub fn compose(rgba: &[u8], size: u32, badge: Badge) -> Vec<u8> {
+    let n = size as usize;
+    let mut out = Vec::with_capacity(n * n * 4);
+    for px in rgba.as_chunks::<4>().0.iter().take(n * n) {
+        out.extend_from_slice(&[px[3], px[0], px[1], px[2]]);
+    }
+    out.resize(n * n * 4, 0);
+    if badge == Badge::None {
+        return out;
+    }
+    let s = size as f32;
+    let (cx, cy, r) = (s * 0.74, s * 0.74, s * 0.26);
+    let fill: [u8; 3] = match badge {
+        Badge::Warning => [255, 176, 32],
+        _ => [24, 24, 28],
+    };
+    let mut paint = |x: usize, y: usize, rgb: [u8; 3], coverage: f32| {
+        let i = (y * n + x) * 4;
+        let k = coverage.clamp(0.0, 1.0);
+        let blend = |under: u8, over: u8| {
+            (f32::from(under) * (1.0 - k) + f32::from(over) * k).round() as u8
+        };
+        out[i] = blend(out[i], 255);
+        out[i + 1] = blend(out[i + 1], rgb[0]);
+        out[i + 2] = blend(out[i + 2], rgb[1]);
+        out[i + 3] = blend(out[i + 3], rgb[2]);
+    };
+    for y in 0..n {
+        for x in 0..n {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            // Disc with a 1 px light rim for contrast on any panel colour.
+            paint(x, y, [235, 235, 235], r + 0.5 - d);
+            paint(x, y, fill, r - 0.5 - d);
+            let (gx, gy) = ((px - cx) / r, (py - cy) / r);
+            let glyph = match badge {
+                Badge::Pause => gy.abs() < 0.45 && (0.12..0.36).contains(&gx.abs()),
+                Badge::Stop => gx.abs() < 0.36 && gy.abs() < 0.36,
+                _ => false,
+            };
+            if glyph {
+                paint(x, y, [245, 245, 245], 1.0);
+            }
         }
     }
     out
@@ -411,19 +458,60 @@ mod tests {
     }
 
     #[test]
-    fn icons_differ_by_shape_not_only_colour() {
-        let rec = Status {
-            recorder: Recorder::Recording,
-            privacy_unenforced: false,
+    fn each_state_has_its_own_artwork_and_badge() {
+        let st = |recorder, privacy_unenforced| Status {
+            recorder,
+            privacy_unenforced,
         };
-        let paused = Status {
-            recorder: Recorder::Paused { until: None },
-            privacy_unenforced: false,
-        };
-        let (a, b) = (icon_argb(&rec, 22), icon_argb(&paused, 22));
-        assert_eq!(a.len(), 22 * 22 * 4);
-        let centre = |v: &[u8]| v[((11 * 22 + 11) * 4) as usize];
-        assert!(centre(&a) > 200, "recording is a filled dot");
-        assert_eq!(centre(&b), 0, "paused is a ring");
+        assert_eq!(
+            look(&st(Recorder::Recording, false)),
+            (Base::Red, Badge::None)
+        );
+        assert_eq!(
+            look(&st(Recorder::Recording, true)),
+            (Base::Red, Badge::Warning)
+        );
+        assert_eq!(
+            look(&st(Recorder::Paused { until: None }, false)),
+            (Base::Green, Badge::Pause)
+        );
+        assert_eq!(
+            look(&st(Recorder::NotRunning, false)),
+            (Base::Green, Badge::Stop)
+        );
+        assert_eq!(
+            look(&st(Recorder::Unknown, false)),
+            (Base::Green, Badge::Warning)
+        );
+    }
+
+    #[test]
+    fn compose_converts_to_argb_and_badges_only_the_corner() {
+        let size = 32u32;
+        // Opaque blue everywhere.
+        let rgba: Vec<u8> = (0..size * size).flat_map(|_| [10, 20, 200, 255]).collect();
+        let plain = compose(&rgba, size, Badge::None);
+        assert_eq!(&plain[..4], &[255, 10, 20, 200], "RGBA becomes ARGB");
+        let paused = compose(&rgba, size, Badge::Pause);
+        let at = |v: &[u8], x: u32, y: u32| v[((y * size + x) * 4) as usize..][..4].to_vec();
+        // Top-left untouched; the badge centre (between the bars) is the dark disc; a bar is light.
+        assert_eq!(at(&paused, 2, 2), at(&plain, 2, 2));
+        let (cx, cy) = ((size as f32 * 0.74) as u32, (size as f32 * 0.74) as u32);
+        assert!(at(&paused, cx, cy)[1] < 60, "{:?}", at(&paused, cx, cy));
+        let bar_x = (size as f32 * 0.74 + size as f32 * 0.26 * 0.24) as u32;
+        assert!(
+            at(&paused, bar_x, cy)[1] > 200,
+            "{:?}",
+            at(&paused, bar_x, cy)
+        );
+        let stopped = compose(&rgba, size, Badge::Stop);
+        assert!(
+            at(&stopped, cx, cy)[1] > 200,
+            "the stop square covers the centre"
+        );
+        let warning = compose(&rgba, size, Badge::Warning);
+        assert_eq!(at(&warning, cx, cy)[1..], [255, 176, 32]);
+        // A short buffer is padded, not a panic.
+        assert_eq!(compose(&[], 4, Badge::Stop).len(), 64);
     }
 }

@@ -1,15 +1,15 @@
 //! The tray icon on Linux: a StatusNotifierItem over the session bus (KDE Plasma natively; most
 //! other desktops through their tray applet), via `ksni`.
 
+use crate::icons::Icons;
 use crate::model::{self, Action, Armed, Click, Item, Status};
 use crate::{POLL, Runner};
 use ksni::blocking::TrayMethods;
 use std::sync::mpsc::{Sender, channel};
 use std::time::Instant;
 
-const ICON_SIZES: [u32; 3] = [22, 32, 64];
-
 struct RsTray {
+    icons: Icons,
     status: Status,
     armed: Option<Armed>,
     actions: Sender<Action>,
@@ -41,12 +41,13 @@ impl ksni::Tray for RsTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        ICON_SIZES
-            .iter()
-            .map(|&size| ksni::Icon {
+        self.icons
+            .for_status(&self.status)
+            .into_iter()
+            .map(|(size, data)| ksni::Icon {
                 width: size as i32,
                 height: size as i32,
-                data: model::icon_argb(&self.status, size),
+                data,
             })
             .collect()
     }
@@ -95,6 +96,7 @@ impl ksni::Tray for RsTray {
 pub fn run(runner: &Runner) -> anyhow::Result<()> {
     let (actions, inbox) = channel();
     let tray = RsTray {
+        icons: Icons::load().map_err(|e| anyhow::anyhow!("tray artwork: {e}"))?,
         status: runner.status(),
         armed: None,
         actions,

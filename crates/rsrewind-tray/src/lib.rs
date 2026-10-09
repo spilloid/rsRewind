@@ -5,6 +5,8 @@
 //! [`model`]): it opens no database and holds no capture, so closing or crashing it changes
 //! nothing about recording.
 
+#[cfg(target_os = "linux")]
+mod icons;
 pub mod model;
 
 #[cfg(target_os = "linux")]
