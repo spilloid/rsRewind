@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Tray icon (Linux).** `rsrewind tray` shows rsRewind in the notification area (KDE Plasma natively,
+  other desktops through their tray applet): a filled dot while recording, a ring when paused or
+  stopped, amber when privacy rules are not enforced. The menu pauses (15 minutes, 1 hour, until
+  resumed) and resumes, forgets the last 10 minutes or hour (a second click within 10 seconds confirms;
+  one click deletes nothing), opens the window, and starts or stops the recorder. Left click opens the
+  window. It is its own process and acts only by running `rsrewind` commands, so quitting or crashing
+  it never touches recording. `rsrewind tray --autostart on` starts the icon and the recorder at login
+  (`off` undoes it). Windows and macOS are next.
+
 ### Changed
 
 - Releases are normal GitHub releases. v0.0.2, v0.0.3 and v0.0.4 were first published as

@@ -113,6 +113,7 @@ below. Releases ship a signed MSI and a portable ZIP; see `docs/installer.md`.
 | `rsrewind import <files or folders>` | Merge segment files from other machines (safe to repeat). |
 | `rsrewind sources` | List the machines whose history this one holds. |
 | `rsrewind doctor [--json]` | Check capture, OCR, disk, database, privacy rules and replication. |
+| `rsrewind tray [--start-recorder] [--autostart on\|off]` | Notification-area icon: state at a glance, pause, resume, forget the last 10 min / 1 h, open the window, start/stop (Linux so far). |
 | `rsrewind data-dir` | Print the data folder. |
 
 Human-readable output reads naturally; `--json` emits the stable `rsrewind-core` query types

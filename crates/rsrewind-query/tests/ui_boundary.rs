@@ -135,6 +135,29 @@ fn the_ui_cannot_reach_capture_storage_ocr_or_the_daemon() -> TestResult {
     Ok(())
 }
 
+/// The tray acts only through the `rsrewind` command line (it runs the executable); like the UI it
+/// must not be able to reach capture, storage, OCR, the daemon, segments, or even the query layer.
+#[test]
+fn the_tray_reaches_nothing_but_core() -> TestResult {
+    let meta = metadata()?;
+    let (all, direct) = reachable(&meta, "rsrewind-tray")?;
+    assert!(all.contains("rsrewind-core"), "{all:?}");
+    let leaked: Vec<&str> = FORBIDDEN
+        .iter()
+        .chain(&["rsrewind-query", "rsrewind-ui"])
+        .copied()
+        .filter(|f| all.contains(*f))
+        .collect();
+    assert!(leaked.is_empty(), "rsrewind-tray reaches {leaked:?}");
+    assert!(!all.contains("rusqlite"), "{all:?}");
+    let first_party: Vec<&String> = direct
+        .iter()
+        .filter(|d| d.starts_with("rsrewind-"))
+        .collect();
+    assert_eq!(first_party, ["rsrewind-core"]);
+    Ok(())
+}
+
 #[test]
 fn the_query_layer_itself_does_not_depend_on_storage() -> TestResult {
     let meta = metadata()?;

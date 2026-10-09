@@ -58,7 +58,7 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
 `status`, `pause`, `resume`, `search`, `recent`, `gaps`, `forget`, `export`, `import`, `sources`,
-`doctor`, `ui`, `data-dir`) — not separate
+`doctor`, `ui`, `tray`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 
 **No `unwrap()`/`expect()` in runtime code.** Tests may use `?` with `Box<dyn Error>`. A justified
@@ -101,6 +101,7 @@ crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — Windows-only
 crates/rsrewind-daemon/    recorder loop, persist/OCR threads, platform seam (platform.rs) — portable, tested on
                            fakes (src/tests/); Windows backends in windows_platform.rs, Plasma in linux_platform.rs; Unit B partly open
 crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows and Plasma only)
+crates/rsrewind-tray/      notification-area icon; acts only through the CLI, depends on core alone (boundary-tested)
 crates/rsrewind-ui/        desktop UI: Iced chrome + custom wgpu rewind viewport — implemented; Windows-verified on synthetic history only
 docs/mvp-contract.md       the orchestrator's pre-implementation contract for the first slice
 docs/design/distributed.md probe / central-instance architecture, options, threat model, stages
