@@ -334,6 +334,8 @@ where
 /// The filament: all of history on one line, a mark per loaded moment, the cursor as a lit bead.
 pub struct Strip<F> {
     pub filament: Filament,
+    /// `(from, to, colour)` of each gap: drawn as a faint band under the line.
+    pub gaps: Vec<(f64, f64, Color)>,
     /// `(time, lane colour)` per loaded moment, oldest first.
     pub marks: Vec<(f64, Color)>,
     pub cursor: f64,
@@ -396,6 +398,16 @@ where
             0.75,
             1.0,
         )];
+        // Gaps: faint bands, at least a pixel wide so a short one on a long day is still visible.
+        for (from, to, color) in &self.gaps {
+            let (a, b) = (self.filament.x_of(*from, w), self.filament.x_of(*to, w));
+            quads.push(Quad::solid(
+                [a, mid - 9.0, (b - a).max(1.0), 18.0],
+                *color,
+                2.0,
+                0.22,
+            ));
+        }
         // Marks: thin ticks, merged when closer than a pixel so a dense day stays cheap.
         let mut last_x = f32::NEG_INFINITY;
         for (time, color) in &self.marks {

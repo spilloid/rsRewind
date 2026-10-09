@@ -14,6 +14,17 @@ All notable changes to this project are documented in this file. The format foll
   written as events yet, so the two are not told apart). `rsrewind recent` prints a line where time
   jumps. A screen that did not change is never a gap. Works for imported machines too, up to the last
   thing each one sent. Reasons come from what the recorder already writes; no database change.
+  A recorder that died without restarting is recognised from its stale heartbeat.
+- **Gaps in the rewind window.** The strip under the room shows each gap as a faint band (rose when
+  something went wrong: the recorder died, or nothing was stored while recording). When the camera
+  sits inside a gap, a note under the time says how long and why; stepping with ← / → across a gap
+  says what was skipped. The window looks up gaps over the last 30 days.
+
+### Known issues
+
+- The first time the window opens on a large real history, thumbnails can stay blank for 20 seconds
+  or more while the decoders work; later openings were quick. Seen twice on Linux, cause not
+  established.
 
 ## [0.0.4] - 2026-10-08
 

@@ -9,7 +9,9 @@
 //! State at an instant `t`:
 //! - inside a session whose recorder was running: paused > idle > "running, nothing stored";
 //! - outside every session: the recorder was off, unless the latest session before `t` never wrote
-//!   its end, in which case it died at the last thing it wrote (its `last_seen`).
+//!   its end, in which case it died at the last thing it wrote (its `last_seen`). The newest
+//!   session without an end is running only if the caller says so (`newest_alive`: a fresh
+//!   heartbeat); otherwise it died too.
 
 use rsrewind_core::GapReason;
 
@@ -58,6 +60,7 @@ pub(crate) fn classify(
     sessions: &[SessionSpan],
     markers: &[Marker],
     min_gap: i64,
+    newest_alive: bool,
 ) -> Vec<(i64, i64, GapReason)> {
     let mut sessions = sessions.to_vec();
     sessions.sort_by_key(|s| (s.start, s.id));
@@ -69,7 +72,7 @@ pub(crate) fn classify(
         let mut cuts = vec![h0, h1];
         for (i, s) in sessions.iter().enumerate() {
             cuts.push(s.start);
-            cuts.push(effective_end(&sessions, i));
+            cuts.push(effective_end(&sessions, i, newest_alive));
         }
         cuts.extend(markers.iter().map(|m| m.at));
         cuts.retain(|&c| c >= h0 && c <= h1);
@@ -78,7 +81,10 @@ pub(crate) fn classify(
         let mut pieces: Vec<(i64, i64, GapReason)> = Vec::new();
         for pair in cuts.windows(2) {
             let (p, q) = (pair[0], pair[1]);
-            push_merged(&mut pieces, (p, q, reason_at(p, &sessions, &markers)));
+            push_merged(
+                &mut pieces,
+                (p, q, reason_at(p, &sessions, &markers, newest_alive)),
+            );
         }
         gaps.extend(absorb_short(pieces, min_gap));
     }
@@ -141,21 +147,29 @@ fn holes(range: (i64, i64), covered: &[(i64, i64)], min_gap: i64) -> Vec<(i64, i
     out
 }
 
-/// Where session `i` stopped recording: its written end, else (if a later session started, so it
-/// is certainly over) the last thing it wrote, else still running.
-fn effective_end(sessions: &[SessionSpan], i: usize) -> i64 {
+/// Where session `i` stopped recording: its written end; else, if it is the newest and its recorder
+/// is alive, never; else the last thing it wrote (capped at the next session's start).
+fn effective_end(sessions: &[SessionSpan], i: usize, newest_alive: bool) -> i64 {
     let s = sessions[i];
     match s.end {
         Some(end) => end,
-        None if i + 1 < sessions.len() => s.last_seen.min(sessions[i + 1].start).max(s.start),
-        None => i64::MAX,
+        None if i + 1 == sessions.len() && newest_alive => i64::MAX,
+        None => {
+            let next = sessions.get(i + 1).map_or(i64::MAX, |n| n.start);
+            s.last_seen.min(next).max(s.start)
+        }
     }
 }
 
-fn reason_at(t: i64, sessions: &[SessionSpan], markers: &[Marker]) -> GapReason {
+fn reason_at(
+    t: i64,
+    sessions: &[SessionSpan],
+    markers: &[Marker],
+    newest_alive: bool,
+) -> GapReason {
     let active = (0..sessions.len())
         .rev()
-        .find(|&i| sessions[i].start <= t && t < effective_end(sessions, i));
+        .find(|&i| sessions[i].start <= t && t < effective_end(sessions, i, newest_alive));
     let Some(i) = active else {
         let previous = sessions.iter().rev().find(|s| s.start <= t);
         return match previous {
@@ -211,6 +225,7 @@ mod tests {
             &[session(1, 0, None, 3_600_000)],
             &[],
             MIN,
+            true,
         );
         assert!(gaps.is_empty());
     }
@@ -225,6 +240,7 @@ mod tests {
             &[session(1, 0, None, 200_000)],
             &[],
             MIN,
+            true,
         );
         assert!(gaps.is_empty(), "{gaps:?}");
     }
@@ -236,7 +252,7 @@ mod tests {
             session(2, 500_000, None, 900_000),
         ];
         let covered = [(0, 100_000), (500_000, 900_000)];
-        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN);
+        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN, true);
         assert_eq!(gaps, vec![(100_000, 500_000, RecorderOff)]);
     }
 
@@ -247,7 +263,7 @@ mod tests {
             session(2, 600_000, None, 900_000),
         ];
         let covered = [(0, 100_000), (600_000, 900_000)];
-        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN);
+        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN, true);
         // It died at its last write (120 s); the 20 s before that are too short to stand alone.
         assert_eq!(gaps, vec![(100_000, 600_000, RecorderDied)]);
         // With a longer silence before the death, both are reported.
@@ -255,7 +271,7 @@ mod tests {
             session(1, 0, None, 300_000),
             session(2, 600_000, None, 900_000),
         ];
-        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN);
+        let gaps = classify((0, 900_000), &covered, &sessions, &[], MIN, true);
         assert_eq!(
             gaps,
             vec![
@@ -277,7 +293,7 @@ mod tests {
             mark(1, 400_000, Mark::Paused),
         ];
         let covered = [(0, 100_000), (2_000_000, 2_500_000)];
-        let gaps = classify((0, 2_500_000), &covered, &sessions, &markers, MIN);
+        let gaps = classify((0, 2_500_000), &covered, &sessions, &markers, MIN, true);
         assert_eq!(
             gaps,
             vec![
@@ -297,7 +313,7 @@ mod tests {
         ];
         let markers = [mark(1, 50_000, Mark::Paused)];
         let covered = [(0, 50_000), (400_000, 500_000)];
-        let gaps = classify((0, 500_000), &covered, &sessions, &markers, MIN);
+        let gaps = classify((0, 500_000), &covered, &sessions, &markers, MIN, true);
         assert_eq!(
             gaps,
             vec![
@@ -318,6 +334,7 @@ mod tests {
             &sessions,
             &markers,
             MIN,
+            true,
         );
         assert_eq!(gaps, vec![(500_000, 900_000, Idle)]);
     }
@@ -333,6 +350,7 @@ mod tests {
             &[session(1, 0, None, 600_000)],
             &[],
             MIN,
+            true,
         );
         assert!(gaps.is_empty(), "{gaps:?}");
     }
@@ -351,6 +369,7 @@ mod tests {
             &sessions,
             &markers,
             MIN,
+            true,
         );
         assert_eq!(gaps, vec![(100_000, 900_000, Idle)]);
     }
@@ -364,7 +383,7 @@ mod tests {
             mark(1, 1_547_000, Mark::IdleEnd),
         ];
         let covered = [(0, 1_000_000), (1_547_000, 2_000_000)];
-        let gaps = classify((0, 2_000_000), &covered, &sessions, &markers, MIN);
+        let gaps = classify((0, 2_000_000), &covered, &sessions, &markers, MIN, true);
         assert_eq!(gaps, vec![(1_000_000, 1_547_000, Idle)]);
     }
 
@@ -380,7 +399,7 @@ mod tests {
             mark(2, 450_000, Mark::IdleEnd),
         ];
         let covered = [(0, 100_000), (450_000, 1_000_000)];
-        let gaps = classify((0, 1_000_000), &covered, &sessions, &markers, MIN);
+        let gaps = classify((0, 1_000_000), &covered, &sessions, &markers, MIN, true);
         assert_eq!(
             gaps,
             vec![(100_000, 140_000, RecorderOff), (140_000, 450_000, Idle)]
@@ -388,9 +407,21 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_session_without_a_heartbeat_died() {
+        // Recorded to 100 s, wrote its last event at 120 s, no end, no later session.
+        let sessions = [session(1, 0, None, 120_000)];
+        let covered = [(0, 100_000)];
+        let dead = classify((0, 1_000_000), &covered, &sessions, &[], MIN, false);
+        assert_eq!(dead, vec![(100_000, 1_000_000, RecorderDied)]);
+        // Alive (fresh heartbeat): running, nothing stored since.
+        let alive = classify((0, 1_000_000), &covered, &sessions, &[], MIN, true);
+        assert_eq!(alive, vec![(100_000, 1_000_000, NotStored)]);
+    }
+
+    #[test]
     fn nothing_recorded_ever_is_recorder_off() {
         assert_eq!(
-            classify((0, 100_000), &[], &[], &[], MIN),
+            classify((0, 100_000), &[], &[], &[], MIN, true),
             vec![(0, 100_000, RecorderOff)]
         );
     }

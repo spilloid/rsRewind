@@ -4,13 +4,14 @@
 
 use rsrewind_core::paths::media_relative_path;
 use rsrewind_core::{
-    BgraFrame, DataDir, EventKind, Gap, GapReason, MonitorInfo, SourceId, Timestamp,
+    BgraFrame, CaptureState, DataDir, EventKind, Gap, GapReason, MonitorInfo, SourceId, Timestamp,
 };
 use rsrewind_query::{History, QueryDb, SourceFilter};
 use rsrewind_segment::Segment;
 use rsrewind_storage::media::{encode_webp, write_webp_exclusive};
 use rsrewind_storage::{
-    ExportOptions, MIN_SETTLE_MS, NewVisualState, Observation, Store, import_into_root,
+    ExportOptions, MIN_SETTLE_MS, NewVisualState, Observation, RecorderStatus, Store,
+    import_into_root,
 };
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
@@ -105,11 +106,40 @@ fn reasons(gaps: &[Gap]) -> Vec<(i64, i64, GapReason)> {
         .collect()
 }
 
+/// A recorder heartbeat written now, as a running recorder writes one every 5 s.
+fn beat(store: &Store, state: CaptureState) -> Fallible<()> {
+    beat_ago(store, state, 0)
+}
+
+fn beat_ago(store: &Store, state: CaptureState, ago_ms: i64) -> Fallible<()> {
+    let now = Timestamp(Timestamp::now().0 - ago_ms);
+    store.write_status(&RecorderStatus {
+        pid: 1,
+        started_at: now,
+        heartbeat_at: now,
+        state,
+        counters: Default::default(),
+    })?;
+    Ok(())
+}
+
 #[test]
 fn a_store_explains_its_own_gaps() -> Fallible<()> {
     let dir = tempfile::tempdir()?;
     let data = DataDir::new(dir.path());
-    record(&data)?;
+    let store = record(&data)?;
+    // Without a heartbeat the still-open session 2 is a recorder that died at its last write.
+    let dead = QueryDb::open(&data)?.gaps(at(0), at(600), MIN_GAP)?;
+    assert_eq!(reasons(&dead)[2], (320, 600, GapReason::RecorderDied));
+    // A fresh heartbeat says it is running (and paused); a final "stopped" beat does not.
+    beat(&store, CaptureState::Stopped)?;
+    let stopped = QueryDb::open(&data)?.gaps(at(0), at(600), MIN_GAP)?;
+    assert_eq!(reasons(&stopped)[2].2, GapReason::RecorderDied);
+    // A heartbeat a minute old is a recorder that stopped beating.
+    beat_ago(&store, CaptureState::Recording, 60 * SEC)?;
+    let stale = QueryDb::open(&data)?.gaps(at(0), at(600), MIN_GAP)?;
+    assert_eq!(reasons(&stale)[2].2, GapReason::RecorderDied);
+    beat(&store, CaptureState::Paused { until: None })?;
     let db = QueryDb::open(&data)?;
     let gaps = db.gaps(at(0), at(600), MIN_GAP)?;
     assert_eq!(

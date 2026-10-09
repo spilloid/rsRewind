@@ -240,16 +240,40 @@ impl QueryDb {
             }
             out
         };
+        Ok(gaps::classify(
+            (from.0, to.0),
+            &covered,
+            &sessions,
+            &markers,
+            min_gap_ms,
+            self.recorder_alive()?,
+        )
+        .into_iter()
+        .map(|(a, b, reason)| Gap {
+            from: Timestamp(a),
+            to: Timestamp(b),
+            reason,
+            source: self.source,
+        })
+        .collect())
+    }
+
+    /// Whether a recorder is writing to this store now: a heartbeat in the last 20 s (it beats
+    /// every 5 s) that is not its final "stopped" beat. Imported stores never have one.
+    fn recorder_alive(&self) -> Result<bool> {
+        const STALE_MS: i64 = 20_000;
+        let beat: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT heartbeat_at, state FROM recorder_status WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
         Ok(
-            gaps::classify((from.0, to.0), &covered, &sessions, &markers, min_gap_ms)
-                .into_iter()
-                .map(|(a, b, reason)| Gap {
-                    from: Timestamp(a),
-                    to: Timestamp(b),
-                    reason,
-                    source: self.source,
-                })
-                .collect(),
+            beat.is_some_and(|(at, state)| {
+                state != "stopped" && Timestamp::now().0 - at < STALE_MS
+            }),
         )
     }
 
