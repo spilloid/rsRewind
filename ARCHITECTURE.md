@@ -177,6 +177,21 @@ fakes (fake clock whose sleeps run scripted hooks between ticks, scripted frames
 in-memory OCR): tick-level tests against a persist queue the test holds, and end-to-end runs of
 `run_with` with the real persist and OCR threads over a temp SQLite store.
 
+**KDE Plasma (Wayland) backend** (`rsrewind-daemon/src/linux_platform.rs`, since 0.0.4). Screens,
+windows and focus come from a short KWin script loaded for one run per question; it reports a JSON
+snapshot by calling a method the recorder exports on its own unique session-bus name (no well-known
+name, no control or data over the bus). A report counts only if it comes from KWin's current unique
+name and carries the nonce of the run that asked; otherwise, or after 2 s, the window list is unknown
+and nothing is stored that tick. Screenshots come from KWin's `ScreenShot2.CaptureScreen` at native
+resolution, on request (KWin only serves executables named in a `.desktop` file, which `daemon`
+writes). Idle time is the compositor's `ext-idle-notify-v1`; a locked screen counts as idle.
+Monitor and window geometry are both KWin's logical coordinates, so the any-visible-window
+intersection compares like with like; frames are larger by the screen's scale. No OCR backend yet:
+states stay `pending`. Single instance is an advisory lock on `<data>/recorder.lock`; stop is
+SIGTERM to the heartbeat's pid. zbus and wayland-client are pure Rust; zbus runs its own small
+executor thread for the bus, which is the one exception to "no async runtime" and stays inside that
+crate.
+
 ## Event model
 
 rsRewind's unit of record is an **event in time**, not a screenshot. An `observation` event says

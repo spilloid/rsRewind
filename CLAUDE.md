@@ -5,7 +5,7 @@ repository.
 
 ## Mission
 
-rsRewind is a Windows-native, local-first screen-history recorder, written in Rust, with no
+rsRewind is a local-first screen-history recorder for Windows and KDE Plasma (Wayland), written in Rust, with no
 cloud component. It watches the screen, keeps a searchable visual/text record of what changed,
 and gives the user that history back through a CLI and a native desktop UI — entirely on their
 own machine. See `README.md` for the product pitch, `ARCHITECTURE.md` for how it's built, and

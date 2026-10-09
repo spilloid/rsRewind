@@ -6,7 +6,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-08
+
+**Fourth pre-release: Linux.** rsRewind now records on KDE Plasma (Wayland) as well as Windows, the
+rewind window runs on Linux, and `search` / `recent` read every machine's history together. Linux
+gets a plain tarball next to the signed Windows files.
+
+> **Warning.** The recorder-side privacy gaps from the first adversarial review are still open on
+> every platform, nothing is encrypted at rest, and the Linux recorder has run on one machine. Use
+> it only on machines you own and sessions you are comfortable recording.
+
 ### Added
+
 
 - **Recording on KDE Plasma (Wayland).** `rsrewind daemon` / `start` / `stop` work on Linux under
   Plasma 6: screenshots from KWin (native resolution), the visible-window list and focus from a
@@ -25,7 +36,51 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
-- The whole workspace builds on Linux (the OCR crate is now empty outside Windows).
+- The whole workspace builds on Linux (the OCR crate is now empty outside Windows), and CI tests
+  Linux on every pull request.
+- Release assets include `rsrewind-vX.Y.Z-linux-x86_64.tar.gz` (not code-signed; checked by
+  `SHA256SUMS.txt`).
+
+### Known issues
+
+- **Recorder privacy gaps from the first adversarial review are still open** (Unit B in
+  `docs/remediation-status.md`). Not suitable for sensitive desktops.
+- **No encryption at rest**, on any platform.
+- **No text recognition on Linux yet.** Linux moments are stored with OCR `pending`: they appear in
+  `recent` and the window but not in `search` until a Linux engine lands (or the history is imported
+  by a machine that has one).
+- The Linux recorder needs **KDE Plasma 6 on Wayland**. Other desktops refuse to record. It was tested
+  on one machine (one screen, 135 % scale); several screens and other scales are unverified. It does
+  not start at login yet; run `rsrewind start` after logging in.
+- On Linux, KWin still takes the screenshot on a tick that a privacy rule then excludes; the picture
+  is dropped from memory and never stored.
+- On Linux the recorder uses about 15-30 % of one CPU core while the screen changes, mostly comparing
+  and encoding full-resolution frames.
+- Gaps in the timeline (recorder off, paused, idle, locked) are not shown as gaps yet: the window and
+  `recent` simply jump to the next moment.
+- Imported segments are checked for damage, not authorship; the import path has had no independent
+  security review. Keep the folders segments pass through as private as the history.
+- Everything listed for 0.0.3 that is not mentioned above still applies (Windows 10 unverified,
+  `doctor` over SSH, `start` piped through another program).
+
+### Upgrade notes
+
+- Windows: no database migration and no required settings change.
+- Linux: new. Unpack the tarball, put `rsrewind` somewhere permanent (for example `~/.local/bin`), and
+  run `rsrewind start`. The first start writes
+  `~/.local/share/applications/rsrewind-recorder.desktop`, which KWin needs before it lets the
+  recorder take screenshots. If you move the binary, start it again and the entry is rewritten.
+  Delete that file to withdraw the permission.
+- The new Linux names in the suggested privacy exclusions apply only to a new `config.toml`; add them
+  to an existing one yourself if you want them.
+
+### Security
+
+- **The data folder is private to its owner on Linux and macOS** (`0700`, re-applied every time the
+  recorder starts). Before this, a Linux data folder was created with the default mode, so on a system
+  whose home folders are readable by other accounts, so was the history.
+- The KWin window list is accepted only from KWin's own bus name, and only for the request that asked
+  for it; anything else counts as "windows unknown" and nothing is stored for that tick.
 
 ## [0.0.3] - 2026-10-08
 

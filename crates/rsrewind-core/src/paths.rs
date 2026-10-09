@@ -51,7 +51,7 @@ impl DataDir {
         ] {
             std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
         }
-        Ok(())
+        restrict_to_owner(&self.root)
     }
 
     pub fn root(&self) -> &Path {
@@ -245,6 +245,22 @@ fn local_app_data() -> Result<PathBuf> {
     }
 }
 
+/// Recorded history is readable only by its owner. On Unix the root is `0700` (everything below
+/// it is then unreachable for others, whatever its own mode), re-applied on every start so a folder
+/// created by an older build or copied in is tightened too. On Windows the per-user profile ACLs
+/// already do this.
+#[cfg(unix)]
+fn restrict_to_owner(root: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| CoreError::io(root, e))
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_: &Path) -> Result<()> {
+    Ok(())
+}
+
 /// The per-user data folder outside Windows: `~/Library/Application Support` on macOS, the XDG
 /// data home elsewhere.
 #[cfg(not(windows))]
@@ -278,6 +294,23 @@ fn unix_data_home(
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn the_data_folder_is_private_to_its_owner()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("data");
+        std::fs::create_dir(&root)?;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777))?;
+        DataDir::new(&root).ensure()?;
+        assert_eq!(
+            std::fs::metadata(&root)?.permissions().mode() & 0o777,
+            0o700
+        );
+        Ok(())
+    }
 
     // Unix path semantics: on Windows `/data` is not absolute (no drive), and the function is unused.
     #[cfg(not(windows))]
