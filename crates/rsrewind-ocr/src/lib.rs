@@ -9,8 +9,8 @@
 //! call site is safe (e.g. gated behind a local-only debug build, not the daemon's normal log
 //! path).
 //!
-//! Windows uses Windows.Media.Ocr ([`OcrEngine`]); Linux uses `ocrs` ([`OcrsEngine`]), whose models
-//! the user places in the data folder.
+//! Windows uses Windows.Media.Ocr ([`OcrEngine`]); Linux runs the system's Tesseract
+//! ([`TesseractEngine`]) as a child process.
 
 #[cfg(windows)]
 mod bitmap;
@@ -23,7 +23,7 @@ mod gdi_render;
 #[cfg(windows)]
 mod geometry;
 #[cfg(target_os = "linux")]
-mod ocrs_engine;
+mod tesseract;
 
 #[cfg(windows)]
 pub use engine::{OcrEngine, OcrOutput};
@@ -34,4 +34,4 @@ pub use gdi_render::render_text_to_frame;
 #[cfg(windows)]
 pub use geometry::{downscale_bgra, packed_pixels, scale_rect, union_rect};
 #[cfg(target_os = "linux")]
-pub use ocrs_engine::{DETECTION_MODEL, ENGINE_NAME, OcrsEngine, OcrsOutput, RECOGNITION_MODEL};
+pub use tesseract::{ENGINE_NAME, TesseractEngine, TesseractOutput, lines_from_tsv};

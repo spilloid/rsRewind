@@ -10,10 +10,10 @@ publish.workspace = true
 rsrewind-core.workspace = true
 thiserror.workspace = true
 
-# Linux: ocrs (pure Rust; models run by rten). Models are read from the data folder, never downloaded.
+# Linux: the system's Tesseract, run as a child process (nothing linked, nothing downloaded); the frame
+# is handed over as a PNG.
 [target.'cfg(target_os = "linux")'.dependencies]
-ocrs = "0.13"
-rten = "0.26"
+png = "0.18"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 webp.workspace = true

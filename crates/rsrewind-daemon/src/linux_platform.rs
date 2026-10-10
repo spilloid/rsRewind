@@ -66,24 +66,26 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         }),
         clock: Arc::new(SystemClock::new()),
         lifecycle: Box::new(guard),
-        ocr: Some(ocrs_factory(options.data.models())),
+        ocr: Some(tesseract_factory(
+            Some(options.config.ocr.language.clone()).filter(|l| !l.trim().is_empty()),
+        )),
         hostname: hostname(),
     };
     run_with(options, platform)
 }
 
-/// Text recognition with `ocrs`, loaded on the OCR thread from `<data>/models`. If the models are
-/// not there, the factory fails, moments stay `pending`, and `doctor` says where to put them.
-fn ocrs_factory(models: PathBuf) -> OcrFactory {
+/// Text recognition with the system's Tesseract, checked on the OCR thread. If it is not installed
+/// the factory fails, moments stay `pending`, and `doctor` says how to install it.
+fn tesseract_factory(language: Option<String>) -> OcrFactory {
     Box::new(move || {
-        rsrewind_ocr::OcrsEngine::load(&models)
-            .map(|engine| Box::new(Ocrs(engine)) as Box<dyn OcrBackend>)
+        rsrewind_ocr::TesseractEngine::new(language.as_deref())
+            .map(|engine| Box::new(Tesseract(engine)) as Box<dyn OcrBackend>)
     })
 }
 
-struct Ocrs(rsrewind_ocr::OcrsEngine);
+struct Tesseract(rsrewind_ocr::TesseractEngine);
 
-impl OcrBackend for Ocrs {
+impl OcrBackend for Tesseract {
     fn engine_name(&self) -> &'static str {
         rsrewind_ocr::ENGINE_NAME
     }

@@ -63,14 +63,10 @@ install -m 755 rsrewind-v0.0.5-linux-x86_64/rsrewind ~/.local/bin/rsrewind
 rsrewind start
 rsrewind tray --autostart on   # the tray icon at every login
 rsrewind tray                  # and now</code></pre>
-  <p>Text recognition needs two model files (about 12 MB, CC-BY-SA-4.0, from the <code>ocrs</code> project). rsRewind never downloads anything itself, so fetch them once and check them:</p>
-<pre><code>m=~/.local/share/rsRewind/models; mkdir -p $m; cd $m
-curl -L -o text-detection.rten   https://huggingface.co/robertknight/ocrs/resolve/main/text-detection-ssfbcj81.rten
-curl -L -o text-recognition.rten https://huggingface.co/robertknight/ocrs/resolve/main/text-rec-checkpoint-s52qdbqt.rten
-sha256sum text-detection.rten text-recognition.rten
-# 614aafabf27c94d386f7aa036c967c2e47e4b9938fa11531ca8f5698c1ca4c36  text-detection.rten
-# 606d9a0414c6b73c99df75b707c11c70d1c8b12e1d4f900922e185fc37bfca65  text-recognition.rten</code></pre>
-  <p>Then restart the recorder; moments recorded before are read in the background.</p>
+  <p>Text recognition uses Tesseract (Apache-2.0), which rsRewind runs but does not include. Install it once from your distribution, then restart the recorder; moments recorded before are read in the background:</p>
+<pre><code>rpm-ostree install tesseract     # Fedora Atomic / Bazzite (then reboot), or: brew install tesseract
+sudo apt install tesseract-ocr   # Debian / Ubuntu
+rsrewind doctor                  # "Tesseract ready"</code></pre>
   <p>To have the recorder start with your Plasma session and restart if it ever stops, run it as a systemd user service. Save this as <code>~/.config/systemd/user/rsrewind.service</code>:</p>
 <pre><code>[Unit]
 Description=rsRewind screen-history recorder

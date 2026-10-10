@@ -85,6 +85,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\x86_64-pc-windows-msvc\release\rsrewind.exe dist\rsrewind.exe
 
+      # Third-party notices (docs/licensing.md): generated from this build's dependency graph and
+      # shipped in the ZIP and the MSI. Fails the release if any license is not accepted.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Third-party notices
+        run: cargo about generate about.hbs --fail -o dist/THIRD-PARTY-NOTICES.html
+
       # Fails before anything is signed or published rather than part-way through, and refuses
       # to fall back to an unsigned release if signing is misconfigured -- unless this is an
       # explicit dry run, in which case it warns and continues with an unsigned build that is
@@ -144,13 +152,14 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           $zipName = "rsrewind-v$env:VERSION-windows-amd64.zip"
-          Compress-Archive -Path dist\rsrewind.exe, LICENSE, README.md -DestinationPath $zipName
+          Compress-Archive -Path dist\rsrewind.exe, dist\THIRD-PARTY-NOTICES.html, LICENSE, README.md -DestinationPath $zipName
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-payload
           path: |
             dist/rsrewind.exe
+            dist/THIRD-PARTY-NOTICES.html
             rsrewind-v*.zip
           if-no-files-found: error
 
@@ -253,13 +262,18 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --release -p rsrewind-cli
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Third-party notices
+        run: cargo about generate about.hbs --fail -o THIRD-PARTY-NOTICES.html
       - name: Package tarball
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           name="rsrewind-v$VERSION-linux-x86_64"
           mkdir -p "dist/$name"
-          cp target/release/rsrewind LICENSE README.md "dist/$name/"
+          cp target/release/rsrewind LICENSE README.md THIRD-PARTY-NOTICES.html "dist/$name/"
           tar -C dist -czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:

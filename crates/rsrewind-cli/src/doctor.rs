@@ -267,33 +267,20 @@ fn collect(data: &DataDir) -> Vec<Check> {
             }
         }
     }
-    // Loading the models takes a moment and memory; checking the files is what `doctor` needs.
     #[cfg(target_os = "linux")]
-    {
-        let models = data.models();
-        let missing: Vec<&str> = [
-            rsrewind_ocr::DETECTION_MODEL,
-            rsrewind_ocr::RECOGNITION_MODEL,
-        ]
-        .into_iter()
-        .filter(|name| !models.join(name).is_file())
-        .collect();
-        if missing.is_empty() {
-            checks.push(check(
+    if let Some(config) = &config {
+        let language = Some(config.ocr.language.as_str()).filter(|l| !l.trim().is_empty());
+        match rsrewind_ocr::TesseractEngine::new(language) {
+            Ok(engine) => checks.push(check(
                 "ocr",
                 Level::Ok,
-                format!("text recognition models found in {}", models.display()),
-            ));
-        } else {
-            checks.push(check(
+                format!("Tesseract ready (language {})", engine.language()),
+            )),
+            Err(message) => checks.push(check(
                 "ocr",
                 Level::Warn,
-                format!(
-                    "no text recognition yet: put {} in {} (see the install page); recorded moments wait until then",
-                    missing.join(" and "),
-                    models.display()
-                ),
-            ));
+                format!("no text recognition yet: {message}; recorded moments wait until then"),
+            )),
         }
     }
 

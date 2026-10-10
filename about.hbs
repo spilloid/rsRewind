@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rsRewind — third-party notices</title>
+<style>
+body { font: 14px/1.5 system-ui, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; }
+pre { white-space: pre-wrap; background: #f4f4f4; padding: 1em; font-size: 12px; }
+li { margin: .2em 0; }
+</style>
+</head>
+<body>
+<h1>rsRewind third-party notices</h1>
+<p>rsRewind is MIT-licensed. It is built with the open-source software below, whose licenses require these notices.
+This file is generated from the exact dependency graph of this release (<code>cargo about</code>); the policy is in
+<code>docs/licensing.md</code> in the source repository.</p>
+
+<h2>Compiled-in C libraries</h2>
+<ul>
+<li><b>libwebp</b> (Google), compiled from the source vendored in the <code>libwebp-sys</code> crate. BSD-3-Clause:
+<pre>Copyright (c) 2010, Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
+following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice, this list of conditions and the following
+    disclaimer.
+  * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
+    following disclaimer in the documentation and/or other materials provided with the distribution.
+  * Neither the name of Google nor the names of its contributors may be used to endorse or promote products derived
+    from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</pre></li>
+<li><b>SQLite</b>, compiled from source (<code>libsqlite3-sys</code>). Public domain; credited with thanks.</li>
+</ul>
+
+<h2>Programs rsRewind runs but does not include</h2>
+<ul>
+<li><b>Tesseract OCR</b> (Linux text recognition), installed by the user. Apache-2.0; its language data is Apache-2.0
+and its image library Leptonica is BSD-2-style. Not distributed with rsRewind.</li>
+</ul>
+
+<h2>Rust crates</h2>
+<ul>
+{{#each overview}}
+<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h3 id="{{id}}">{{name}}</h3>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}
+<li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>
