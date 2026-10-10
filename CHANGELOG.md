@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **An MCP server for AI assistants.** `rsrewind mcp` lets Claude Code, Claude Desktop, Cursor, Codex or any MCP
+  client search your screen history and read what was on screen (`search`, `recent`, `moment_at`, `get_moment`,
+  `list_gaps`, `list_sources`, `get_status`, `pause_recording`, and `get_screenshot` if you allow pictures). It runs
+  over stdio, so rsRewind still opens no network port. **Off until `rsrewind mcp --enable`**, because assistants
+  send what they read to their model provider; then limited to the last 30 days and to text unless you allow
+  screenshots (`[mcp]` in config.toml). Agents cannot resume recording, delete or move history. Every call is logged
+  without content. Setup: `docs/mcp.md`.
+
 ### Changed
 
 - **The current moment is the main view.** The small preview in the detail pane is gone; the moment on

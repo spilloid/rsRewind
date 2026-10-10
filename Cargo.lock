@@ -2882,6 +2882,7 @@ dependencies = [
  "rsrewind-capture",
  "rsrewind-core",
  "rsrewind-daemon",
+ "rsrewind-mcp",
  "rsrewind-ocr",
  "rsrewind-query",
  "rsrewind-segment",
@@ -2926,6 +2927,20 @@ dependencies = [
  "tempfile",
  "tracing",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "rsrewind-mcp"
+version = "0.0.6"
+dependencies = [
+ "chrono",
+ "rsrewind-core",
+ "rsrewind-query",
+ "rsrewind-storage",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

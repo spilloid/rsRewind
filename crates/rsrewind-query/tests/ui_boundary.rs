@@ -158,6 +158,32 @@ fn the_tray_reaches_nothing_but_core() -> TestResult {
     Ok(())
 }
 
+/// The MCP server reads through the query layer like the UI, and acts only through the CLI: it may
+/// reach core and query, and nothing that captures, writes, recognizes text or moves history.
+#[test]
+fn the_mcp_server_reads_only_through_the_query_layer() -> TestResult {
+    let meta = metadata()?;
+    let (all, direct) = reachable(&meta, "rsrewind-mcp")?;
+    assert!(
+        all.contains("rsrewind-query") && all.contains("rsrewind-core"),
+        "{all:?}"
+    );
+    let leaked: Vec<&str> = FORBIDDEN
+        .iter()
+        .chain(&["rsrewind-ui", "rsrewind-tray"])
+        .copied()
+        .filter(|f| all.contains(*f))
+        .collect();
+    assert!(leaked.is_empty(), "rsrewind-mcp reaches {leaked:?}");
+    assert!(!direct.contains("rusqlite"), "{direct:?}");
+    let first_party: Vec<&String> = direct
+        .iter()
+        .filter(|d| d.starts_with("rsrewind-"))
+        .collect();
+    assert_eq!(first_party, ["rsrewind-core", "rsrewind-query"]);
+    Ok(())
+}
+
 #[test]
 fn the_query_layer_itself_does_not_depend_on_storage() -> TestResult {
     let meta = metadata()?;

@@ -11,6 +11,7 @@ members = [
     "crates/rsrewind-cli",
     "crates/rsrewind-ui",
     "crates/rsrewind-tray",
+    "crates/rsrewind-mcp",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ rsrewind-query = { path = "crates/rsrewind-query" }
 rsrewind-daemon = { path = "crates/rsrewind-daemon" }
 rsrewind-ui = { path = "crates/rsrewind-ui" }
 rsrewind-tray = { path = "crates/rsrewind-tray" }
+rsrewind-mcp = { path = "crates/rsrewind-mcp" }
 
 anyhow = "1"
 thiserror = "2"

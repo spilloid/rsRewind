@@ -18,7 +18,7 @@ pub mod source;
 pub mod time;
 
 pub use capabilities::{Capabilities, SessionCapabilities};
-pub use config::Config;
+pub use config::{Config, McpConfig};
 pub use error::{CoreError, Result};
 pub use event::{
     ApplicationContext, BgraFrame, CaptureState, EventKind, FocusContext, MonitorInfo, OcrBlock,
