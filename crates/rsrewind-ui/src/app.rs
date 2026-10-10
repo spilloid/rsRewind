@@ -8,6 +8,7 @@
 mod viewer;
 
 use crate::gaps;
+use crate::recorder::{self, Control, Recorder};
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
 use crate::timeline::cache::ByteLru;
@@ -79,6 +80,12 @@ pub enum Message {
     Filter(SourceFilter),
     Window(u64, Answer),
     Gaps(u64, Answer),
+    /// The recorder's state from `rsrewind status --json`.
+    Recorder(Recorder),
+    StartRecording,
+    StartAtLogin,
+    /// A front-door command finished: which one, and how.
+    FrontDoor(&'static str, Result<(), String>),
     Thumb(FrameKey, FrameAnswer),
     Timeline(timeline::Event),
     Cue(usize),
@@ -149,6 +156,13 @@ pub struct App {
     gaps_seq: u64,
     /// What the last step jumped over, and where it landed (shown while the camera stays there).
     skipped: Option<(Vec<Gap>, f64)>,
+    /// Runs `rsrewind` subcommands for the front-door buttons and the status chip.
+    control: Control,
+    recorder: Recorder,
+    /// A front-door command is running.
+    starting: bool,
+    /// One line about the last front-door command (an error, or "starts at login").
+    front_note: Option<String>,
 
     thumbs: ByteLru<FrameKey, Arc<Bgra>>,
     pending: HashSet<FrameKey>,
@@ -169,6 +183,7 @@ pub struct App {
 
 impl App {
     fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
+        let control = Control::new(data.root().to_path_buf());
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
@@ -206,6 +221,10 @@ impl App {
             gaps: Vec::new(),
             gaps_seq: 0,
             skipped: None,
+            control,
+            recorder: Recorder::Unknown,
+            starting: false,
+            front_note: None,
             thumbs: ByteLru::new(),
             pending: HashSet::new(),
             broken: HashSet::new(),
@@ -219,6 +238,13 @@ impl App {
             scale_factor: 1.0,
         };
         let sources = app.ask(Ask::Sources, Message::Sources);
+        let sources = Task::batch([
+            sources,
+            Task::perform(
+                app.control.status(std::time::Duration::ZERO),
+                Message::Recorder,
+            ),
+        ]);
         let theme = if appearance == crate::Appearance::System {
             iced::system::theme().map(Message::Appearance)
         } else {
@@ -329,6 +355,63 @@ impl App {
                     && let Answer::Gaps(gaps) = answer
                 {
                     self.gaps = gaps;
+                }
+                Task::none()
+            }
+            Message::Recorder(state) => {
+                let was = self.recorder;
+                self.recorder = state;
+                let next = Task::perform(self.control.status(recorder::POLL), Message::Recorder);
+                // Waiting for the first moments: look for history again, so it appears on its own.
+                if self.sources.is_empty() && state == Recorder::Recording
+                    || (was != state && self.sources.is_empty())
+                {
+                    return Task::batch([next, self.ask(Ask::Sources, Message::Sources)]);
+                }
+                next
+            }
+            Message::StartRecording => {
+                if self.starting {
+                    return Task::none();
+                }
+                self.starting = true;
+                self.front_note = None;
+                Task::perform(self.control.run(&["start"]), |r| {
+                    Message::FrontDoor("start", r)
+                })
+            }
+            Message::StartAtLogin => {
+                self.front_note = None;
+                Task::perform(self.control.run(&["tray", "--autostart", "on"]), |r| {
+                    Message::FrontDoor("login", r)
+                })
+            }
+            Message::FrontDoor(what, result) => {
+                if what == "start" {
+                    self.starting = false;
+                }
+                match (what, result) {
+                    // Recording: also bring up the tray icon (it exits at once if one is running).
+                    ("start", Ok(())) => {
+                        self.recorder = Recorder::Recording;
+                        return Task::batch([
+                            Task::perform(self.control.run(&["tray"]), |r| {
+                                Message::FrontDoor("tray", r)
+                            }),
+                            self.ask(Ask::Sources, Message::Sources),
+                        ]);
+                    }
+                    ("start", Err(e)) => {
+                        self.front_note = Some(format!("Could not start recording: {e}"))
+                    }
+                    ("login", Ok(())) => {
+                        self.front_note = Some("rsRewind will start when you log in.".into());
+                    }
+                    ("login", Err(e)) => {
+                        self.front_note = Some(format!("Could not set that up: {e}"))
+                    }
+                    // The tray is a convenience; a failure there is not worth a message.
+                    _ => {}
                 }
                 Task::none()
             }
@@ -805,11 +888,7 @@ impl App {
         let body: Element<'_, Message> = if let Some(error) = &self.fatal {
             empty_state(t, "Could not open history.", error)
         } else if self.sources_loaded && self.sources.is_empty() {
-            empty_state(
-                t,
-                "Nothing on tape yet.",
-                "rsRewind will start building your local history once recording begins.",
-            )
+            self.front_door()
         } else {
             row![
                 self.sidebar(),
@@ -859,11 +938,95 @@ impl App {
         )
         .padding([4, 10])
         .style(move |_| t.pill(t.mint));
-        row![mark, search, status]
+        let recording = self.recorder;
+        let chip_color = match recording {
+            Recorder::Recording => t.rose,
+            Recorder::Error => t.gold,
+            _ => t.text_3,
+        };
+        let chip_text = text(if recording.can_start() {
+            format!("{} · Start", recording.label())
+        } else {
+            recording.label().to_string()
+        })
+        .size(12)
+        .font(MONO);
+        let chip: Element<'_, Message> = if recording.can_start() && !self.starting {
+            button(chip_text)
+                .padding([4, 10])
+                .style(move |_, status| t.transport(status))
+                .on_press(Message::StartRecording)
+                .into()
+        } else {
+            container(chip_text)
+                .padding([4, 10])
+                .style(move |_| t.pill(chip_color))
+                .into()
+        };
+        row![mark, search, chip, status]
             .spacing(16)
             .padding([0, 18])
             .align_y(Alignment::Center)
             .into()
+    }
+
+    /// The empty window: what is happening, and the buttons that get recording going.
+    fn front_door(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let (title, body) = match self.recorder {
+            Recorder::Recording => (
+                "Recording.",
+                "Your first moments appear here within a minute. Everything stays on this computer.",
+            ),
+            Recorder::Paused => (
+                "Recording is paused.",
+                "Resume from the tray icon, and your history starts here.",
+            ),
+            Recorder::NotRunning | Recorder::Error => (
+                "Nothing on tape yet.",
+                "Start recording and rsRewind keeps a private, searchable history of this screen. Nothing leaves this computer, and you can pause or forget at any time from the tray icon.",
+            ),
+            Recorder::Unknown => (
+                "Nothing on tape yet.",
+                "Checking whether rsRewind is recording…",
+            ),
+        };
+        let mut col = column![
+            text(title).size(22).color(t.text),
+            text(body)
+                .size(14)
+                .color(t.text_2)
+                .width(Length::Fixed(520.0))
+                .align_x(Alignment::Center),
+        ]
+        .spacing(10)
+        .align_x(Alignment::Center);
+        if self.recorder.can_start() {
+            let start = button(
+                text(if self.starting {
+                    "Starting…"
+                } else {
+                    "Start recording"
+                })
+                .size(15),
+            )
+            .padding([10, 22])
+            .style(move |_, status| t.transport(status));
+            let start = if self.starting {
+                start
+            } else {
+                start.on_press(Message::StartRecording)
+            };
+            let login = button(text("Start rsRewind when I log in").size(13))
+                .padding([6, 14])
+                .style(move |_, status| t.transport(status))
+                .on_press(Message::StartAtLogin);
+            col = col.push(space().height(6)).push(start).push(login);
+        }
+        if let Some(note) = &self.front_note {
+            col = col.push(text(note.clone()).size(13).color(t.text_3));
+        }
+        container(col).center(Fill).into()
     }
 
     fn sidebar(&self) -> Element<'_, Message> {

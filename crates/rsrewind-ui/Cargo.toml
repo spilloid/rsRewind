@@ -10,6 +10,8 @@ publish.workspace = true
 # CLAUDE.md: first-party dependencies are rsrewind-core and rsrewind-query only, never capture,
 # storage, OCR or the daemon, even transitively (rsrewind-query/tests/ui_boundary.rs).
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 rsrewind-core.workspace = true
 rsrewind-query.workspace = true
 anyhow.workspace = true
