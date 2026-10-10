@@ -6,45 +6,68 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-### Added
+## [0.0.5] - 2026-10-09
 
-- **Tray icon (Linux and Windows).** `rsrewind tray` shows rsRewind in the notification area (Windows;
-  KDE Plasma natively,
-  other desktops through their tray applet) with the rsRewind icon: red while recording, green while
-  not, plus a badge (pause bars, a stop square, an amber dot when privacy rules are not enforced or the
-  recorder is in trouble), so state never depends on colour alone. The menu pauses (15 minutes, 1 hour, until
-  resumed) and resumes, forgets the last 10 minutes or hour (a second click within 10 seconds confirms;
-  one click deletes nothing), opens the window, and starts or stops the recorder. Left click opens the
-  window. It is its own process and acts only by running `rsrewind` commands, so quitting or crashing
-  it never touches recording. `rsrewind tray --autostart on` starts the icon and the recorder at login
-  (`off` undoes it): an XDG autostart entry on Linux, the per-user `Run` key on Windows. macOS is next.
+**Fifth release: always there, honest about the holes.** rsRewind gets a tray icon on Windows and
+Linux (the new red and green artwork) to pause, resume, forget the last 10 minutes or hour, and open the
+window, and every stretch of time with nothing recorded is now explained, in the command line and in
+the rewind window.
 
-### Changed
-
-- Releases are normal GitHub releases. v0.0.2, v0.0.3 and v0.0.4 were first published as
-  pre-releases and were made normal releases on 2026-10-08, each with a notice at the top of its
-  notes listing the open privacy issues ([#12](https://github.com/spilloid/rsRewind/issues/12)). The release workflow still publishes a
-  pre-release first and it is promoted once its files are verified.
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is encrypted at rest. Use rsRewind only
+> on machines you own, in sessions you are comfortable recording.
 
 ### Added
 
+- **Tray icon (Windows and Linux).** `rsrewind tray` puts rsRewind in the notification area (Windows;
+  KDE Plasma natively, other Linux desktops through their tray applet). The icon is red while
+  recording and green while not, with a badge for the rest (pause bars, a stop square, an amber dot
+  when privacy rules are not enforced or the recorder is in trouble), so state never depends on colour
+  alone. Its menu pauses (15 minutes, 1 hour, until resumed) and resumes, forgets the last 10 minutes or
+  hour (a second click within 10 seconds confirms; one click deletes nothing), opens the window, and
+  starts or stops the recorder; a left click opens the window. It is its own process and acts only by
+  running `rsrewind` commands, so quitting or crashing it never touches recording.
+  `rsrewind tray --autostart on` starts it at login (an XDG autostart entry on Linux, the per-user `Run`
+  key on Windows; `off` undoes it). macOS is next.
 - **Gaps are explained.** `rsrewind gaps [--since 24h] [--until] [--min-seconds 60] [--json]` lists every
   stretch with no recorded picture and why: recorder off, recorder stopped unexpectedly, paused, idle or
   locked, or nothing stored while recording (a privacy rule or a capture problem; privacy skips are not
   written as events yet, so the two are not told apart). `rsrewind recent` prints a line where time
-  jumps. A screen that did not change is never a gap. Works for imported machines too, up to the last
-  thing each one sent. Reasons come from what the recorder already writes; no database change.
-  A recorder that died without restarting is recognised from its stale heartbeat.
+  jumps. A screen that did not change is never a gap. It works for imported machines too, up to the last
+  thing each one sent, and recognises a recorder that died from its stale heartbeat. No database change.
 - **Gaps in the rewind window.** The strip under the room shows each gap as a faint band (rose when
-  something went wrong: the recorder died, or nothing was stored while recording). When the camera
-  sits inside a gap, a note under the time says how long and why; stepping with ← / → across a gap
-  says what was skipped. The window looks up gaps over the last 30 days.
+  something went wrong). When the camera sits inside a gap a note under the time says how long and why,
+  and stepping with ← / → across one says what was skipped. The window looks up gaps over the last 30
+  days.
+
+### Changed
+
+- Releases are normal GitHub releases. v0.0.2, v0.0.3 and v0.0.4 were first published as pre-releases
+  and became normal releases on 2026-10-08, each with a notice listing the open privacy issues
+  ([#12](https://github.com/spilloid/rsRewind/issues/12)).
 
 ### Known issues
 
-- The first time the window opens on a large real history, thumbnails can stay blank for 20 seconds
-  or more while the decoders work; later openings were quick. Seen twice on Linux, cause not
-  established.
+- **Recorder privacy gaps are still open**: see [#12](https://github.com/spilloid/rsRewind/issues/12) for every known case, with workarounds.
+- **No text recognition on Linux yet**: Linux moments appear in `recent`, `gaps` and the window but are
+  not searchable by text.
+- Piping the output of `rsrewind start` or `rsrewind tray` hangs, and `rsrewind status | head` ends with
+  a broken-pipe panic ([#15](https://github.com/spilloid/rsRewind/issues/15)). Redirect to a file instead.
+- The first time the window opens on a large real history, thumbnails can stay blank for 20 seconds or
+  more while the decoders work; later openings were quick. Seen twice on Linux, cause not established.
+- The Windows tray was verified by driving its menu commands in a real session; how the icon looks in
+  the Windows taskbar has not been checked by eye yet.
+- When the recorder cannot write fast enough (seen on a 2496x1664 Linux screen), changed screens are
+  dropped and the previous picture's span is extended over them (finding F9 in [#12](https://github.com/spilloid/rsRewind/issues/12)).
+- Everything listed for 0.0.4 that is not mentioned above still applies.
+
+### Upgrade notes
+
+- No database migration and no required settings change.
+- New: `rsrewind tray`. To have the icon at every login, run `rsrewind tray --autostart on` once.
+- Linux: to have the recorder start with your Plasma session, a systemd user service works well
+  (`ExecStart=%h/.local/bin/rsrewind daemon`, `WantedBy=graphical-session.target`); see the Linux section
+  of the install page. A built-in `rsrewind service install` is planned.
 
 ## [0.0.4] - 2026-10-08
 
