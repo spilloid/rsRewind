@@ -150,6 +150,19 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Appearance::System)]
         appearance: Appearance,
     },
+    /// Show the notification-area icon: recording state, pause, resume, forget the last 10
+    /// minutes or hour, open the window, start/stop (its own process; returns at once).
+    Tray {
+        /// Run in this process and wait until the icon is quit.
+        #[arg(long)]
+        foreground: bool,
+        /// Start the recorder too, if it is not running.
+        #[arg(long)]
+        start_recorder: bool,
+        /// Start the icon and the recorder when you log in (`on`), or stop doing so (`off`).
+        #[arg(long, value_name = "on|off")]
+        autostart: Option<Toggle>,
+    },
     /// Print the data folder.
     DataDir,
 }
@@ -208,6 +221,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             foreground,
             appearance,
         } => ui(&data, foreground, appearance),
+        Command::Tray {
+            foreground,
+            start_recorder,
+            autostart,
+        } => tray(&data, foreground, start_recorder, autostart),
         Command::DataDir => {
             println!("{}", data.root().display());
             Ok(ExitCode::SUCCESS)
@@ -697,6 +715,160 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
 /// The window always runs in a process of its own, never inside the recorder: by default this
 /// starts `rsrewind ui --foreground` detached (no console) and returns, so a crash or hang in the
 /// window cannot touch recording or the terminal it was started from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Toggle {
+    On,
+    Off,
+}
+
+fn tray(
+    data: &DataDir,
+    foreground: bool,
+    start_recorder: bool,
+    autostart: Option<Toggle>,
+) -> Result<ExitCode> {
+    let exe = std::env::current_exe().context("find the rsrewind executable")?;
+    if let Some(toggle) = autostart {
+        return set_autostart(&exe, data, toggle);
+    }
+    if !foreground {
+        let mut command = std::process::Command::new(&exe);
+        command
+            .arg("--data-dir")
+            .arg(data.root())
+            .args(["tray", "--foreground"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if start_recorder {
+            command.arg("--start-recorder");
+        }
+        detach(&mut command);
+        let child = command.spawn().context("start the tray icon")?;
+        println!("Started the tray icon (process {}).", child.id());
+        return Ok(ExitCode::SUCCESS);
+    }
+    data.ensure()?;
+    // One icon per data folder: a second `rsrewind tray` (login plus a manual start) just exits.
+    let lock_path = data.root().join("tray.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open {}", lock_path.display()))?;
+    if lock.try_lock().is_err() {
+        println!("The rsRewind tray icon is already running.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let config = Config::load_or_default(&data.config_file()).unwrap_or_default();
+    let _guard = init_logging(data, &config, false, "rsrewind-tray")?;
+    let runner = rsrewind_tray::Runner {
+        exe,
+        data_dir: data.root().to_path_buf(),
+    };
+    if start_recorder && live_status(data)?.is_none() {
+        runner.perform(rsrewind_tray::model::Action::StartRecorder);
+    }
+    rsrewind_tray::run(&runner)?;
+    drop(lock);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Login startup for the icon (which also starts the recorder): an XDG autostart entry on Linux.
+#[cfg(target_os = "linux")]
+fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Result<ExitCode> {
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .context("HOME is not set")?
+        .join("autostart");
+    let path = dir.join("rsrewind-tray.desktop");
+    match toggle {
+        Toggle::On => {
+            std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+            let entry = format!(
+                "[Desktop Entry]\nType=Application\nName=rsRewind\nComment=Screen history: tray icon and recorder\nExec=\"{}\" --data-dir \"{}\" tray --foreground --start-recorder\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
+                exe.display(),
+                data.root().display()
+            );
+            std::fs::write(&path, entry).with_context(|| format!("write {}", path.display()))?;
+            println!(
+                "rsRewind will start (tray icon and recorder) when you log in: {}",
+                path.display()
+            );
+        }
+        Toggle::Off => match std::fs::remove_file(&path) {
+            Ok(()) => println!(
+                "Removed {}; rsRewind no longer starts at login.",
+                path.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("rsRewind was not set to start at login.")
+            }
+            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
+        },
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Login startup on Windows: a value under the per-user `Run` key, which starts the tray (and,
+/// through it, the recorder) when you sign in.
+#[cfg(windows)]
+fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Result<ExitCode> {
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
+    };
+    use windows::core::w;
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = w!("rsRewind");
+    match toggle {
+        Toggle::On => {
+            let command = format!(
+                "\"{}\" --data-dir \"{}\" tray --start-recorder",
+                exe.display(),
+                data.root().display()
+            );
+            let wide: Vec<u16> = command.encode_utf16().chain([0]).collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 string whose byte length is passed with
+            // it; the key and value names are 'static literals.
+            let result = unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    key,
+                    name,
+                    REG_SZ.0,
+                    Some(wide.as_ptr().cast()),
+                    (wide.len() * 2) as u32,
+                )
+            };
+            if result != ERROR_SUCCESS {
+                bail!("could not set the login entry (error {})", result.0);
+            }
+            println!("rsRewind will start (tray icon and recorder) when you sign in.");
+        }
+        Toggle::Off => {
+            // SAFETY: 'static key and value names.
+            let result = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, name) };
+            if result == ERROR_SUCCESS {
+                println!("rsRewind no longer starts when you sign in.");
+            } else if result == ERROR_FILE_NOT_FOUND {
+                println!("rsRewind was not set to start when you sign in.");
+            } else {
+                bail!("could not remove the login entry (error {})", result.0);
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn set_autostart(_: &std::path::Path, _: &DataDir, _: Toggle) -> Result<ExitCode> {
+    bail!("starting at login is set up on Linux and Windows so far")
+}
+
 /// `rsrewind ui --appearance`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Appearance {
