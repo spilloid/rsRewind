@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-10-10
+
+**Sixth release: a front door, and a memory that can read.** Opening rsRewind now offers to start
+recording instead of telling you it hasn't, and Linux history becomes searchable: the recorder reads the
+screen with Tesseract. Every download now carries the notices for the open-source software inside it.
+
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is encrypted at rest (a design that does
+> not cost any usability is in `docs/design/encryption-at-rest.md`). Use rsRewind only on machines you
+> own, in sessions you are comfortable recording.
+
 ### Added
 
 - **A front door.** The rewind window no longer greets a new user with "once recording begins" and no
@@ -24,6 +35,31 @@ All notable changes to this project are documented in this file. The format foll
 - **Third-party notices.** Every release now carries `THIRD-PARTY-NOTICES.html` (generated from the exact
   dependency graph, including libwebp's BSD license), and CI rejects any dependency whose license is not on
   the permissive allowlist. Policy and inventory: `docs/licensing.md`.
+
+### Known issues
+
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- **Linux text recognition needs Tesseract installed** (see Upgrade notes). Measured on a real dark-mode
+  laptop screen it reads most interface text but not all of it (5 of 8 phrases on the test screen).
+- Piping the output of `rsrewind start` or `rsrewind tray` hangs, and `rsrewind status | head` ends with
+  a broken-pipe panic ([#15](https://github.com/spilloid/rsRewind/issues/15)). Redirect to a file instead.
+- The first time the window opens on a large real history, thumbnails can stay blank for 20 seconds or
+  more; later openings are quick.
+- The Windows tray was verified by driving its menu commands in a real session; how the icon looks in the
+  Windows taskbar has not been checked by eye yet.
+- When the recorder cannot write fast enough, changed screens can be dropped and the previous picture's
+  span extended over them (F9 in [#12](https://github.com/spilloid/rsRewind/issues/12)).
+- Everything listed for 0.0.5 that is not mentioned above still applies.
+
+### Upgrade notes
+
+- No database migration and no required settings change.
+- Linux: install Tesseract once (`rpm-ostree install tesseract` and reboot on Fedora Atomic / Bazzite,
+  `brew install tesseract`, or `sudo apt install tesseract-ocr`), then restart the recorder. Everything
+  recorded since 0.0.4 is read in the background, oldest first; on the maintainer's laptop that ran at
+  about 0.6 s per moment with the recorder using 5-7 % CPU. `rsrewind doctor` shows "Tesseract ready".
+- The notices file is `THIRD-PARTY-NOTICES.html`, next to `rsrewind` in the ZIP and the tarball, and in the
+  install folder for the MSI.
 
 ## [0.0.5] - 2026-10-09
 
