@@ -44,3 +44,6 @@ pub use monitor::{DpiAwareness, MonitorHandle, enable_dpi_awareness, monitors};
 pub use wgc::{Adapter, MonitorCapturer};
 #[cfg(windows)]
 pub use window::{foreground, visible_windows};
+
+#[cfg(target_os = "macos")]
+pub mod macos;

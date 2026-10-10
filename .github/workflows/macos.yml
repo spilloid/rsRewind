@@ -1,0 +1,45 @@
+name: macOS Apple Silicon
+on:
+  pull_request:
+  push:
+    branches: [main, 'feat/macos-apple-silicon']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apple-silicon:
+    name: ARM64 clippy, tests, app artifact
+    runs-on: macos-15
+    timeout-minutes: 50
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: cargo build --locked --release -p rsrewind-cli --target aarch64-apple-darwin
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate about.hbs -o THIRD-PARTY-NOTICES.html
+      - run: ./scripts/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rsRewind-macos-arm64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/macos-linked-libraries.txt
+          if-no-files-found: error
+          retention-days: 14

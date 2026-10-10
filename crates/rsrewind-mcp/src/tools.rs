@@ -1,44 +1,55 @@
-//! The tools: definitions (name, schema, annotations) and handlers. Every handler re-checks the
-//! ceiling; `list` filtering is only discovery.
+//! The tools: definitions (name, schema, annotations), strict argument checking, and handlers. Every
+//! handler re-checks the ceiling; `list` filtering is only discovery.
 
 use crate::McpServer;
 use crate::ceiling::{self, Ceiling, moment_id, parse_moment_id, parse_time, time_text};
 use rsrewind_core::{SearchQuery, SourceId, TimelineCursor, Timestamp};
 use rsrewind_query::{History, SourceKind};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
-/// Recognized text longer than this is cut, with a marker, in `get_moment`.
+/// The most text one response may carry (recognized text plus line texts), in characters.
 const MAX_TEXT_CHARS: usize = 20_000;
+/// One line's text is cut beyond this, in characters.
+const MAX_LINE_CHARS: usize = 2_000;
 /// Pictures larger than this are refused rather than sent.
 const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
+/// Any string argument longer than this is refused.
+const MAX_ARG_CHARS: usize = 1_000;
+const MAX_ROWS: usize = 500;
+const MAX_RESULT_BYTES: usize = 512 * 1024;
 
 pub enum ToolError {
     Unknown,
-    /// A tool-level failure the agent should read (returned as `isError: true`, not a protocol error).
-    Refused(String),
+    /// A tool-level failure the agent should read (returned as `isError: true`, not a protocol
+    /// error), with the tool's own name for the log.
+    Refused(&'static str, String),
 }
 
 pub struct Done {
+    pub tool: &'static str,
     pub result: Value,
     pub count: usize,
 }
 
-type ToolResult = Result<Done, ToolError>;
-
-fn refused(message: impl Into<String>) -> ToolError {
-    ToolError::Refused(message.into())
-}
+type ToolResult = Result<Done, String>;
 
 pub fn error_result(message: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": message }], "isError": true })
 }
 
+/// A result with a readable summary, the same data as JSON text (for clients that only read
+/// `content`), and `structuredContent`.
 fn ok(text: String, structured: Value, count: usize) -> ToolResult {
+    let json_text = serde_json::to_string(&structured).unwrap_or_default();
+    if text.len().saturating_add(json_text.len()) > MAX_RESULT_BYTES {
+        return Err("Result too large; narrow the time window or reduce the page size.".into());
+    }
     Ok(Done {
+        tool: "",
         result: json!({
-            "content": [{ "type": "text", "text": text }],
+            "content": [{ "type": "text", "text": text }, { "type": "text", "text": json_text }],
             "structuredContent": structured,
             "isError": false,
         }),
@@ -46,142 +57,305 @@ fn ok(text: String, structured: Value, count: usize) -> ToolResult {
     })
 }
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Str,
+    Bool,
+    Int { min: i64, max: i64 },
+}
+
+struct Param {
+    name: &'static str,
+    kind: Kind,
+    required: bool,
+    description: &'static str,
+}
+
+const fn p(name: &'static str, kind: Kind, required: bool, description: &'static str) -> Param {
+    Param {
+        name,
+        kind,
+        required,
+        description,
+    }
+}
+
 struct Def {
     name: &'static str,
     title: &'static str,
     description: &'static str,
-    schema: fn() -> Value,
+    params: &'static [Param],
     read_only: bool,
-    idempotent: bool,
 }
 
 const TIME_HELP: &str =
     "RFC 3339, 'YYYY-MM-DD HH:MM' (local), 'YYYY-MM-DD', or a duration ago like 30m, 2h, 7d";
 
-fn defs() -> Vec<Def> {
-    vec![
-        Def {
-            name: "search",
-            title: "Search screen history",
-            description: "Find moments whose on-screen text matches. Quote a phrase for an exact match; end a word with * \
-                          for a prefix. Filter by application, window title and time. Returns moments with their time, \
-                          machine, app, window and a snippet; pass a moment to get_moment for its full text.",
-            schema: || {
-                json!({ "type": "object", "required": ["query"], "properties": {
-                    "query": { "type": "string", "description": "Words that were on screen" },
-                    "app": { "type": "string", "description": "Only this application (process name, e.g. firefox or Teams.exe)" },
-                    "title": { "type": "string", "description": "Only windows whose title contains this" },
-                    "since": { "type": "string", "description": TIME_HELP },
-                    "until": { "type": "string", "description": TIME_HELP },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "recent",
-            title: "Recent moments",
-            description: "The most recent moments, newest first, or those at or before a time. Each is one stretch of time \
-                          a screen showed the same picture.",
-            schema: || {
-                json!({ "type": "object", "properties": {
-                    "before": { "type": "string", "description": format!("Start at or before this time ({TIME_HELP})") },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "moment_at",
-            title: "What was on screen at a time",
-            description: "The moment on screen at a given time (or the nearest one before it), on any machine.",
-            schema: || {
-                json!({ "type": "object", "required": ["time"], "properties": {
-                    "time": { "type": "string", "description": TIME_HELP }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "get_moment",
-            title: "Moment details",
-            description: "Everything about one moment: time, machine, app, window, and the full recognized text (optionally \
-                          with each line's position on screen).",
-            schema: || {
-                json!({ "type": "object", "required": ["moment"], "properties": {
-                    "moment": { "type": "string", "description": "A moment id from search, recent or moment_at (e.g. this:123)" },
-                    "include_lines": { "type": "boolean", "default": false, "description": "Also return each text line with its box in screen pixels" }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "get_screenshot",
-            title: "Moment screenshot",
-            description: "The picture of one moment (WebP). Only available when the person allowed screenshots for agents.",
-            schema: || {
-                json!({ "type": "object", "required": ["moment"], "properties": {
-                    "moment": { "type": "string", "description": "A moment id (e.g. this:123)" }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "list_gaps",
-            title: "Gaps in recording",
-            description: "Stretches with nothing recorded and why: recorder off, stopped unexpectedly, paused, idle or locked, \
-                          or nothing stored while recording. A screen that did not change is never a gap.",
-            schema: || {
-                json!({ "type": "object", "properties": {
-                    "since": { "type": "string", "description": format!("Default 24h. {TIME_HELP}") },
-                    "until": { "type": "string", "description": format!("Default now. {TIME_HELP}") },
-                    "min_minutes": { "type": "integer", "minimum": 1, "default": 1 }
-                }, "additionalProperties": false })
-            },
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "list_sources",
-            title: "Machines in this history",
-            description: "The machines whose history is here (this computer and any imported ones), with their time spans.",
-            schema: || json!({ "type": "object", "properties": {}, "additionalProperties": false }),
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "get_status",
-            title: "rsRewind status",
-            description: "Whether rsRewind is recording, paused or stopped, how much text recognition is waiting, and what \
-                          agents may access (and how the person can change that).",
-            schema: || json!({ "type": "object", "properties": {}, "additionalProperties": false }),
-            read_only: true,
-            idempotent: true,
-        },
-        Def {
-            name: "pause_recording",
-            title: "Pause recording",
-            description: "Pause recording, for some minutes or until the person resumes it. Agents cannot resume recording \
-                          or delete history; those stay with the person.",
-            schema: || {
-                json!({ "type": "object", "properties": {
-                    "minutes": { "type": "integer", "minimum": 1, "maximum": 1440, "description": "Omit to pause until resumed" }
-                }, "additionalProperties": false })
-            },
-            read_only: false,
-            idempotent: true,
-        },
-    ]
+const DEFS: &[Def] = &[
+    Def {
+        name: "search",
+        title: "Search screen history",
+        description: "Find moments whose on-screen text matches. Quote a phrase for an exact match; end a word with * \
+                      for a prefix. Filter by application, window title and time. Returns moments with their time, \
+                      machine, app, window and a snippet; pass a moment to get_moment for its full text.",
+        params: &[
+            p("query", Kind::Str, true, "Words that were on screen"),
+            p(
+                "app",
+                Kind::Str,
+                false,
+                "Only this application (process name, e.g. firefox or Teams.exe)",
+            ),
+            p(
+                "title",
+                Kind::Str,
+                false,
+                "Only windows whose title contains this",
+            ),
+            p("since", Kind::Str, false, TIME_HELP),
+            p("until", Kind::Str, false, TIME_HELP),
+            p(
+                "limit",
+                Kind::Int { min: 1, max: 50 },
+                false,
+                "Most results (default 10)",
+            ),
+        ],
+        read_only: true,
+    },
+    Def {
+        name: "recent",
+        title: "Recent moments",
+        description: "The most recent moments, newest first, or those at or before a time. Each is one stretch of time \
+                      a screen showed the same picture.",
+        params: &[
+            p("before", Kind::Str, false, TIME_HELP),
+            p(
+                "limit",
+                Kind::Int { min: 1, max: 100 },
+                false,
+                "Most results (default 20)",
+            ),
+        ],
+        read_only: true,
+    },
+    Def {
+        name: "moment_at",
+        title: "What was on screen at a time",
+        description: "The moment on screen at a given time (or the nearest one before it), on any machine.",
+        params: &[p("time", Kind::Str, true, TIME_HELP)],
+        read_only: true,
+    },
+    Def {
+        name: "get_moment",
+        title: "Moment details",
+        description: "Everything about one moment: time, machine, app, window, and the full recognized text (optionally \
+                      with each line's position on screen).",
+        params: &[
+            p(
+                "moment",
+                Kind::Str,
+                true,
+                "A moment id from search, recent or moment_at (e.g. this:123)",
+            ),
+            p(
+                "include_lines",
+                Kind::Bool,
+                false,
+                "Also return each text line with its box in screen pixels",
+            ),
+        ],
+        read_only: true,
+    },
+    Def {
+        name: "get_screenshot",
+        title: "Moment screenshot",
+        description: "The picture of one moment (WebP). Only available when the person allowed screenshots for agents.",
+        params: &[p("moment", Kind::Str, true, "A moment id (e.g. this:123)")],
+        read_only: true,
+    },
+    Def {
+        name: "list_gaps",
+        title: "Gaps in recording",
+        description: "Stretches with nothing recorded and why: recorder off, stopped unexpectedly, paused, idle or locked, \
+                      or nothing stored while recording. A screen that did not change is never a gap.",
+        params: &[
+            p(
+                "since",
+                Kind::Str,
+                false,
+                "Default 24h ago. Same forms as other times",
+            ),
+            p(
+                "until",
+                Kind::Str,
+                false,
+                "Default now. Same forms as other times",
+            ),
+            p(
+                "min_minutes",
+                Kind::Int { min: 1, max: 1440 },
+                false,
+                "Shortest gap to report (default 1)",
+            ),
+        ],
+        read_only: true,
+    },
+    Def {
+        name: "list_sources",
+        title: "Machines in this history",
+        description: "The machines whose history is here (this computer and any imported ones), with their time spans \
+                      inside the period agents may see.",
+        params: &[],
+        read_only: true,
+    },
+    Def {
+        name: "get_status",
+        title: "rsRewind status",
+        description: "Whether rsRewind is recording, paused or stopped, and what agents may access (and how the person \
+                      can change that).",
+        params: &[],
+        read_only: true,
+    },
+    Def {
+        name: "pause_recording",
+        title: "Pause recording",
+        description: "Pause recording, for some minutes or until the person resumes it. It never shortens or ends a pause \
+                      already in force. Agents cannot resume recording or delete history; those stay with the person.",
+        params: &[p(
+            "minutes",
+            Kind::Int { min: 1, max: 1440 },
+            false,
+            "Omit to pause until resumed",
+        )],
+        read_only: false,
+    },
+];
+
+fn schema(def: &Def) -> Value {
+    let mut properties = Map::new();
+    for param in def.params {
+        let mut s = match param.kind {
+            Kind::Str => json!({ "type": "string" }),
+            Kind::Bool => json!({ "type": "boolean" }),
+            Kind::Int { min, max } => json!({ "type": "integer", "minimum": min, "maximum": max }),
+        };
+        s["description"] = json!(param.description);
+        properties.insert(param.name.into(), s);
+    }
+    let required: Vec<&str> = def
+        .params
+        .iter()
+        .filter(|p| p.required)
+        .map(|p| p.name)
+        .collect();
+    let mut schema =
+        json!({ "type": "object", "properties": properties, "additionalProperties": false });
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
+}
+
+/// The top-level typed result contract; nested records remain extensible for future metadata.
+fn output_schema(name: &str) -> Option<Value> {
+    let fields: &[(&str, Value)] = match name {
+        "search" | "recent" => &[(
+            "moments",
+            json!({"type":"array", "maxItems":100, "items":{"type":"object"}}),
+        )],
+        "moment_at" => &[("moment", json!({"type":["object", "null"]}))],
+        "get_moment" => &[
+            ("moment", json!({"type":"string"})),
+            ("time", json!({"type":"string"})),
+            ("machine", json!({"type":"string"})),
+            ("app", json!({"type":["string","null"]})),
+            ("window", json!({"type":["string","null"]})),
+            ("monitor", json!({"type":"integer"})),
+            ("width", json!({"type":"integer"})),
+            ("height", json!({"type":"integer"})),
+            ("text_status", json!({"type":"string"})),
+            ("text", json!({"type":"string", "maxLength":MAX_TEXT_CHARS})),
+            ("truncated", json!({"type":"boolean"})),
+            (
+                "lines",
+                json!({"type":["array","null"], "items":{"type":"object"}}),
+            ),
+        ],
+        "list_gaps" => &[
+            (
+                "gaps",
+                json!({"type":"array", "maxItems":MAX_ROWS, "items":{"type":"object"}}),
+            ),
+            ("truncated", json!({"type":"boolean"})),
+        ],
+        "list_sources" => &[
+            (
+                "machines",
+                json!({"type":"array", "maxItems":MAX_ROWS, "items":{"type":"object"}}),
+            ),
+            ("truncated", json!({"type":"boolean"})),
+        ],
+        "get_status" => &[
+            ("recorder", json!({"type":["object","null"]})),
+            ("agent_access", json!({"type":"object"})),
+        ],
+        "pause_recording" => &[
+            ("paused", json!({"type":"boolean"})),
+            ("minutes", json!({"type":["integer","null"]})),
+        ],
+        _ => return None,
+    };
+    let properties: Map<String, Value> = fields
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.clone()))
+        .collect();
+    let required: Vec<&str> = fields.iter().map(|(key, _)| *key).collect();
+    Some(
+        json!({"type":"object", "properties":properties, "required":required, "additionalProperties":false}),
+    )
+}
+
+/// Rejects unknown, missing, mistyped and out-of-range arguments: an argument the tool cannot use
+/// exactly as given is an error, never a silent default.
+fn validate(def: &Def, args: &Value) -> Result<(), String> {
+    let empty = Map::new();
+    let given = args.as_object().unwrap_or(&empty);
+    for (key, value) in given {
+        let Some(param) = def.params.iter().find(|p| p.name == key) else {
+            return Err(format!(
+                "{} has no argument '{}'",
+                def.name,
+                key.chars().take(40).collect::<String>()
+            ));
+        };
+        let fine = match param.kind {
+            Kind::Str => value
+                .as_str()
+                .is_some_and(|s| s.chars().count() <= MAX_ARG_CHARS),
+            Kind::Bool => value.is_boolean(),
+            Kind::Int { min, max } => value.as_i64().is_some_and(|n| (min..=max).contains(&n)),
+        };
+        if !fine {
+            let expected = match param.kind {
+                Kind::Str => format!("a string of at most {MAX_ARG_CHARS} characters"),
+                Kind::Bool => "true or false".to_string(),
+                Kind::Int { min, max } => format!("an integer from {min} to {max}"),
+            };
+            return Err(format!("{}: '{}' must be {expected}", def.name, param.name));
+        }
+    }
+    for param in def.params.iter().filter(|p| p.required) {
+        if !given.contains_key(param.name) {
+            return Err(format!("{} needs '{}'", def.name, param.name));
+        }
+    }
+    Ok(())
 }
 
 /// Every tool name, whatever the ceiling (for parity checks).
 pub fn all_names() -> Vec<&'static str> {
-    defs().into_iter().map(|d| d.name).collect()
+    DEFS.iter().map(|d| d.name).collect()
 }
 
 /// Whether the ceiling lets this tool be listed and called; `Err` says why not.
@@ -191,7 +365,7 @@ fn allowed(ceiling: &Ceiling, name: &str) -> Result<(), String> {
     }
     if !ceiling.enabled {
         return Err("rsRewind's agent access is turned off. The person can turn it on with `rsrewind mcp --enable` \
-                    (which explains what is shared), then restart this connection."
+                    (which explains what is shared)."
             .into());
     }
     if name == "get_screenshot" && !ceiling.allow_screenshots {
@@ -206,34 +380,46 @@ fn allowed(ceiling: &Ceiling, name: &str) -> Result<(), String> {
 
 /// The advertised tools for this ceiling.
 pub fn list(ceiling: &Ceiling) -> Vec<Value> {
-    defs()
-        .into_iter()
+    DEFS.iter()
         .filter(|d| allowed(ceiling, d.name).is_ok())
         .map(|d| {
-            json!({
+            let mut tool = json!({
                 "name": d.name,
                 "title": d.title,
                 "description": d.description,
-                "inputSchema": (d.schema)(),
+                "inputSchema": schema(d),
                 "annotations": {
                     "title": d.title,
                     "readOnlyHint": d.read_only,
                     "destructiveHint": false,
-                    "idempotentHint": d.idempotent,
+                    "idempotentHint": d.read_only,
                     "openWorldHint": false,
                 },
-            })
+            });
+            if let Some(schema) = output_schema(d.name) {
+                tool["outputSchema"] = schema;
+            }
+            tool
         })
         .collect()
 }
 
-pub fn call(server: &McpServer, ceiling: &Ceiling, name: &str, args: &Value) -> ToolResult {
-    if !defs().iter().any(|d| d.name == name) {
-        return Err(ToolError::Unknown);
-    }
-    allowed(ceiling, name).map_err(ToolError::Refused)?;
+pub fn call(
+    server: &McpServer,
+    ceiling: &Ceiling,
+    name: &str,
+    args: &Value,
+) -> Result<Done, ToolError> {
+    let def = DEFS
+        .iter()
+        .find(|d| d.name == name)
+        .ok_or(ToolError::Unknown)?;
+    let tool = def.name;
+    let refuse = |message: String| ToolError::Refused(tool, message);
+    allowed(ceiling, tool).map_err(refuse)?;
+    validate(def, args).map_err(refuse)?;
     let now = chrono::Local::now();
-    match name {
+    let result = match tool {
         "search" => search(server, ceiling, args, now),
         "recent" => recent(server, ceiling, args, now),
         "moment_at" => moment_at(server, ceiling, args, now),
@@ -243,16 +429,17 @@ pub fn call(server: &McpServer, ceiling: &Ceiling, name: &str, args: &Value) -> 
         "list_sources" => list_sources(server, ceiling),
         "get_status" => get_status(server, ceiling),
         "pause_recording" => pause(server, args),
-        _ => Err(ToolError::Unknown),
-    }
+        _ => return Err(ToolError::Unknown),
+    };
+    result.map(|done| Done { tool, ..done }).map_err(refuse)
 }
 
 fn history(server: &McpServer) -> History {
     History::open(&server.data)
 }
 
-fn read_err(e: impl std::fmt::Display) -> ToolError {
-    refused(format!("could not read history: {e}"))
+fn read_err(e: impl std::fmt::Display) -> String {
+    format!("could not read history: {e}")
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
@@ -266,17 +453,13 @@ fn time_arg(
     args: &Value,
     key: &str,
     now: chrono::DateTime<chrono::Local>,
-) -> Result<Option<Timestamp>, ToolError> {
-    str_arg(args, key)
-        .map(|t| parse_time(t, now).map_err(ToolError::Refused))
-        .transpose()
+) -> Result<Option<Timestamp>, String> {
+    str_arg(args, key).map(|t| parse_time(t, now)).transpose()
 }
 
-fn limit_arg(args: &Value, default: u32, max: u32) -> u32 {
-    args.get("limit")
-        .and_then(Value::as_u64)
-        .map_or(default, |n| u32::try_from(n).unwrap_or(max))
-        .clamp(1, max)
+/// Validated already; the default applies only when the argument is absent.
+fn int_arg(args: &Value, key: &str, default: i64) -> i64 {
+    args.get(key).and_then(Value::as_i64).unwrap_or(default)
 }
 
 /// Display names: "this machine" or the probe's label (with its short id).
@@ -309,8 +492,8 @@ fn search(
     args: &Value,
     now: chrono::DateTime<chrono::Local>,
 ) -> ToolResult {
-    let text = str_arg(args, "query").ok_or_else(|| refused("search needs a query"))?;
-    let limit = limit_arg(args, 10, 50);
+    let text = str_arg(args, "query").ok_or("search needs a non-empty query")?;
+    let limit = int_arg(args, "limit", 10) as u32;
     let query = SearchQuery {
         text: text.to_string(),
         since: ceiling.clamp_since(time_arg(args, "since", now)?),
@@ -345,8 +528,8 @@ fn search(
             })
         })
         .collect();
-    let text = if hits.is_empty() {
-        format!("No moments match \"{text}\".")
+    let summary = if hits.is_empty() {
+        "No moments match.".to_string()
     } else {
         hits.iter()
             .map(|h| {
@@ -364,7 +547,7 @@ fn search(
             .join("\n")
     };
     let n = items.len();
-    ok(text, json!({ "moments": items }), n)
+    ok(summary, json!({ "moments": items }), n)
 }
 
 fn entry_json(
@@ -402,7 +585,7 @@ fn recent(
     args: &Value,
     now: chrono::DateTime<chrono::Local>,
 ) -> ToolResult {
-    let limit = limit_arg(args, 20, 100);
+    let limit = int_arg(args, "limit", 20) as u32;
     let before = time_arg(args, "before", now)?.map(TimelineCursor::at_or_before);
     let history = history(server);
     let names = machines(&history);
@@ -413,7 +596,7 @@ fn recent(
     entries.retain(|e| ceiling.admits(e.source) && ceiling.admits_time(e.started_at));
     entries.sort_by_key(|e| std::cmp::Reverse(e.cursor()));
     entries.truncate(limit as usize);
-    let text = if entries.is_empty() {
+    let summary = if entries.is_empty() {
         "Nothing recorded in the time agents may see.".to_string()
     } else {
         entries
@@ -424,7 +607,7 @@ fn recent(
     };
     let items: Vec<Value> = entries.iter().map(|e| entry_json(&names, e)).collect();
     let n = items.len();
-    ok(text, json!({ "moments": items }), n)
+    ok(summary, json!({ "moments": items }), n)
 }
 
 fn moment_at(
@@ -433,9 +616,9 @@ fn moment_at(
     args: &Value,
     now: chrono::DateTime<chrono::Local>,
 ) -> ToolResult {
-    let at = time_arg(args, "time", now)?.ok_or_else(|| refused("moment_at needs a time"))?;
+    let at = time_arg(args, "time", now)?.ok_or("moment_at needs a time")?;
     if !ceiling.admits_time(at) {
-        return Err(refused("That time is older than agents may see."));
+        return Err("That time is older than agents may see.".into());
     }
     let history = history(server);
     let names = machines(&history);
@@ -467,43 +650,57 @@ fn checked_detail(
     history: &History,
     ceiling: &Ceiling,
     args: &Value,
-) -> Result<(Option<SourceId>, rsrewind_core::VisualDetail), ToolError> {
-    let text =
-        str_arg(args, "moment").ok_or_else(|| refused("needs a moment id (e.g. this:123)"))?;
+) -> Result<(Option<SourceId>, rsrewind_core::VisualDetail), String> {
+    let text = str_arg(args, "moment").ok_or("needs a moment id (e.g. this:123)")?;
     let (source, id) =
-        parse_moment_id(text).ok_or_else(|| refused(format!("'{text}' is not a moment id")))?;
+        parse_moment_id(text).ok_or("that is not a moment id (they look like this:123)")?;
     if !ceiling.admits(source) {
-        return Err(refused("That machine's history is not shared with agents."));
+        return Err("That machine's history is not shared with agents.".into());
     }
     let detail = history
         .visual_detail(source, id)
         .map_err(read_err)?
-        .ok_or_else(|| refused(format!("No moment {text} (it may have been forgotten)")))?;
+        .ok_or("No such moment (it may have been forgotten).")?;
     if !ceiling.admits_time(detail.captured_at) {
-        return Err(refused("That moment is older than agents may see."));
+        return Err("That moment is older than agents may see.".into());
     }
     Ok((source, detail))
+}
+
+/// Text cut to `max` characters; whether anything was cut.
+fn cut(text: &str, max: usize) -> (String, bool) {
+    let mut chars = text.chars();
+    let out: String = chars.by_ref().take(max).collect();
+    (out, chars.next().is_some())
 }
 
 fn get_moment(server: &McpServer, ceiling: &Ceiling, args: &Value) -> ToolResult {
     let history = history(server);
     let names = machines(&history);
     let (source, d) = checked_detail(&history, ceiling, args)?;
-    let mut text_out: String = d.ocr_text.chars().take(MAX_TEXT_CHARS).collect();
-    let truncated = d.ocr_text.chars().count() > MAX_TEXT_CHARS;
-    if truncated {
-        text_out.push_str("\n[…text truncated]");
-    }
+    // One budget for everything textual this response carries.
+    let mut budget = MAX_TEXT_CHARS;
+    let (text_out, mut truncated) = cut(&d.ocr_text, budget);
+    budget -= text_out.chars().count();
     let include_lines = args
         .get("include_lines")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let lines: Option<Vec<Value>> = include_lines.then(|| {
-        d.blocks
-            .iter()
-            .take(500)
-            .map(|b| json!({ "text": b.text, "x": b.x, "y": b.y, "width": b.width, "height": b.height }))
-            .collect()
+        let mut lines = Vec::new();
+        for b in &d.blocks {
+            if budget == 0 {
+                truncated = true;
+                break;
+            }
+            let (line, cut_line) = cut(&b.text, MAX_LINE_CHARS.min(budget));
+            truncated |= cut_line;
+            budget -= line.chars().count();
+            lines.push(
+                json!({ "text": line, "x": b.x, "y": b.y, "width": b.width, "height": b.height }),
+            );
+        }
+        lines
     });
     let header = format!(
         "{} · {} · {} — {}\nscreen {}x{}, text {}",
@@ -515,10 +712,10 @@ fn get_moment(server: &McpServer, ceiling: &Ceiling, args: &Value) -> ToolResult
         d.height,
         d.ocr_status
     );
-    let summary = if text_out.is_empty() {
-        format!("{header}\n(no recognized text)")
-    } else {
-        format!("{header}\n\n{text_out}")
+    let summary = match (text_out.is_empty(), truncated) {
+        (true, _) => format!("{header}\n(no recognized text)"),
+        (false, false) => format!("{header}\n\n{text_out}"),
+        (false, true) => format!("{header}\n\n{text_out}\n[…cut to fit]"),
     };
     ok(
         summary,
@@ -533,7 +730,7 @@ fn get_moment(server: &McpServer, ceiling: &Ceiling, args: &Value) -> ToolResult
             "height": d.height,
             "text_status": d.ocr_status,
             "text": text_out,
-            "text_truncated": truncated,
+            "truncated": truncated,
             "lines": lines,
         }),
         1,
@@ -548,7 +745,7 @@ fn get_screenshot(server: &McpServer, ceiling: &Ceiling, args: &Value) -> ToolRe
         .frame_bytes(source, &d.media_path)
         .map_err(read_err)?;
     if bytes.len() > MAX_SCREENSHOT_BYTES {
-        return Err(refused("That picture is too large to send."));
+        return Err("That picture is too large to send.".into());
     }
     let caption = format!(
         "{} · {} · {} — {} ({}x{})",
@@ -560,6 +757,7 @@ fn get_screenshot(server: &McpServer, ceiling: &Ceiling, args: &Value) -> ToolRe
         d.height
     );
     Ok(Done {
+        tool: "",
         result: json!({
             "content": [
                 { "type": "image", "data": ceiling::base64(&bytes), "mimeType": "image/webp" },
@@ -577,16 +775,18 @@ fn list_gaps(
     args: &Value,
     now: chrono::DateTime<chrono::Local>,
 ) -> ToolResult {
-    let since = time_arg(args, "since", now)?
-        .unwrap_or_else(|| Timestamp(now.timestamp_millis() - 86_400_000));
+    let now_ts = Timestamp(now.timestamp_millis());
+    let since =
+        time_arg(args, "since", now)?.unwrap_or_else(|| now_ts.saturating_sub_millis(86_400_000));
     let since = ceiling.clamp_since(Some(since)).unwrap_or(since);
-    let until = time_arg(args, "until", now)?.unwrap_or(Timestamp(now.timestamp_millis()));
-    let min_ms = args
-        .get("min_minutes")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .max(1) as i64
-        * 60_000;
+    let until = time_arg(args, "until", now)?.unwrap_or(now_ts);
+    if until <= since {
+        return Err("until must be after since.".into());
+    }
+    if until.0.saturating_sub(since.0) > 366 * 86_400_000 {
+        return Err("Request at most 366 days of gaps at a time.".into());
+    }
+    let min_ms = int_arg(args, "min_minutes", 1) * 60_000; // 1..=1440 by validation
     let history = history(server);
     let names = machines(&history);
     let mut gaps = Vec::new();
@@ -599,7 +799,9 @@ fn list_gaps(
     }
     gaps.retain(|g| ceiling.admits(g.source));
     gaps.sort_by_key(|g| (g.from, g.source));
-    let text = if gaps.is_empty() {
+    let truncated = gaps.len() > MAX_ROWS;
+    gaps.truncate(MAX_ROWS);
+    let summary = if gaps.is_empty() {
         "No gaps: something was recorded throughout.".to_string()
     } else {
         gaps.iter()
@@ -624,32 +826,36 @@ fn list_gaps(
         })
         .collect();
     let n = items.len();
-    ok(text, json!({ "gaps": items }), n)
+    ok(summary, json!({ "gaps": items, "truncated": truncated }), n)
 }
 
 fn list_sources(server: &McpServer, ceiling: &Ceiling) -> ToolResult {
     let history = history(server);
-    let sources: Vec<_> = history
-        .sources()
+    // Counts and spans inside the window only; machines with nothing in it are not listed.
+    let mut sources: Vec<_> = history
+        .sources_since(ceiling.oldest)
         .map_err(read_err)?
         .into_iter()
-        .filter(|s| ceiling.admits(s.source))
+        .filter(|s| ceiling.admits(s.source) && s.observations > 0)
         .collect();
+    let truncated = sources.len() > MAX_ROWS;
+    sources.truncate(MAX_ROWS);
     let items: Vec<Value> = sources
         .iter()
         .map(|s| {
+            let local = s.kind == SourceKind::Local;
             json!({
                 "machine": s.source.map_or_else(|| "this".to_string(), |id| id.to_string()),
-                "name": s.label.clone().unwrap_or_else(|| if s.kind == SourceKind::Local { "this machine".into() } else { "unnamed".into() }),
-                "kind": if s.kind == SourceKind::Local { "this machine" } else { "imported" },
+                "name": s.label.clone().unwrap_or_else(|| if local { "this machine".into() } else { "unnamed".into() }),
+                "kind": if local { "this machine" } else { "imported" },
                 "moments": s.observations,
                 "first": s.first.map(time_text),
                 "last": s.last.map(time_text),
             })
         })
         .collect();
-    let text = if items.is_empty() {
-        "No history yet.".to_string()
+    let summary = if items.is_empty() {
+        "No history in the period agents may see.".to_string()
     } else {
         items
             .iter()
@@ -665,14 +871,18 @@ fn list_sources(server: &McpServer, ceiling: &Ceiling) -> ToolResult {
             .join("\n")
     };
     let n = items.len();
-    ok(text, json!({ "machines": items }), n)
+    ok(
+        summary,
+        json!({ "machines": items, "truncated": truncated }),
+        n,
+    )
 }
 
-fn run_cli(server: &McpServer, args: &[String]) -> Result<std::process::Output, ToolError> {
+fn run_cli(server: &McpServer, args: &[&str]) -> Result<std::process::Output, String> {
     let exe = server
         .exe
         .as_ref()
-        .ok_or_else(|| refused("the rsrewind executable is not available"))?;
+        .ok_or("the rsrewind executable is not available")?;
     let mut command = Command::new(exe);
     command
         .arg("--data-dir")
@@ -687,34 +897,49 @@ fn run_cli(server: &McpServer, args: &[String]) -> Result<std::process::Output, 
     }
     command
         .output()
-        .map_err(|e| refused(format!("could not run rsrewind: {e}")))
+        .map_err(|e| format!("could not run rsrewind: {e}"))
 }
 
+/// Operational state only, from an explicit list of fields: never history statistics (how much was
+/// recorded and when), which the ceiling would otherwise have to filter.
 fn get_status(server: &McpServer, ceiling: &Ceiling) -> ToolResult {
+    let config = server.config();
     let access = json!({
         "enabled": ceiling.enabled,
         "screenshots": ceiling.allow_screenshots,
-        "window_days": server.config.max_age_days,
-        "machines": if server.config.sources.is_empty() { json!("all") } else { json!(server.config.sources) },
+        "window_days": config.max_age_days,
+        "machines": if config.sources.is_empty() { json!("all") } else { json!(config.sources) },
     });
-    let recorder = run_cli(server, &["status".into(), "--json".into()])
+    let status = run_cli(server, &["status", "--json"])
         .ok()
         .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok());
+    let recorder = status.map(|r| {
+        json!({
+            "state": r.get("state").and_then(Value::as_str),
+            "paused_until": r.get("paused_until").and_then(Value::as_i64).map(|ms| time_text(Timestamp(ms))),
+            "privacy_rules_enforced": r.get("privacy_unenforced").is_none_or(Value::is_null),
+        })
+    });
     let state = recorder
         .as_ref()
         .and_then(|r| r["state"].as_str())
-        .unwrap_or("unknown");
-    let mut text = format!("Recorder: {state}.");
+        .unwrap_or("unknown")
+        .to_string();
+    let mut summary = format!("Recorder: {state}.");
     if !ceiling.enabled {
-        text.push_str(
+        summary.push_str(
             " Agent access is OFF: only this status is available. To turn it on, the person runs \
-             `rsrewind mcp --enable` (it explains what is shared), then restarts this connection.",
+             `rsrewind mcp --enable` (it explains what is shared).",
         );
     } else {
-        text.push_str(&format!(
-            " Agents may read the last {} days{}; screenshots {}.",
-            server.config.max_age_days,
-            if server.config.sources.is_empty() {
+        let window = if config.max_age_days == 0 {
+            "all history".to_string()
+        } else {
+            format!("the last {} days", config.max_age_days)
+        };
+        summary.push_str(&format!(
+            " Agents may read {window}{}; screenshots {}.",
+            if config.sources.is_empty() {
                 " on every machine"
             } else {
                 " on the listed machines"
@@ -726,41 +951,85 @@ fn get_status(server: &McpServer, ceiling: &Ceiling) -> ToolResult {
             }
         ));
     }
-    let recorder = recorder.map(|r| {
-        json!({
-            "state": r["state"], "paused_until": r["paused_until"], "privacy_unenforced": r["privacy_unenforced"],
-            "stats": r["stats"],
-        })
-    });
     ok(
-        text,
+        summary,
         json!({ "recorder": recorder, "agent_access": access }),
         1,
     )
 }
 
 fn pause(server: &McpServer, args: &Value) -> ToolResult {
-    let minutes = args
-        .get("minutes")
-        .and_then(Value::as_u64)
-        .map(|m| m.clamp(1, 1440));
-    let mut cli = vec!["pause".to_string()];
-    if let Some(m) = minutes {
-        cli.extend(["--minutes".to_string(), m.to_string()]);
+    let minutes = args.get("minutes").and_then(Value::as_i64); // 1..=1440 by validation
+    let minutes_text = minutes.map(|m| m.to_string());
+    let mut cli = vec!["pause", "--extend-only"];
+    if let Some(m) = &minutes_text {
+        cli.extend(["--minutes", m.as_str()]);
     }
     let out = run_cli(server, &cli)?;
     if !out.status.success() {
-        return Err(refused(format!(
+        return Err(format!(
             "could not pause: {}",
             String::from_utf8_lossy(&out.stderr)
                 .lines()
                 .last()
                 .unwrap_or("rsrewind pause failed")
-        )));
+        ));
     }
-    let text = match minutes {
-        Some(m) => format!("Recording paused for {m} minutes."),
-        None => "Recording paused until the person resumes it.".to_string(),
+    let summary = match minutes {
+        Some(m) => format!(
+            "Recording is paused for at least {m} minutes (a longer pause already in force is kept)."
+        ),
+        None => "Recording is paused until the person resumes it.".to_string(),
     };
-    ok(text, json!({ "paused": true, "minutes": minutes }), 1)
+    ok(summary, json!({ "paused": true, "minutes": minutes }), 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn def(name: &str) -> &'static Def {
+        DEFS.iter().find(|d| d.name == name).unwrap_or(&DEFS[0])
+    }
+
+    #[test]
+    fn arguments_are_checked_strictly() {
+        let pause = def("pause_recording");
+        assert_eq!(pause.name, "pause_recording");
+        assert!(validate(pause, &json!({})).is_ok());
+        assert!(validate(pause, &json!({ "minutes": 5 })).is_ok());
+        assert!(
+            validate(pause, &json!({ "minutes": "5" })).is_err(),
+            "a string is not an integer"
+        );
+        assert!(validate(pause, &json!({ "minutes": 0 })).is_err());
+        assert!(validate(pause, &json!({ "minutes": 99_999 })).is_err());
+        assert!(
+            validate(pause, &json!({ "minuets": 5 })).is_err(),
+            "unknown argument"
+        );
+        let recent = def("recent");
+        assert!(validate(recent, &json!({ "before": 123 })).is_err());
+        assert!(validate(recent, &json!({ "limit": -1 })).is_err());
+        let get = def("get_moment");
+        assert!(validate(get, &json!({})).is_err(), "missing required");
+        assert!(validate(get, &json!({ "moment": "x".repeat(MAX_ARG_CHARS + 1) })).is_err());
+    }
+
+    #[test]
+    fn schemas_match_what_is_validated() {
+        for def in DEFS {
+            let s = schema(def);
+            let props = s["properties"].as_object().map_or(0, |p| p.len());
+            assert_eq!(props, def.params.len(), "{}", def.name);
+            assert_eq!(s["additionalProperties"], false);
+        }
+    }
+
+    #[test]
+    fn cut_reports_truncation() {
+        assert_eq!(cut("abc", 5), ("abc".into(), false));
+        assert_eq!(cut("abcdef", 3), ("abc".into(), true));
+        assert_eq!(cut("ééé", 2), ("éé".into(), true));
+    }
 }

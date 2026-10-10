@@ -196,11 +196,64 @@ impl CaptureState {
             other => other,
         }
     }
+
+    /// A pause that never shortens or ends an existing one: what an agent may ask for. An indefinite
+    /// pause stays indefinite; between two deadlines the later wins; with no pause in force (or an
+    /// expired one) the request applies as given. Errors and stops are left alone.
+    pub fn extend_pause(self, requested_until: Option<Timestamp>, now: Timestamp) -> Self {
+        match self.effective_at(now) {
+            Self::Paused { until: None } => self,
+            Self::Paused {
+                until: Some(current),
+            } => Self::Paused {
+                until: requested_until.map(|r| r.max(current)),
+            },
+            Self::Recording => Self::Paused {
+                until: requested_until,
+            },
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_pause_never_shortens_or_ends_one_in_force() {
+        let now = Timestamp(1_000);
+        let later = Some(Timestamp(5_000));
+        let sooner = Some(Timestamp(2_000));
+        let indefinite = CaptureState::Paused { until: None };
+        // The person's indefinite pause survives an agent's one-minute pause.
+        assert_eq!(indefinite.extend_pause(sooner, now), indefinite);
+        // A longer person's pause is not shortened; a shorter one is extended.
+        let long = CaptureState::Paused { until: later };
+        assert_eq!(long.extend_pause(sooner, now), long);
+        assert_eq!(
+            CaptureState::Paused { until: sooner }.extend_pause(later, now),
+            long
+        );
+        // An indefinite request outlasts any deadline.
+        assert_eq!(long.extend_pause(None, now), indefinite);
+        // Nothing in force (recording, or a pause that already ended): the request applies.
+        assert_eq!(
+            CaptureState::Recording.extend_pause(sooner, now),
+            CaptureState::Paused { until: sooner }
+        );
+        let expired = CaptureState::Paused {
+            until: Some(Timestamp(500)),
+        };
+        assert_eq!(
+            expired.extend_pause(sooner, now),
+            CaptureState::Paused { until: sooner }
+        );
+        assert_eq!(
+            CaptureState::Stopped.extend_pause(sooner, now),
+            CaptureState::Stopped
+        );
+    }
 
     #[test]
     fn event_kind_round_trips() {

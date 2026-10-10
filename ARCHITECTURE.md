@@ -488,3 +488,7 @@ functionality.
   `clippy::unwrap_used`, `clippy::expect_used`, `clippy::dbg_macro`, and `clippy::todo` — a
   warning here is meant to be investigated, not routinely allowed through, in line with the
   "no `unwrap()`/`expect()` in runtime code" rule in `docs/mvp-contract.md`.
+
+## macOS platform (2026-10-10)
+
+Native Apple APIs are behind the same recorder platform seam; Swift bridges are compiled into static archives during the macOS Rust build and linked into the single executable. The menu bar remains a separate CLI-only process, and the UI keeps its read-only query boundary. Storage and per-monitor change detection are shared with Windows/Linux. Hosted ARM64 CI produces development artifacts; interactive permission and desktop acceptance are tracked in `docs/macos.md`.
