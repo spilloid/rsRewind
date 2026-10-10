@@ -1,6 +1,6 @@
 # Astra (gpt-6-astra, high, read-only) usability roleplay of v0.0.5 @ 9f87d7a
 
-Recorded verbatim (2026-10-09). The maintainer asked for an adversarial usability evaluation as a user who "just wants to remember shit easily". It is a walkthrough of the repository (docs, site, CLI help, UI and tray strings, installer), not a live GUI test; its scores and Sam's reactions are its own inferences. Spot-checked by the orchestrator before filing: the Start-menu shortcut runs `ui` only (`installer/rsrewind.wxs:105`), the empty window has no start action (`crates/rsrewind-ui/src/app.rs:810`), the MSI adds no PATH entry, and `Text not recognized yet.` is the Linux detail-pane wording (`app.rs:1259`). Absolute paths in links below are from the reviewer's checkout.
+Recorded verbatim (2026-10-09). The maintainer asked for an adversarial usability evaluation as a user who "just wants to remember shit easily". It is a walkthrough of the repository (docs, site, CLI help, UI and tray strings, installer), not a live GUI test; its scores and Sam's reactions are its own inferences. Spot-checked by the orchestrator before filing: the Start-menu shortcut runs `ui` only (`installer/rsrewind.wxs:105`), the empty window has no start action (`crates/rsrewind-ui/src/app.rs:810`), the MSI adds no PATH entry, and `Text not recognized yet.` is the Linux detail-pane wording (`app.rs:1259`). Links were made relative to this repository; nothing else was edited.
 
 ---
 
