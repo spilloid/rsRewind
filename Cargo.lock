@@ -2932,8 +2932,10 @@ dependencies = [
 name = "rsrewind-ocr"
 version = "0.0.5"
 dependencies = [
+ "png",
  "rsrewind-core",
  "thiserror 2.0.21",
+ "webp",
  "windows 0.62.2",
 ]
 

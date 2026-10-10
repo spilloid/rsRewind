@@ -1,0 +1,19 @@
+# Third-party notices for releases (docs/licensing.md): `cargo about generate about.hbs -o THIRD-PARTY-NOTICES.html`.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "CC0-1.0",
+    "0BSD",
+    "Unicode-3.0",
+]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+# One notices file for every release asset: the union of the Windows and Linux dependency graphs.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]

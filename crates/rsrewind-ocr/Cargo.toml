@@ -10,8 +10,15 @@ publish.workspace = true
 rsrewind-core.workspace = true
 thiserror.workspace = true
 
-# Windows.Media.Ocr: the crate is empty elsewhere (a Linux engine is a separate decision; see the
-# Linux port motion).
+# Linux: the system's Tesseract, run as a child process (nothing linked, nothing downloaded); the frame
+# is handed over as a PNG.
+[target.'cfg(target_os = "linux")'.dependencies]
+png = "0.18"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+webp.workspace = true
+
+# Windows.Media.Ocr.
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Media_Ocr",

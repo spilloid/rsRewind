@@ -7,8 +7,8 @@
 //! heartbeat); one recorder per data folder is an advisory lock on `<data>/recorder.lock`.
 
 use crate::platform::{
-    CaptureBackend, DisplayHandle, FrameSource, IdleClock, Lifecycle, Platform, PlatformFault,
-    ScreenContext, SingleInstance, SystemClock,
+    CaptureBackend, DisplayHandle, FrameSource, IdleClock, Lifecycle, OcrBackend, OcrFactory,
+    Platform, PlatformFault, Recognition, ScreenContext, SingleInstance, SystemClock,
 };
 use crate::recorder::{RunOptions, run_with};
 use anyhow::{Context, bail};
@@ -66,10 +66,36 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         }),
         clock: Arc::new(SystemClock::new()),
         lifecycle: Box::new(guard),
-        ocr: None,
+        ocr: Some(tesseract_factory(
+            Some(options.config.ocr.language.clone()).filter(|l| !l.trim().is_empty()),
+        )),
         hostname: hostname(),
     };
     run_with(options, platform)
+}
+
+/// Text recognition with the system's Tesseract, checked on the OCR thread. If it is not installed
+/// the factory fails, moments stay `pending`, and `doctor` says how to install it.
+fn tesseract_factory(language: Option<String>) -> OcrFactory {
+    Box::new(move || {
+        rsrewind_ocr::TesseractEngine::new(language.as_deref())
+            .map(|engine| Box::new(Tesseract(engine)) as Box<dyn OcrBackend>)
+    })
+}
+
+struct Tesseract(rsrewind_ocr::TesseractEngine);
+
+impl OcrBackend for Tesseract {
+    fn engine_name(&self) -> &'static str {
+        rsrewind_ocr::ENGINE_NAME
+    }
+
+    fn recognize(&mut self, frame: &BgraFrame) -> Result<Recognition, String> {
+        self.0.recognize(frame).map(|out| Recognition {
+            blocks: out.blocks,
+            elapsed_ms: out.elapsed_ms,
+        })
+    }
 }
 
 /// Where the KWin script file lives: `$XDG_RUNTIME_DIR/rsrewind`, else the system temp folder.

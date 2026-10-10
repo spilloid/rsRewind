@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Text recognition on Linux.** The Plasma recorder now reads the text on screen with Tesseract, so Linux
+  history becomes searchable like Windows history, including moments recorded before this version, which
+  are worked through in the background. Install Tesseract from your distribution (Fedora/Bazzite:
+  `rpm-ostree install tesseract` or `brew install tesseract`; Debian/Ubuntu: `apt install tesseract-ocr`);
+  rsRewind runs it as a separate program on two threads and never downloads anything. Until it is
+  installed, moments wait and `rsrewind doctor` says what to do. Chosen by measurement over the pure-Rust
+  `ocrs`: on a real dark-mode screen Tesseract found 5 of 8 visible phrases in about 1.5 s, `ocrs` 1 of 8
+  in about 16 s.
+- **Third-party notices.** Every release now carries `THIRD-PARTY-NOTICES.html` (generated from the exact
+  dependency graph, including libwebp's BSD license), and CI rejects any dependency whose license is not on
+  the permissive allowlist. Policy and inventory: `docs/licensing.md`.
+
 ## [0.0.5] - 2026-10-09
 
 **Fifth release: always there, honest about the holes.** rsRewind gets a tray icon on Windows and

@@ -29,6 +29,7 @@ tracing-appender.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rsrewind-daemon.workspace = true
+rsrewind-ocr.workspace = true
 rsrewind-capture.workspace = true
 
 [target.'cfg(windows)'.dependencies]

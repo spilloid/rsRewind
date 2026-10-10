@@ -267,6 +267,22 @@ fn collect(data: &DataDir) -> Vec<Check> {
             }
         }
     }
+    #[cfg(target_os = "linux")]
+    if let Some(config) = &config {
+        let language = Some(config.ocr.language.as_str()).filter(|l| !l.trim().is_empty());
+        match rsrewind_ocr::TesseractEngine::new(language) {
+            Ok(engine) => checks.push(check(
+                "ocr",
+                Level::Ok,
+                format!("Tesseract ready (language {})", engine.language()),
+            )),
+            Err(message) => checks.push(check(
+                "ocr",
+                Level::Warn,
+                format!("no text recognition yet: {message}; recorded moments wait until then"),
+            )),
+        }
+    }
 
     // Privacy
     if let Some(config) = &config {
