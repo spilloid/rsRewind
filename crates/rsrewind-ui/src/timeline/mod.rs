@@ -40,6 +40,17 @@ pub struct Moment {
     pub accent: usize,
 }
 
+/// The moment on screen at `cursor` (Unix ms): the latest one that started at or before it, across all
+/// loaded lanes. `moments` are in timeline order (`TimelineEntry::cursor`). `None` before the first.
+pub fn moment_at(moments: &[Moment], cursor: f64) -> Option<usize> {
+    moments
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.entry.started_at.0 as f64 <= cursor)
+        .max_by_key(|(_, m)| m.entry.cursor())
+        .map(|(i, _)| i)
+}
+
 impl Moment {
     pub fn frame(&self) -> FrameKey {
         (self.entry.source, self.entry.visual_state_id)
@@ -460,6 +471,49 @@ where
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    fn moment(at: i64, event: i64, source: Option<rsrewind_core::SourceId>) -> Moment {
+        Moment {
+            entry: rsrewind_core::TimelineEntry {
+                event_id: rsrewind_core::EventId(event),
+                visual_state_id: rsrewind_core::VisualStateId(event),
+                started_at: rsrewind_core::Timestamp(at),
+                ended_at: rsrewind_core::Timestamp(at + 500),
+                application: None,
+                window_title: None,
+                monitor: None,
+                media_path: String::new(),
+                ocr_status: "done".into(),
+                source,
+            },
+            lane: 0,
+            accent: 0,
+        }
+    }
+
+    #[test]
+    fn the_stage_shows_the_latest_moment_started_at_or_before_the_cursor() {
+        let other = Some(rsrewind_core::SourceId::from_bytes([9; 16]));
+        let moments = vec![
+            moment(1_000, 1, None),
+            moment(2_000, 2, None),
+            moment(2_000, 1, other),
+            moment(5_000, 3, None),
+        ];
+        assert_eq!(moment_at(&moments, 500.0), None, "before the first moment");
+        assert_eq!(
+            moment_at(&moments, 1_000.0),
+            Some(0),
+            "exactly at its start"
+        );
+        assert_eq!(
+            moment_at(&moments, 4_999.0),
+            Some(2),
+            "ties at 2 s: the later in timeline order"
+        );
+        assert_eq!(moment_at(&moments, 9_000.0), Some(3), "after the last");
+        assert_eq!(moment_at(&[], 1.0), None);
+    }
 
     #[test]
     fn double_clicks_must_be_quick_and_close() {
