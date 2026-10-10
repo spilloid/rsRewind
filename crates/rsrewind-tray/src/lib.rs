@@ -5,12 +5,14 @@
 //! [`model`]): it opens no database and holds no capture, so closing or crashing it changes
 //! nothing about recording.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod icons;
 pub mod model;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+mod windows;
 
 use model::{Action, Status};
 use rsrewind_core::Timestamp;
@@ -22,6 +24,7 @@ use std::time::Duration;
 pub(crate) const POLL: Duration = Duration::from_secs(3);
 
 /// Runs `rsrewind` subcommands against one data folder.
+#[derive(Debug, Clone)]
 pub struct Runner {
     pub exe: PathBuf,
     pub data_dir: PathBuf,
@@ -34,6 +37,13 @@ impl Runner {
             .arg("--data-dir")
             .arg(&self.data_dir)
             .stdin(Stdio::null());
+        // The tray has no console; without this every status poll would flash a console window.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
         command
     }
 
@@ -80,7 +90,13 @@ pub fn run(runner: &Runner) -> anyhow::Result<()> {
     linux::run(runner)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Shows the tray icon until the user quits it.
+#[cfg(windows)]
+pub fn run(runner: &Runner) -> anyhow::Result<()> {
+    windows::run(runner)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn run(_: &Runner) -> anyhow::Result<()> {
-    anyhow::bail!("the tray icon is available on Linux so far; Windows and macOS are next")
+    anyhow::bail!("the tray icon is available on Linux and Windows so far; macOS is next")
 }

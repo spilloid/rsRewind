@@ -813,9 +813,60 @@ fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Resul
     Ok(ExitCode::SUCCESS)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Login startup on Windows: a value under the per-user `Run` key, which starts the tray (and,
+/// through it, the recorder) when you sign in.
+#[cfg(windows)]
+fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Result<ExitCode> {
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
+    };
+    use windows::core::w;
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = w!("rsRewind");
+    match toggle {
+        Toggle::On => {
+            let command = format!(
+                "\"{}\" --data-dir \"{}\" tray --start-recorder",
+                exe.display(),
+                data.root().display()
+            );
+            let wide: Vec<u16> = command.encode_utf16().chain([0]).collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 string whose byte length is passed with
+            // it; the key and value names are 'static literals.
+            let result = unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    key,
+                    name,
+                    REG_SZ.0,
+                    Some(wide.as_ptr().cast()),
+                    (wide.len() * 2) as u32,
+                )
+            };
+            if result != ERROR_SUCCESS {
+                bail!("could not set the login entry (error {})", result.0);
+            }
+            println!("rsRewind will start (tray icon and recorder) when you sign in.");
+        }
+        Toggle::Off => {
+            // SAFETY: 'static key and value names.
+            let result = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, name) };
+            if result == ERROR_SUCCESS {
+                println!("rsRewind no longer starts when you sign in.");
+            } else if result == ERROR_FILE_NOT_FOUND {
+                println!("rsRewind was not set to start when you sign in.");
+            } else {
+                bail!("could not remove the login entry (error {})", result.0);
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn set_autostart(_: &std::path::Path, _: &DataDir, _: Toggle) -> Result<ExitCode> {
-    bail!("starting at login is set up on Linux so far")
+    bail!("starting at login is set up on Linux and Windows so far")
 }
 
 /// `rsrewind ui --appearance`.

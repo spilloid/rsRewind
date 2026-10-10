@@ -3,12 +3,27 @@
 
 use crate::model::{self, Base, Status};
 
-/// `(size, red PNG, green PNG)`.
-const SIZES: [(u32, &[u8], &[u8]); 5] = [
+/// `(size, red PNG, green PNG)`, smallest first.
+const SIZES: [(u32, &[u8], &[u8]); 8] = [
+    (
+        16,
+        include_bytes!("../../../assets/tray/red-16.png"),
+        include_bytes!("../../../assets/tray/green-16.png"),
+    ),
+    (
+        20,
+        include_bytes!("../../../assets/tray/red-20.png"),
+        include_bytes!("../../../assets/tray/green-20.png"),
+    ),
     (
         22,
         include_bytes!("../../../assets/tray/red-22.png"),
         include_bytes!("../../../assets/tray/green-22.png"),
+    ),
+    (
+        24,
+        include_bytes!("../../../assets/tray/red-24.png"),
+        include_bytes!("../../../assets/tray/green-24.png"),
     ),
     (
         32,
@@ -46,7 +61,27 @@ impl Icons {
         Ok(Self { images })
     }
 
+    /// The artwork closest to `size` (the smallest at least that large, else the largest), composed
+    /// for this state, as `(size, ARGB32)`.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn nearest(&self, status: &Status, size: u32) -> (u32, Vec<u8>) {
+        let (base, badge) = model::look(status);
+        let pick = self
+            .images
+            .iter()
+            .find(|(s, _, _)| *s >= size)
+            .or(self.images.last());
+        match pick {
+            Some((s, red, green)) => {
+                let art = if base == Base::Red { red } else { green };
+                (*s, model::compose(art, *s, badge))
+            }
+            None => (0, Vec::new()),
+        }
+    }
+
     /// Every size, composed for this state, as `(size, ARGB32)`.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn for_status(&self, status: &Status) -> Vec<(u32, Vec<u8>)> {
         let (base, badge) = model::look(status);
         self.images
@@ -96,8 +131,11 @@ mod tests {
         let pixmaps = icons.for_status(&recording);
         assert_eq!(
             pixmaps.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [22, 32, 48, 64, 128]
+            [16, 20, 22, 24, 32, 48, 64, 128]
         );
+        assert_eq!(icons.nearest(&recording, 20).0, 20);
+        assert_eq!(icons.nearest(&recording, 30).0, 32);
+        assert_eq!(icons.nearest(&recording, 400).0, 128);
         for (size, argb) in &pixmaps {
             assert_eq!(argb.len(), (size * size * 4) as usize);
         }
@@ -110,13 +148,13 @@ mod tests {
             }
             (r, g)
         };
-        let (r, g) = dominant(&pixmaps[3].1);
+        let (r, g) = dominant(&pixmaps[6].1);
         assert!(r > g, "recording art is red");
         let paused = Status {
             recorder: Recorder::Paused { until: None },
             privacy_unenforced: false,
         };
-        let (r, g) = dominant(&icons.for_status(&paused)[3].1);
+        let (r, g) = dominant(&icons.for_status(&paused)[6].1);
         assert!(g > r, "paused art is green");
         Ok(())
     }

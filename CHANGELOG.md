@@ -8,7 +8,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- **Tray icon (Linux).** `rsrewind tray` shows rsRewind in the notification area (KDE Plasma natively,
+- **Tray icon (Linux and Windows).** `rsrewind tray` shows rsRewind in the notification area (Windows;
+  KDE Plasma natively,
   other desktops through their tray applet) with the rsRewind icon: red while recording, green while
   not, plus a badge (pause bars, a stop square, an amber dot when privacy rules are not enforced or the
   recorder is in trouble), so state never depends on colour alone. The menu pauses (15 minutes, 1 hour, until
@@ -16,7 +17,7 @@ All notable changes to this project are documented in this file. The format foll
   one click deletes nothing), opens the window, and starts or stops the recorder. Left click opens the
   window. It is its own process and acts only by running `rsrewind` commands, so quitting or crashing
   it never touches recording. `rsrewind tray --autostart on` starts the icon and the recorder at login
-  (`off` undoes it). Windows and macOS are next.
+  (`off` undoes it): an XDG autostart entry on Linux, the per-user `Run` key on Windows. macOS is next.
 
 ### Changed
 
