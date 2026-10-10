@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **The current moment is the main view.** The small preview in the detail pane is gone; the moment on
+  screen now fills the middle of the window, with the rewind room as a band underneath. It follows you:
+  scrubbing the strip, stepping with ← / →, picking a search result or opening the window puts that moment
+  on the stage, no click needed. Double-click it for the full-window viewer. The detail pane keeps the
+  time, machine, app, window and recognized text.
+
 ## [0.0.6] - 2026-10-10
 
 **Sixth release: a front door, and a memory that can read.** Opening rsRewind now offers to start

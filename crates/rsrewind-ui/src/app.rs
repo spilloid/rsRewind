@@ -348,7 +348,13 @@ impl App {
                 if let Answer::Window(entries) = answer {
                     self.set_moments(entries);
                 }
-                self.load_thumbs()
+                // The first load (or a new filter) puts the moment at the cursor on the stage.
+                let follow = if self.selection.is_none() {
+                    self.follow_cursor()
+                } else {
+                    Task::none()
+                };
+                Task::batch([self.load_thumbs(), follow])
             }
             Message::Gaps(seq, answer) => {
                 if seq == self.gaps_seq
@@ -448,7 +454,11 @@ impl App {
             Message::Timeline(timeline::Event::Scrub(cursor)) => {
                 self.cue = None;
                 self.camera.cursor = cursor;
-                Task::batch([self.refresh_window(false), self.load_thumbs()])
+                Task::batch([
+                    self.refresh_window(false),
+                    self.load_thumbs(),
+                    self.follow_cursor(),
+                ])
             }
             Message::Timeline(timeline::Event::Hover(index)) => {
                 self.hovered = index;
@@ -581,7 +591,7 @@ impl App {
                     if t >= 1.0 {
                         self.camera.cursor = cue.to;
                         self.cue = None;
-                        return self.load_thumbs();
+                        return Task::batch([self.load_thumbs(), self.follow_cursor()]);
                     }
                 }
                 Task::none()
@@ -820,6 +830,26 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// The stage shows the moment at the cursor: when that moment changes (scrubbing, a cue settling,
+    /// new moments loading), it becomes the selection and its picture is loaded. Nothing happens while
+    /// the moment stays the same, so a continuous scrub does not queue a decode per pixel.
+    fn follow_cursor(&mut self) -> Task<Message> {
+        let cursor = self.cue.map_or(self.camera.cursor, |c| c.to);
+        let Some(index) = timeline::moment_at(&self.moments, cursor) else {
+            return Task::none();
+        };
+        let entry = self.moments[index].entry.clone();
+        let frame = (entry.source, entry.visual_state_id);
+        if self.selection.as_ref().is_some_and(|s| s.frame == frame) {
+            return Task::none();
+        }
+        self.selection = Some(Selection {
+            frame,
+            at: entry.started_at,
+        });
+        self.open_detail(frame, entry.media_path)
+    }
+
     fn select(&mut self, entry: &TimelineEntry) -> Task<Message> {
         let frame = (entry.source, entry.visual_state_id);
         self.selection = Some(Selection {
@@ -892,9 +922,14 @@ impl App {
         } else {
             row![
                 self.sidebar(),
-                column![self.room(), self.filament(), self.transport()]
-                    .spacing(8)
-                    .width(FillPortion(5)),
+                column![
+                    self.stage(),
+                    container(self.room()).height(FillPortion(2)),
+                    self.filament(),
+                    self.transport()
+                ]
+                .spacing(8)
+                .width(FillPortion(5)),
                 column![self.results(), self.detail_pane()]
                     .spacing(10)
                     .width(FillPortion(3))
@@ -1369,11 +1404,44 @@ impl App {
             .into()
     }
 
+    /// The current moment's picture, as large as the window allows: what the room is pointing at.
+    /// Double-click opens it full window.
+    fn stage(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let body: Element<'_, Message> = match (&self.selection, &self.detail_picture) {
+            (Some(selection), Some((key, handle))) if *key == selection.frame => mouse_area(
+                image(handle.clone())
+                    .content_fit(ContentFit::Contain)
+                    .width(Fill)
+                    .height(Fill),
+            )
+            .on_double_click(Message::OpenSelected)
+            .interaction(iced::mouse::Interaction::ZoomIn)
+            .into(),
+            (Some(_), _) => container(text("Loading picture…").size(13).color(t.text_3))
+                .center(Fill)
+                .into(),
+            (None, _) => container(
+                text("Scrub the strip or step with ← → to put a moment here.")
+                    .size(13)
+                    .color(t.text_3),
+            )
+            .center(Fill)
+            .into(),
+        };
+        container(body)
+            .padding(6)
+            .style(move |_| t.panel())
+            .width(Fill)
+            .height(FillPortion(5))
+            .into()
+    }
+
     fn detail_pane(&self) -> Element<'_, Message> {
         let t = self.tokens;
         let Some(selection) = &self.selection else {
             return container(
-                text("Select a moment in the room or a search result to inspect it.")
+                text("Scrub, step or search: the moment on screen is described here.")
                     .size(13)
                     .color(t.text_3),
             )
@@ -1382,21 +1450,6 @@ impl App {
             .width(Fill)
             .height(FillPortion(3))
             .into();
-        };
-        let picture: Element<'_, Message> = match &self.detail_picture {
-            Some((key, handle)) if *key == selection.frame => mouse_area(
-                image(handle.clone())
-                    .content_fit(ContentFit::Contain)
-                    .width(Fill)
-                    .height(Length::Fixed(200.0)),
-            )
-            .on_double_click(Message::OpenSelected)
-            .interaction(iced::mouse::Interaction::ZoomIn)
-            .into(),
-            _ => container(text("Loading picture…").size(12).color(t.text_3))
-                .center_x(Fill)
-                .height(Length::Fixed(200.0))
-                .into(),
         };
         let mut info = column![
             text(format_time(selection.at.0))
@@ -1438,7 +1491,7 @@ impl App {
                 .push(heading(t, "Recognized text"))
                 .push(scrollable(ocr).height(Fill));
         }
-        container(column![picture, info.height(Fill)].spacing(10))
+        container(info.height(Fill))
             .padding(12)
             .style(move |_| t.panel())
             .width(Fill)
