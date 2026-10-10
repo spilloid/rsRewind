@@ -5,8 +5,8 @@ screens, keeps a visual record of what changed, runs OCR over it, and lets you s
 history by text, app, window title, or time — entirely on your own machine. There is no cloud
 component, no required network service, and no telemetry.
 
-**Current release: v0.0.4** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
-[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.4) ·
+**Current release: v0.0.5** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
+[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.5) ·
 [website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind: the rewind room, screenshots in 3D with one lane per machine (made-up data)](site/img/room-dark.png)
@@ -55,7 +55,7 @@ It is explicitly **not**:
 - **Windows 10** — expected to work where Windows.Graphics.Capture, Windows.Media.Ocr and
   per-monitor-v2 DPI awareness exist, but **unverified**.
 - **Linux, KDE Plasma 6 on Wayland** — records (screenshots, window titles, privacy rules, idle and
-  lock), since v0.0.4, verified on one machine. No text recognition yet: moments are stored and
+  lock), since v0.0.5, verified on one machine. No text recognition yet: moments are stored and
   browsable but not searchable by text. Other Linux desktops can run the window, `search`, `import`
   and the rest, but not the recorder.
 - **macOS** — planned, not built.
