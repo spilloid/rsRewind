@@ -3006,6 +3006,8 @@ dependencies = [
  "iced",
  "rsrewind-core",
  "rsrewind-query",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

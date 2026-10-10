@@ -9,6 +9,7 @@
 
 mod app;
 mod gaps;
+mod recorder;
 mod style;
 mod thumb;
 mod timeline;

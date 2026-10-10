@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **A front door.** The rewind window no longer greets a new user with "once recording begins" and no
+  way to begin: when nothing is recorded it explains what rsRewind does and offers **Start recording**
+  (which also brings up the tray icon) and **Start rsRewind when I log in**. The top bar shows whether
+  rsRewind is recording; when it is not, the chip itself starts it. Like the tray, the window does this
+  by running `rsrewind` commands; it still never touches capture or storage.
 - **Text recognition on Linux.** The Plasma recorder now reads the text on screen with Tesseract, so Linux
   history becomes searchable like Windows history, including moments recorded before this version, which
   are worked through in the background. Install Tesseract from your distribution (Fedora/Bazzite:

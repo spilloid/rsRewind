@@ -80,6 +80,10 @@ rsRewind. `rsrewind daemon` is the long-running recorder process; `rsrewind ui` 
 (`search`, `recent`, `status`, `pause`, …) is a short-lived invocation that opens the database,
 does one thing, and exits.
 
+The window's front door ("Start recording", "Start rsRewind when I log in", the recording chip) works
+the same way as the tray below: it runs `rsrewind start` / `tray` / `status --json` as child processes,
+so the UI still cannot reach capture or storage.
+
 `rsrewind tray` is a third kind of process: a notification-area icon that learns the recorder's
 state from `rsrewind status --json` and acts only by running `rsrewind` subcommands (pause, resume,
 forget, ui, start, stop). It depends on `rsrewind-core` alone (boundary-tested), opens no database
