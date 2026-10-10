@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Install rsRewind</title>
-<meta name="description" content="Install, verify and first run of rsRewind v0.0.5 on Windows 11 and KDE Plasma.">
+<meta name="description" content="Install, verify and first run of rsRewind v0.0.6 on Windows 11 and KDE Plasma.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -21,14 +21,14 @@
   </nav>
 </header>
 <section>
-  <div class="kicker">Version 0.0.5 · Windows 11 (x64) · Linux (x86-64)</div>
+  <div class="kicker">Version 0.0.6 · Windows 11 (x64) · Linux (x86-64)</div>
   <h1>Install</h1>
   <p class="lede">Two signed Windows downloads (the installer is per-user and needs no administrator rights) and a Linux tarball.</p>
   <div class="cta">
-    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.5/rsrewind-v0.0.5-x64.msi">Installer (.msi)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.5/rsrewind-v0.0.5-windows-amd64.zip">Portable (.zip)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.5/rsrewind-v0.0.5-linux-x86_64.tar.gz">Linux (.tar.gz)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.5/SHA256SUMS.txt">SHA256SUMS.txt</a>
+    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-x64.msi">Installer (.msi)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-windows-amd64.zip">Portable (.zip)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-linux-x86_64.tar.gz">Linux (.tar.gz)</a>
+    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/SHA256SUMS.txt">SHA256SUMS.txt</a>
   </div>
   <p class="note">Before installing, read the <a href="https://github.com/spilloid/rsRewind/issues/12">known privacy issues (#12)</a>.</p>
 </section>
@@ -36,10 +36,10 @@
 <section>
   <h2>Verify before you run it</h2>
   <p>rsRewind records your screen, so check what you downloaded. In PowerShell, in the folder you saved the files to:</p>
-<pre><code>Get-FileHash .\rsrewind-v0.0.5-x64.msi -Algorithm SHA256
+<pre><code>Get-FileHash .\rsrewind-v0.0.6-x64.msi -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt          # the hash above must match its line
 
-Get-AuthenticodeSignature .\rsrewind-v0.0.5-x64.msi | Format-List Status,SignerCertificate</code></pre>
+Get-AuthenticodeSignature .\rsrewind-v0.0.6-x64.msi | Format-List Status,SignerCertificate</code></pre>
   <p>Status must be <code>Valid</code> and the signer <code>CN=Joseph Spillers</code>, with a Microsoft timestamp. The same applies to <code>rsrewind.exe</code> inside the zip. If either check fails, do not run it, and please <a href="https://github.com/spilloid/rsRewind/issues">open an issue</a>.</p>
 </section>
 
@@ -58,8 +58,8 @@ Get-AuthenticodeSignature .\rsrewind-v0.0.5-x64.msi | Format-List Status,SignerC
   <h2>Linux (KDE Plasma on Wayland)</h2>
   <p>The Linux build is not code-signed; check it against <code>SHA256SUMS.txt</code> from the same release:</p>
 <pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
-tar -xzf rsrewind-v0.0.5-linux-x86_64.tar.gz
-install -m 755 rsrewind-v0.0.5-linux-x86_64/rsrewind ~/.local/bin/rsrewind
+tar -xzf rsrewind-v0.0.6-linux-x86_64.tar.gz
+install -m 755 rsrewind-v0.0.6-linux-x86_64/rsrewind ~/.local/bin/rsrewind
 rsrewind start
 rsrewind tray --autostart on   # the tray icon at every login
 rsrewind tray                  # and now</code></pre>
@@ -83,7 +83,7 @@ WantedBy=graphical-session.target</code></pre>
 <pre><code>rsrewind stop                                   # if you started it by hand
 systemctl --user daemon-reload
 systemctl --user enable --now rsrewind.service</code></pre>
-  <p>The recorder needs KDE Plasma 6 on Wayland. Its first start writes <code>~/.local/share/applications/rsrewind-recorder.desktop</code>, which is how KWin decides which programs may take screenshots; delete that file to withdraw the permission. History lives in <code>~/.local/share/rsRewind</code>, readable only by you. There is no text recognition on Linux yet, so moments appear in <code>rsrewind recent</code> and the rewind window but are not searchable by text. The window, <code>search</code>, <code>import</code> and the other commands work on any Linux desktop.</p>
+  <p>The recorder needs KDE Plasma 6 on Wayland. Its first start writes <code>~/.local/share/applications/rsrewind-recorder.desktop</code>, which is how KWin decides which programs may take screenshots; delete that file to withdraw the permission. History lives in <code>~/.local/share/rsRewind</code>, readable only by you. Text recognition uses Tesseract (above); until it is installed, moments appear in <code>rsrewind recent</code> and the rewind window but are not searchable by text. The window, <code>search</code>, <code>import</code> and the other commands work on any Linux desktop.</p>
 </section>
 
 <section>

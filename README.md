@@ -5,8 +5,8 @@ screens, keeps a visual record of what changed, runs OCR over it, and lets you s
 history by text, app, window title, or time — entirely on your own machine. There is no cloud
 component, no required network service, and no telemetry.
 
-**Current release: v0.0.5** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
-[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.5) ·
+**Current release: v0.0.6** · [install and verify](https://spilloid.github.io/rsRewind/install.html) ·
+[release notes and downloads](https://github.com/spilloid/rsRewind/releases/tag/v0.0.6) ·
 [website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind: the rewind room, screenshots in 3D with one lane per machine (made-up data)](site/img/room-dark.png)
@@ -15,8 +15,8 @@ component, no required network service, and no telemetry.
 
 ## Status: early releases, working end to end
 
-rsRewind records, indexes and searches your screen on Windows 11 (and records on KDE Plasma under
-Wayland, without text recognition yet), opens a rewind window over the
+rsRewind records, indexes and searches your screen on Windows 11 and on KDE Plasma under Wayland
+(text recognition there uses Tesseract), opens a rewind window over the
 history, and can merge history from other machines. Releases are normal, signed GitHub releases,
 but rsRewind is **not ready for use on a machine or in a session you are not comfortable
 recording.**
