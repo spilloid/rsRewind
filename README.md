@@ -55,8 +55,8 @@ It is explicitly **not**:
 - **Windows 10** — expected to work where Windows.Graphics.Capture, Windows.Media.Ocr and
   per-monitor-v2 DPI awareness exist, but **unverified**.
 - **Linux, KDE Plasma 6 on Wayland** — records (screenshots, window titles, privacy rules, idle and
-  lock), since v0.0.5, verified on one machine. No text recognition yet: moments are stored and
-  browsable but not searchable by text. Other Linux desktops can run the window, `search`, `import`
+  lock), since v0.0.4, verified on one machine. Text recognition with `ocrs` once its two model files
+  are in the data folder (see the install page); until then moments are browsable but not searchable. Other Linux desktops can run the window, `search`, `import`
   and the rest, but not the recorder.
 - **macOS** — planned, not built.
 

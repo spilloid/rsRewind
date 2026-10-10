@@ -299,6 +299,11 @@ fn start(data: &DataDir) -> Result<ExitCode> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // Text recognition runs in the background; two threads keep it from crowding the desktop. An
+    // explicit RTEN_NUM_THREADS in the environment wins.
+    if std::env::var_os("RTEN_NUM_THREADS").is_none() {
+        command.env("RTEN_NUM_THREADS", "2");
+    }
     detach(&mut command);
     let child = command.spawn().context("start the recorder")?;
     let pid = child.id();

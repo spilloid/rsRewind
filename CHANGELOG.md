@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Text recognition on Linux.** The Plasma recorder now reads the text on screen with `ocrs` (pure Rust),
+  so Linux history becomes searchable like Windows history, including moments recorded before this
+  version, which are worked through in the background. rsRewind never downloads anything: put the two
+  model files (about 12 MB, CC-BY-SA-4.0) in the data folder's `models/` (the install page shows how) and
+  start the recorder; until then moments wait and `rsrewind doctor` says what is missing. `rsrewind start`
+  runs recognition on two threads so it never crowds the desktop (set `RTEN_NUM_THREADS` to change that).
+
 ## [0.0.5] - 2026-10-09
 
 **Fifth release: always there, honest about the holes.** rsRewind gets a tray icon on Windows and

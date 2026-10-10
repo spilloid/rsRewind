@@ -7,8 +7,8 @@
 //! heartbeat); one recorder per data folder is an advisory lock on `<data>/recorder.lock`.
 
 use crate::platform::{
-    CaptureBackend, DisplayHandle, FrameSource, IdleClock, Lifecycle, Platform, PlatformFault,
-    ScreenContext, SingleInstance, SystemClock,
+    CaptureBackend, DisplayHandle, FrameSource, IdleClock, Lifecycle, OcrBackend, OcrFactory,
+    Platform, PlatformFault, Recognition, ScreenContext, SingleInstance, SystemClock,
 };
 use crate::recorder::{RunOptions, run_with};
 use anyhow::{Context, bail};
@@ -66,10 +66,34 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         }),
         clock: Arc::new(SystemClock::new()),
         lifecycle: Box::new(guard),
-        ocr: None,
+        ocr: Some(ocrs_factory(options.data.models())),
         hostname: hostname(),
     };
     run_with(options, platform)
+}
+
+/// Text recognition with `ocrs`, loaded on the OCR thread from `<data>/models`. If the models are
+/// not there, the factory fails, moments stay `pending`, and `doctor` says where to put them.
+fn ocrs_factory(models: PathBuf) -> OcrFactory {
+    Box::new(move || {
+        rsrewind_ocr::OcrsEngine::load(&models)
+            .map(|engine| Box::new(Ocrs(engine)) as Box<dyn OcrBackend>)
+    })
+}
+
+struct Ocrs(rsrewind_ocr::OcrsEngine);
+
+impl OcrBackend for Ocrs {
+    fn engine_name(&self) -> &'static str {
+        rsrewind_ocr::ENGINE_NAME
+    }
+
+    fn recognize(&mut self, frame: &BgraFrame) -> Result<Recognition, String> {
+        self.0.recognize(frame).map(|out| Recognition {
+            blocks: out.blocks,
+            elapsed_ms: out.elapsed_ms,
+        })
+    }
 }
 
 /// Where the KWin script file lives: `$XDG_RUNTIME_DIR/rsrewind`, else the system temp folder.

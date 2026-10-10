@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Install rsRewind</title>
-<meta name="description" content="Install, verify and first run of rsRewind v0.0.5 on Windows 11.">
+<meta name="description" content="Install, verify and first run of rsRewind v0.0.5 on Windows 11 and KDE Plasma.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -63,6 +63,14 @@ install -m 755 rsrewind-v0.0.5-linux-x86_64/rsrewind ~/.local/bin/rsrewind
 rsrewind start
 rsrewind tray --autostart on   # the tray icon at every login
 rsrewind tray                  # and now</code></pre>
+  <p>Text recognition needs two model files (about 12 MB, CC-BY-SA-4.0, from the <code>ocrs</code> project). rsRewind never downloads anything itself, so fetch them once and check them:</p>
+<pre><code>m=~/.local/share/rsRewind/models; mkdir -p $m; cd $m
+curl -L -o text-detection.rten   https://huggingface.co/robertknight/ocrs/resolve/main/text-detection-ssfbcj81.rten
+curl -L -o text-recognition.rten https://huggingface.co/robertknight/ocrs/resolve/main/text-rec-checkpoint-s52qdbqt.rten
+sha256sum text-detection.rten text-recognition.rten
+# 614aafabf27c94d386f7aa036c967c2e47e4b9938fa11531ca8f5698c1ca4c36  text-detection.rten
+# 606d9a0414c6b73c99df75b707c11c70d1c8b12e1d4f900922e185fc37bfca65  text-recognition.rten</code></pre>
+  <p>Then restart the recorder; moments recorded before are read in the background.</p>
   <p>To have the recorder start with your Plasma session and restart if it ever stops, run it as a systemd user service. Save this as <code>~/.config/systemd/user/rsrewind.service</code>:</p>
 <pre><code>[Unit]
 Description=rsRewind screen-history recorder

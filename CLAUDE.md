@@ -97,7 +97,7 @@ crates/rsrewind-storage/   SQLite schema, migrations, media I/O, segment export/
 crates/rsrewind-query/     read-only search/timeline queries + cross-source history facade — implemented
 crates/rsrewind-capture/   Windows capture backends; KDE Plasma backends (kwin.rs, wayland_idle.rs); change detection
                            and window shapes (portable)
-crates/rsrewind-ocr/       Windows.Media.Ocr wrapper — Windows-only
+crates/rsrewind-ocr/       Windows.Media.Ocr wrapper (Windows); ocrs engine (Linux, models from <data>/models)
 crates/rsrewind-daemon/    recorder loop, persist/OCR threads, platform seam (platform.rs) — portable, tested on
                            fakes (src/tests/); Windows backends in windows_platform.rs, Plasma in linux_platform.rs; Unit B partly open
 crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows and Plasma only)
