@@ -209,3 +209,7 @@ history leaves your computer, and only for what the assistant asks for. When on,
 window names from the last 30 days by default; screenshots only if you set `allow_screenshots = true`; only the
 machines you list under `[mcp] sources`. Agents cannot resume recording, forget, export or import. rsRewind logs each
 agent call's tool name, request id, result count and duration, never what was returned. See `docs/mcp.md`.
+
+## macOS (2026-10-10, development client)
+
+macOS screen-recording authorization is required; the application cannot bypass denial. The backend follows the existing fail-closed platform contract for unavailable context and idle/session state, with native OCR in memory. The Mac port does not close the existing recorder findings in issue #12. Interactive permission, exclusion and lock/sleep behavior require real-Mac acceptance before a supported release claim. See `docs/macos.md`.

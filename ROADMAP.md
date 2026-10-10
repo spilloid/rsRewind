@@ -164,3 +164,7 @@ Everything above, proven together:
 - A CI/CD release pipeline that fails closed rather than ever publishing an unsigned release.
 - Documented architecture (`ARCHITECTURE.md`) and privacy model (`PRIVACY.md`), kept current with
   the shipped product.
+
+### Apple Silicon release gate (2026-10-10)
+
+Native Mac implementation and hosted ARM64 artifact are being added alongside MCP completion. Before calling macOS supported, require interactive TCC/capture/lock/sleep/multimonitor acceptance, synthetic native UI captures, independent privacy review, and a deliberate Developer ID/notarization distribution plan. `docs/macos.md` records the acceptance contract.

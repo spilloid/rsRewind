@@ -88,14 +88,17 @@ pub fn parse_moment_id(text: &str) -> Option<(Option<SourceId>, VisualStateId)> 
 /// `2026-10-10`, or a duration ago (`30m`, `2h`, `7d`).
 pub fn parse_time(text: &str, now: DateTime<Local>) -> Result<Timestamp, String> {
     let t = text.trim();
-    if let Some(n) = t.strip_suffix('m').and_then(|n| n.parse::<i64>().ok()) {
-        return Ok(Timestamp(now.timestamp_millis() - n * 60_000));
-    }
-    if let Some(n) = t.strip_suffix('h').and_then(|n| n.parse::<i64>().ok()) {
-        return Ok(Timestamp(now.timestamp_millis() - n * 3_600_000));
-    }
-    if let Some(n) = t.strip_suffix('d').and_then(|n| n.parse::<i64>().ok()) {
-        return Ok(Timestamp(now.timestamp_millis() - n * 86_400_000));
+    // "N ago" for minutes, hours, days: non-negative, at most 100 years back, checked arithmetic.
+    for (suffix, unit_ms) in [("m", 60_000_i64), ("h", 3_600_000), ("d", 86_400_000)] {
+        if let Some(n) = t.strip_suffix(suffix).and_then(|n| n.parse::<i64>().ok()) {
+            const MAX_AGO_MS: i64 = 100 * 366 * 86_400_000;
+            return n
+                .checked_mul(unit_ms)
+                .filter(|ago| (0..=MAX_AGO_MS).contains(ago))
+                .and_then(|ago| now.timestamp_millis().checked_sub(ago))
+                .map(Timestamp)
+                .ok_or_else(|| format!("'{t}' is not a duration between 0 and 100 years"));
+        }
     }
     if let Ok(dt) = DateTime::parse_from_rfc3339(t) {
         return Ok(Timestamp(dt.timestamp_millis()));
@@ -229,6 +232,12 @@ mod tests {
             parse_time("2026-10-10", now)?,
             Timestamp(ms - 15 * 3_600_000)
         );
+        assert!(
+            parse_time("9223372036854775807m", now).is_err(),
+            "overflow is an error"
+        );
+        assert!(parse_time("-5m", now).is_err(), "no future via negatives");
+        assert!(parse_time("40000d", now).is_err());
         assert!(parse_time("yesterday-ish", now).is_err());
         Ok(())
     }

@@ -11,6 +11,8 @@ pub mod model;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -96,7 +98,19 @@ pub fn run(runner: &Runner) -> anyhow::Result<()> {
     windows::run(runner)
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
-pub fn run(_: &Runner) -> anyhow::Result<()> {
-    anyhow::bail!("the tray icon is available on Linux and Windows so far; macOS is next")
+#[cfg(target_os = "macos")]
+pub fn run(runner: &Runner) -> anyhow::Result<()> {
+    macos::run(runner)
 }
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+pub fn run(_: &Runner) -> anyhow::Result<()> {
+    anyhow::bail!("the tray icon is available on Linux, Windows and macOS")
+}
+
+// Compile the bridge model on other hosts too; tests exercise only its pure menu snapshot,
+// never the AppKit FFI entry points. Native event-loop acceptance remains a macOS check.
+#[cfg(all(test, not(target_os = "macos")))]
+#[allow(dead_code)]
+#[path = "macos.rs"]
+mod macos_validation;

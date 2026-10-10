@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>us.spillerstech.rsrewind</string>
+<key>CFBundleName</key><string>rsRewind</string>
+<key>CFBundleDisplayName</key><string>rsRewind</string>
+<key>CFBundleExecutable</key><string>rsrewind</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>RSREWIND_VERSION</string>
+<key>CFBundleVersion</key><string>RSREWIND_VERSION</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>rsRewind records screen changes locally so you can search and rewind your own history.</string>
+</dict></plist>

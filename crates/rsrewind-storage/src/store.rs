@@ -655,6 +655,21 @@ impl Store {
         Ok(())
     }
 
+    /// Pauses without ever shortening or ending a pause in force ([`CaptureState::extend_pause`]),
+    /// read and written in one immediate transaction so a concurrent `resume` or `pause` cannot slip
+    /// between the two. Returns the state now in force.
+    pub fn extend_pause(&self, requested_until: Option<Timestamp>) -> Result<CaptureState> {
+        // IMMEDIATE: the write lock is taken before the read, so nothing can change the state between.
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let current = self.read_control()?;
+        let next = current.extend_pause(requested_until, Timestamp::now());
+        if next != current {
+            self.set_control(next)?;
+        }
+        tx.commit()?;
+        Ok(next)
+    }
+
     pub fn write_status(&self, status: &RecorderStatus) -> Result<()> {
         let (name, until) = state_to_parts(status.state);
         let counters = serde_json::to_string(&status.counters)?;

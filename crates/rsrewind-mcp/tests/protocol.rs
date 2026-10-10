@@ -20,13 +20,12 @@ fn initialize_negotiates_the_version_and_names_the_server() -> Fallible<()> {
             json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
                     "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } }),
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": { "protocolVersion": "1999-01-01" } }),
             json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" }),
         ],
     )?;
     assert_eq!(
         replies.len(),
-        3,
+        2,
         "the notification gets no reply: {replies:?}"
     );
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-06-18");
@@ -36,11 +35,16 @@ fn initialize_negotiates_the_version_and_names_the_server() -> Fallible<()> {
         replies[0]["result"]["capabilities"]["tools"]["listChanged"],
         false
     );
+    let negotiated = exchange(
+        &s,
+        &[json!({ "jsonrpc":"2.0", "id":2,"method":"initialize",
+        "params":{"protocolVersion":"1999-01-01", "capabilities":{},"clientInfo":{"name":"t","version":"1"}}})],
+    )?;
     assert_eq!(
-        replies[1]["result"]["protocolVersion"], PROTOCOL_VERSIONS[0],
+        negotiated[0]["result"]["protocolVersion"], PROTOCOL_VERSIONS[0],
         "unknown version: offer the newest"
     );
-    assert_eq!(replies[2]["result"], json!({}));
+    assert_eq!(replies[1]["result"], json!({}));
     Ok(())
 }
 
@@ -281,8 +285,8 @@ fn protocol_errors_are_errors_and_tool_errors_are_results() -> Fallible<()> {
         .collect::<Result<_, _>>()?;
     assert_eq!(replies[0]["error"]["code"], -32700);
     assert_eq!(replies[1]["error"]["code"], -32600);
-    assert_eq!(replies[2]["error"]["code"], -32601);
-    assert_eq!(replies[3]["error"]["code"], -32602);
+    assert_eq!(replies[2]["error"]["code"], -32600);
+    assert_eq!(replies[3]["error"]["code"], -32600);
     let bad_time = call(&s, "moment_at", json!({ "time": "around lunch" }))?;
     assert_eq!(bad_time["isError"], true);
     let bad_id = call(&s, "get_moment", json!({ "moment": "../../etc/passwd" }))?;

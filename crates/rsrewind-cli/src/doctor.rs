@@ -243,6 +243,38 @@ fn collect(data: &DataDir) -> Vec<Check> {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        if !rsrewind_capture::macos::screen_recording_permission(false) {
+            checks.push(check("capture", Level::Fail, "Grant rsRewind Screen & System Audio Recording in System Settings → Privacy & Security, then restart the app"));
+        } else {
+            match rsrewind_capture::macos::monitors() {
+                Ok(displays) if !displays.is_empty() => checks.push(check("capture", Level::Ok, format!("{} display(s); screen-recording permission granted; interactive capture still needs verification", displays.len()))),
+                Ok(_) => checks.push(check("capture", Level::Fail, "macOS reports no displays")),
+                Err(_) => checks.push(check("capture", Level::Fail, "Could not enumerate macOS displays")),
+            }
+            match rsrewind_capture::macos::visible_windows() {
+                Ok(_) => checks.push(check(
+                    "window context",
+                    Level::Ok,
+                    "Native visible-window context is available",
+                )),
+                Err(_) => checks.push(check(
+                    "window context",
+                    Level::Fail,
+                    "Window context is unavailable; recording will skip ticks until it is known",
+                )),
+            }
+        }
+        if rsrewind_capture::macos::idle_millis().is_none() {
+            checks.push(check(
+                "idle/session",
+                Level::Warn,
+                "Idle or active-session state is unknown; nothing will be recorded",
+            ));
+        }
+    }
+
     // OCR
     #[cfg(windows)]
     if let Some(config) = &config {
@@ -264,6 +296,30 @@ fn collect(data: &DataDir) -> Vec<Check> {
                     ),
                 )),
                 Err(error) => checks.push(check("ocr", Level::Fail, error.to_string())),
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(config) = &config {
+        if !config.ocr.enabled {
+            checks.push(check(
+                "ocr",
+                Level::Warn,
+                "OCR is turned off; search will find nothing new",
+            ));
+        } else {
+            let language = Some(config.ocr.language.as_str()).filter(|l| !l.trim().is_empty());
+            match rsrewind_ocr::VisionEngine::new(language) {
+                Ok(_) => checks.push(check(
+                    "ocr",
+                    Level::Ok,
+                    "Apple Vision OCR is available on device",
+                )),
+                Err(_) => checks.push(check(
+                    "ocr",
+                    Level::Fail,
+                    "Apple Vision OCR initialization failed",
+                )),
             }
         }
     }

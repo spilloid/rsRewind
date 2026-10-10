@@ -6,7 +6,7 @@ use rsrewind_core::{
     ApplicationContext, BgraFrame, DataDir, McpConfig, MonitorInfo, OcrBlock, Timestamp,
     WindowContext,
 };
-use rsrewind_mcp::{McpServer, serve};
+use rsrewind_mcp::{McpServer, Settings, serve};
 use rsrewind_storage::media::{encode_webp, write_webp_exclusive};
 use rsrewind_storage::{NewVisualState, Observation, Store};
 use serde_json::{Value, json};
@@ -121,12 +121,7 @@ pub fn history() -> Fallible<(tempfile::TempDir, DataDir)> {
 }
 
 pub fn server(data: &DataDir, config: McpConfig) -> McpServer {
-    McpServer {
-        data: data.clone(),
-        config,
-        exe: None,
-        version: "9.9.9-test",
-    }
+    McpServer::new(data.clone(), Settings::Fixed(config), None, "9.9.9-test")
 }
 
 pub fn enabled() -> McpConfig {
@@ -138,13 +133,27 @@ pub fn enabled() -> McpConfig {
 
 /// Sends messages through `serve` and returns every reply line, parsed.
 pub fn exchange(server: &McpServer, messages: &[Value]) -> Fallible<Vec<Value>> {
+    let mut messages = messages.to_vec();
+    let bootstrap = messages.first().is_none_or(|m| m["method"] != "initialize");
+    if bootstrap {
+        messages.insert(0, json!({"jsonrpc":"2.0", "id":"fixture-init", "method":"initialize", "params":{
+            "protocolVersion":"2025-11-25", "capabilities":{}, "clientInfo":{"name":"fixture", "version":"1"}}}));
+        messages.insert(
+            1,
+            json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
+        );
+    }
     let input: String = messages.iter().map(|m| format!("{m}\n")).collect();
     let mut out = Vec::new();
     serve(server, input.as_bytes(), &mut out)?;
-    Ok(String::from_utf8(out)?
+    let mut replies: Vec<Value> = String::from_utf8(out)?
         .lines()
         .map(serde_json::from_str)
-        .collect::<Result<_, _>>()?)
+        .collect::<Result<_, _>>()?;
+    if bootstrap {
+        replies.remove(0);
+    }
+    Ok(replies)
 }
 
 pub fn call(server: &McpServer, name: &str, arguments: Value) -> Fallible<Value> {

@@ -2892,6 +2892,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml_edit",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2949,6 +2950,7 @@ version = "0.0.6"
 dependencies = [
  "png",
  "rsrewind-core",
+ "serde_json",
  "thiserror 2.0.21",
  "webp",
  "windows 0.62.2",
@@ -3713,6 +3715,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 
