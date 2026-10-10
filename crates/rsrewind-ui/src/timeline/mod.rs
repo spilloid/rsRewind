@@ -470,15 +470,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsrewind_core::{EventId, Timestamp};
     use std::time::{Duration, Instant};
 
-    fn moment(at: i64, event: i64, source: Option<rsrewind_core::SourceId>) -> Moment {
+    fn moment(at: i64, event: i64, source: Option<SourceId>) -> Moment {
         Moment {
-            entry: rsrewind_core::TimelineEntry {
-                event_id: rsrewind_core::EventId(event),
-                visual_state_id: rsrewind_core::VisualStateId(event),
-                started_at: rsrewind_core::Timestamp(at),
-                ended_at: rsrewind_core::Timestamp(at + 500),
+            entry: TimelineEntry {
+                event_id: EventId(event),
+                visual_state_id: VisualStateId(event),
+                started_at: Timestamp(at),
+                ended_at: Timestamp(at + 500),
                 application: None,
                 window_title: None,
                 monitor: None,
@@ -493,7 +494,7 @@ mod tests {
 
     #[test]
     fn the_stage_shows_the_latest_moment_started_at_or_before_the_cursor() {
-        let other = Some(rsrewind_core::SourceId::from_bytes([9; 16]));
+        let other = Some(SourceId::from_bytes([9; 16]));
         let moments = vec![
             moment(1_000, 1, None),
             moment(2_000, 2, None),
