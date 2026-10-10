@@ -15,6 +15,34 @@ pub struct Config {
     pub ocr: OcrConfig,
     pub privacy: PrivacyPolicy,
     pub logging: LoggingConfig,
+    pub mcp: McpConfig,
+}
+
+/// `rsrewind mcp`, the agent surface (docs/design/mcp.md). Off by default: an MCP client sends what
+/// the tools return to its model, which for most assistants runs off this computer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpConfig {
+    /// Without this, only the `get_status` tool exists, and it explains how to turn MCP on.
+    pub enabled: bool,
+    /// Whether `get_screenshot` may return pictures (text tools work either way).
+    pub allow_screenshots: bool,
+    /// Nothing older than this many days is returned by any tool. 0 = no limit.
+    pub max_age_days: u32,
+    /// Machines whose history may be returned: `this` for this computer's own, or source ids (32 hex)
+    /// from `rsrewind sources`. Empty = every machine in the data folder.
+    pub sources: Vec<String>,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_screenshots: false,
+            max_age_days: 30,
+            sources: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +93,7 @@ impl Default for Config {
             ocr: OcrConfig::default(),
             privacy: PrivacyPolicy::suggested_defaults(),
             logging: LoggingConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }
@@ -160,6 +189,13 @@ impl Config {
         }
         if !self.storage.max_size_gb.is_finite() || self.storage.max_size_gb < 0.0 {
             return Err("storage.max_size_gb must be >= 0".into());
+        }
+        for source in &self.mcp.sources {
+            if source != "this" && crate::SourceId::parse(source).is_none() {
+                return Err(format!(
+                    "mcp.sources: '{source}' is neither \"this\" nor a 32-character source id (see `rsrewind sources`)"
+                ));
+            }
         }
         Ok(())
     }

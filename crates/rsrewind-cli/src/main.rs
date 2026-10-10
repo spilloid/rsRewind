@@ -163,6 +163,18 @@ enum Command {
         #[arg(long, value_name = "on|off")]
         autostart: Option<Toggle>,
     },
+    /// Serve screen history to an AI assistant over MCP (stdio). Off until `--enable`.
+    ///
+    /// Configure your MCP client to run `rsrewind mcp`. What tools may return is set under [mcp]
+    /// in config.toml; see docs/mcp.md.
+    Mcp {
+        /// Turn agent access on (prints what is shared, then exits).
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Turn agent access off (then exits).
+        #[arg(long)]
+        disable: bool,
+    },
     /// Print the data folder.
     DataDir,
 }
@@ -226,6 +238,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             start_recorder,
             autostart,
         } => tray(&data, foreground, start_recorder, autostart),
+        Command::Mcp { enable, disable } => mcp(&data, enable, disable),
         Command::DataDir => {
             println!("{}", data.root().display());
             Ok(ExitCode::SUCCESS)
@@ -869,6 +882,84 @@ fn set_autostart(_: &std::path::Path, _: &DataDir, _: Toggle) -> Result<ExitCode
     bail!("starting at login is set up on Linux and Windows so far")
 }
 
+/// `rsrewind mcp`: the stdio server, or `--enable` / `--disable` of `[mcp] enabled`.
+/// While serving, stdout carries only protocol messages; logs go to the data folder's log files.
+fn mcp(data: &DataDir, enable: bool, disable: bool) -> Result<ExitCode> {
+    if enable || disable {
+        data.ensure()?;
+        Config::write_default_if_missing(&data.config_file())?;
+        set_mcp_enabled(&data.config_file(), enable)?;
+        if enable {
+            println!(
+                "rsRewind agent access is ON.\n\n\
+                 AI assistants you connect (`rsrewind mcp` in their MCP settings) can now search your screen\n\
+                 history and read its recognized text, for the last 30 days by default. Most assistants send\n\
+                 what they read to their provider's servers: that is the one way rsRewind history leaves this\n\
+                 computer. Screenshots stay off unless you set allow_screenshots = true under [mcp] in\n\
+                 {}.\nAgents cannot resume recording or delete anything. Turn this off with `rsrewind mcp --disable`.",
+                data.config_file().display()
+            );
+        } else {
+            println!("rsRewind agent access is OFF. Connected assistants see only a status tool.");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let config = Config::load_or_default(&data.config_file())?;
+    let _guard = init_logging(data, &config, false, "rsrewind-mcp")?;
+    let server = rsrewind_mcp::McpServer {
+        data: data.clone(),
+        config: config.mcp,
+        exe: std::env::current_exe().ok(),
+        version: env!("CARGO_PKG_VERSION"),
+    };
+    let stdin = std::io::stdin();
+    rsrewind_mcp::serve(&server, stdin.lock(), std::io::stdout().lock())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Sets `enabled` under `[mcp]` in config.toml, keeping the rest of the file (and its comments).
+fn set_mcp_enabled(path: &std::path::Path, on: bool) -> Result<()> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let value = if on { "true" } else { "false" };
+    let mut out = Vec::new();
+    let (mut in_mcp, mut seen_section, mut done) = (false, false, false);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            if in_mcp && !done {
+                out.push(format!("enabled = {value}"));
+                done = true;
+            }
+            in_mcp = trimmed == "[mcp]";
+            seen_section |= in_mcp;
+        } else if in_mcp
+            && trimmed.starts_with("enabled")
+            && trimmed[7..].trim_start().starts_with('=')
+        {
+            out.push(format!("enabled = {value}"));
+            done = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if in_mcp && !done {
+        out.push(format!("enabled = {value}"));
+        done = true;
+    }
+    if !seen_section {
+        out.push(String::new());
+        out.push("[mcp]".into());
+        out.push(format!("enabled = {value}"));
+        done = true;
+    }
+    debug_assert!(done);
+    let new = out.join("\n") + "\n";
+    // Refuse to write a file the recorder could not read back.
+    Config::parse(&new)
+        .map_err(|e| anyhow::anyhow!("config.toml would not parse after the change: {e}"))?;
+    std::fs::write(path, new).with_context(|| format!("write {}", path.display()))
+}
+
 /// `rsrewind ui --appearance`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Appearance {
@@ -959,6 +1050,76 @@ pub fn human_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// Every subcommand is either answered by an MCP tool or deliberately kept from agents. A new
+    /// subcommand fails this test until it is classified (AnchorDesk's parity invariant).
+    #[test]
+    fn every_command_is_classified_for_agents() {
+        let for_agents = [
+            ("search", "search"),
+            ("recent", "recent"),
+            ("gaps", "list_gaps"),
+            ("sources", "list_sources"),
+            ("status", "get_status"),
+            ("pause", "pause_recording"),
+        ];
+        // Recording control, deletion, moving history, setup and the surfaces themselves stay with the person.
+        let not_for_agents = [
+            "daemon", "start", "stop", "resume", "forget", "doctor", "export", "import", "ui",
+            "tray", "mcp", "data-dir", "help",
+        ];
+        let tools = rsrewind_mcp::tool_names();
+        for (command, tool) in for_agents {
+            assert!(
+                tools.contains(&tool),
+                "{command} maps to missing tool {tool}"
+            );
+        }
+        for sub in Cli::command().get_subcommands() {
+            let name = sub.get_name();
+            assert!(
+                for_agents.iter().any(|(c, _)| *c == name) || not_for_agents.contains(&name),
+                "classify `{name}`: give it an MCP tool or add it to not_for_agents"
+            );
+        }
+    }
+
+    #[test]
+    fn enabling_mcp_edits_config_toml_in_place() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.toml");
+        // No [mcp] section: one is appended; comments and other settings survive.
+        std::fs::write(&path, "# mine\n[capture]\nidle_after_secs = 120\n")?;
+        set_mcp_enabled(&path, true)?;
+        let text = std::fs::read_to_string(&path)?;
+        assert!(
+            text.contains("# mine") && text.contains("idle_after_secs = 120"),
+            "{text}"
+        );
+        assert!(Config::parse(&text)?.mcp.enabled);
+        // Existing section with a value: flipped, not duplicated.
+        set_mcp_enabled(&path, false)?;
+        let text = std::fs::read_to_string(&path)?;
+        assert_eq!(text.matches("enabled =").count(), 1, "{text}");
+        assert!(!Config::parse(&text)?.mcp.enabled);
+        // Section without the key, followed by another section.
+        std::fs::write(
+            &path,
+            "[mcp]\nmax_age_days = 7\n\n[capture]\nidle_after_secs = 60\n",
+        )?;
+        set_mcp_enabled(&path, true)?;
+        let config = Config::parse(&std::fs::read_to_string(&path)?)?;
+        assert!(
+            config.mcp.enabled
+                && config.mcp.max_age_days == 7
+                && config.capture.idle_after_secs == 60
+        );
+        // A file that would not parse is refused and left alone.
+        std::fs::write(&path, "[mcp]\nsources = [\"not-an-id\"]\n")?;
+        assert!(set_mcp_enabled(&path, true).is_err());
+        assert!(std::fs::read_to_string(&path)?.contains("not-an-id"));
+        Ok(())
+    }
 
     #[test]
     fn cli_definition_is_valid() {

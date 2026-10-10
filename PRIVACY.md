@@ -200,3 +200,12 @@ Not implemented yet; tracked here so the gap is explicit rather than silent:
   flash cells are immediately or securely overwritten (wear-leveling and TRIM behavior are outside
   rsRewind's control); a genuinely secure-delete guarantee is not currently made and is tracked
   here as unresolved, not silently assumed.
+
+## AI assistants (MCP)
+
+`rsrewind mcp` lets an AI assistant you configure read your history. **It is off until you run `rsrewind mcp
+--enable`**, because most assistants send what they read to their provider's servers: that is the only way rsRewind
+history leaves your computer, and only for what the assistant asks for. When on, agents see recognized text, app and
+window names from the last 30 days by default; screenshots only if you set `allow_screenshots = true`; only the
+machines you list under `[mcp] sources`. Agents cannot resume recording, forget, export or import. rsRewind logs each
+agent call's tool name, request id, result count and duration, never what was returned. See `docs/mcp.md`.

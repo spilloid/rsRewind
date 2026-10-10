@@ -18,6 +18,7 @@ rsrewind-segment.workspace = true
 rsrewind-query.workspace = true
 rsrewind-ui.workspace = true
 rsrewind-tray.workspace = true
+rsrewind-mcp.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
