@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-10-11
+
+**Seventh release: ask your history, and a Mac.** AI assistants can now search your screen history through an
+MCP server (off until you enable it), Apple Silicon Macs get a development-preview app, the rewind window puts
+the current moment front and centre, and every release now ships for Windows, Linux and macOS with a
+SHA-256 for each file.
+
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is
+> encrypted at rest. Use rsRewind only on machines you own, in sessions you are comfortable recording.
+
 ### Documentation
 
 - Product-first website and README, platform-aware installation suggestions, everyday guide and separate CLI/development references. macOS is clearly labeled as a development preview; privacy and release-channel limits stay visible.
@@ -29,6 +40,34 @@ All notable changes to this project are documented in this file. The format foll
   scrubbing the strip, stepping with ← / →, picking a search result or opening the window puts that moment
   on the stage, no click needed. Double-click it for the full-window viewer. The detail pane keeps the
   time, machine, app, window and recognized text.
+
+### Release files
+
+- **Linux AppImage** (`rsrewind-v0.0.7-linux-x86_64.AppImage`): make it executable and run it; with no
+  arguments it opens the rewind window, with arguments it is the `rsrewind` command line. Not code-signed.
+- **macOS disk image** (`rsrewind-v0.0.7-macos-arm64.dmg`): Apple Silicon, macOS 14+. Ad-hoc signed, **not
+  notarized**; Gatekeeper will warn.
+- Every file has a `<name>.sha256` next to it, and `SHA256SUMS.txt` lists all of them. The release pipeline
+  refuses to publish unless the tag matches the declared version and all five downloads (MSI, Windows ZIP,
+  Linux tarball, AppImage, macOS DMG) exist and verify.
+
+### Known issues
+
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- **The macOS app is a development preview**: not notarized, and interactive capture, permissions, multiple
+  screens and sleep/wake have not been checked on a real Mac.
+- **The AppImage and the macOS DMG have not been run from a published release yet**; the first
+  release to carry them is this one.
+- **MCP is new**: assistants send what they read to their model provider, so it is off until
+  `rsrewind mcp --enable`. It has had no independent security review.
+- Everything listed for 0.0.6 that is not mentioned above still applies (Linux text recognition needs
+  Tesseract installed; piping `rsrewind start` hangs, [#15](https://github.com/spilloid/rsRewind/issues/15);
+  thumbnails can stay blank for 20 s+ the first time a large real history opens).
+
+### Upgrade notes
+
+- No database migration and no required settings change.
+- MCP stays off until you run `rsrewind mcp --enable`; see `docs/mcp.md`.
 
 ## [0.0.6] - 2026-10-10
 

@@ -4,7 +4,7 @@ Find something you saw, even when you cannot remember where you saw it.
 
 rsRewind keeps a searchable visual history of your screen on your own computer. Remember a few words? Search them, jump back to that moment, and look at what happened around it. Recording and text recognition run locally, with no account or telemetry.
 
-**Current release: v0.0.6** · [Get rsRewind](https://spilloid.github.io/rsRewind/install.html) · [First few minutes](https://spilloid.github.io/rsRewind/guide.html) · [Website](https://spilloid.github.io/rsRewind/)
+**Current release: v0.0.7** · [Get rsRewind](https://spilloid.github.io/rsRewind/install.html) · [First few minutes](https://spilloid.github.io/rsRewind/guide.html) · [Website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind displaying synthetic history in the Windows viewer](site/img/room-dark.png)
 
@@ -14,8 +14,8 @@ rsRewind keeps a searchable visual history of your screen on your own computer. 
 
 | Platform | What you can get today |
 |---|---|
-| **Windows 11 · x64** | [Signed per-user installer or portable ZIP](https://spilloid.github.io/rsRewind/install.html#windows), v0.0.6. Windows 10 is unverified. |
-| **Linux · x86-64** | [v0.0.6 tarball](https://spilloid.github.io/rsRewind/install.html#linux). Recording requires KDE Plasma 6 on Wayland; install Tesseract for text search. Verified on one machine. |
+| **Windows 11 · x64** | [Signed per-user installer or portable ZIP](https://spilloid.github.io/rsRewind/install.html#windows), v0.0.7. Windows 10 is unverified. |
+| **Linux · x86-64** | [v0.0.7 tarball](https://spilloid.github.io/rsRewind/install.html#linux). Recording requires KDE Plasma 6 on Wayland; install Tesseract for text search. Verified on one machine. |
 | **macOS 14+ · Apple Silicon** | [Development preview](docs/macos.md). Native ARM64 app compiles and passes hosted tests. Ad-hoc signed, not notarized; real-Mac capture and UI acceptance remain pending. No Intel build. |
 
 ## Your first few minutes

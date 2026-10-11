@@ -76,6 +76,16 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "dry_run=$($dryRun.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
+      # A tag that disagrees with Cargo.toml, the changelog, README or site would publish binaries that
+      # report one version under another's name. Fail before building anything.
+      - name: Tag matches declared version and docs
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          declared=$(sed -n 's/^version = "\([0-9][0-9.]*\)".*/\1/p' Cargo.toml | head -1)
+          [ "$declared" = "${GITHUB_REF_NAME#v}" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml $declared" >&2; exit 1; }
+          ./scripts/check-docs.sh
+
       - name: Build
         run: cargo build --workspace --release --target x86_64-pc-windows-msvc
 
@@ -275,15 +285,57 @@ jobs:
           mkdir -p "dist/$name"
           cp target/release/rsrewind LICENSE README.md THIRD-PARTY-NOTICES.html "dist/$name/"
           tar -C dist -czf "$name.tar.gz" "$name"
+      - name: Install desktop-file-utils (appimagetool validates the .desktop file)
+        run: sudo apt-get update && sudo apt-get install -y desktop-file-utils
+      - name: Package AppImage
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: ./scripts/package-appimage.sh "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-payload
-          path: rsrewind-v*-linux-x86_64.tar.gz
+          path: |
+            rsrewind-v*-linux-x86_64.tar.gz
+            rsrewind-v*-linux-x86_64.AppImage
+          if-no-files-found: error
+
+  # macOS Apple Silicon. Ad-hoc signed only (no Developer ID, not notarized): Gatekeeper will warn,
+  # and the release notes say so. Integrity is the SHA-256 published with the release.
+  macos:
+    name: Build macOS disk image
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --workspace
+      - run: cargo build --locked --release -p rsrewind-cli --target aarch64-apple-darwin
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate about.hbs --fail -o THIRD-PARTY-NOTICES.html
+      - run: ./scripts/package-macos.sh
+      - name: Package disk image
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: ./scripts/package-macos-dmg.sh "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-payload
+          path: dist/rsrewind-v*-macos-arm64.dmg
           if-no-files-found: error
 
   checksums:
     name: Checksums
-    needs: [build, msi, linux]
+    needs: [build, msi, linux, macos]
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -298,13 +350,23 @@ jobs:
         with:
           name: linux-payload
           path: payload
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-payload
+          path: payload
       - name: Write SHA256SUMS.txt
         shell: pwsh
         run: |
           Set-Location payload
-          $files = Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.msi', '.gz' }
+          $files = Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.msi', '.gz', '.dmg', '.appimage' }
+          # Every release must carry all five downloads; a missing one fails here, not after publishing.
+          $expected = '-windows-amd64.zip', '-x64.msi', '-linux-x86_64.tar.gz', '-linux-x86_64.AppImage', '-macos-arm64.dmg'
+          foreach ($e in $expected) {
+            if (-not ($files | Where-Object { $_.Name -like "*$e" })) { throw "missing release file *$e" }
+          }
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($f.Name)" | Out-File -Encoding ascii "$($f.FullName).sha256"
             "$hash  $($f.Name)"
           }
           $lines | Out-File -Encoding ascii SHA256SUMS.txt
@@ -312,7 +374,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: checksums
-          path: payload/SHA256SUMS.txt
+          path: |
+            payload/SHA256SUMS.txt
+            payload/*.sha256
           if-no-files-found: error
 
   # Publishes everything together, only after every file is built, signed (or explicitly
@@ -320,7 +384,7 @@ jobs:
   # and a dry run never reaches this job at all.
   publish:
     name: Publish GitHub Release (prerelease)
-    needs: [build, msi, linux, checksums]
+    needs: [build, msi, linux, macos, checksums]
     if: needs.build.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -346,11 +410,18 @@ jobs:
           path: assets
       - uses: actions/download-artifact@v4
         with:
+          name: macos-payload
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
           name: checksums
           path: assets
       - name: Verify checksums before publishing
         working-directory: assets
-        run: sha256sum --check --strict SHA256SUMS.txt
+        run: |
+          sha256sum --check --strict SHA256SUMS.txt
+          for f in *.sha256; do sha256sum --check --strict "$f"; done
+          test "$(grep -c . SHA256SUMS.txt)" -eq 5
       # Release notes come from the matching CHANGELOG.md section, so the notes are written once,
       # reviewed in a PR, and cannot drift from what the tag contains.
       # Published as a prerelease first -- see docs/code-signing.md's
@@ -377,6 +448,8 @@ jobs:
           ZIP="rsrewind-v$VERSION-windows-amd64.zip"
           MSI="rsrewind-v$VERSION-x64.msi"
           TGZ="rsrewind-v$VERSION-linux-x86_64.tar.gz"
+          APPIMAGE="rsrewind-v$VERSION-linux-x86_64.AppImage"
+          DMG="rsrewind-v$VERSION-macos-arm64.dmg"
           {
             echo "# rsRewind v$VERSION"
             echo
@@ -391,6 +464,10 @@ jobs:
             echo "| [\`$MSI\`]($BASE/$MSI) | Per-user installer (no administrator rights) | \`$(awk -v f="$MSI" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
             echo "| [\`$ZIP\`]($BASE/$ZIP) | Portable: \`rsrewind.exe\`, LICENSE, README | \`$(awk -v f="$ZIP" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
             echo "| [\`$TGZ\`]($BASE/$TGZ) | Linux x86-64: \`rsrewind\` (records on KDE Plasma, Wayland; not code-signed), LICENSE, README | \`$(awk -v f="$TGZ" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo "| [\`$APPIMAGE\`]($BASE/$APPIMAGE) | Linux x86-64 AppImage (\`chmod +x\`, run; no arguments opens the window; not code-signed) | \`$(awk -v f="$APPIMAGE" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo "| [\`$DMG\`]($BASE/$DMG) | macOS 14+, Apple Silicon: disk image, ad-hoc signed, **not notarized** (Gatekeeper will warn; development preview) | \`$(awk -v f="$DMG" '$2==f {print $1}' assets/SHA256SUMS.txt)\` |"
+            echo
+            echo "Each file also has a \`<name>.sha256\` next to it, and \`SHA256SUMS.txt\` lists all of them."
             echo
             echo "## Verify before you run it"
             echo
@@ -404,10 +481,10 @@ jobs:
             echo "Status must be \`Valid\` and the signer \`CN=Joseph Spillers\` with a Microsoft timestamp. The"
             echo "same applies to \`rsrewind.exe\`. If a check fails, do not run it; please open an issue."
             echo
-            echo "On Linux, check the tarball against SHA256SUMS.txt (it is not code-signed):"
+            echo "On Linux and macOS, check the download against SHA256SUMS.txt (neither is Authenticode-signed):"
             echo
             echo '```sh'
-            echo "sha256sum --check --ignore-missing SHA256SUMS.txt"
+            echo "sha256sum --check --ignore-missing SHA256SUMS.txt   # macOS: shasum -a 256 -c SHA256SUMS.txt 2>/dev/null | grep OK"
             echo '```'
             echo
             echo "## Next steps and docs"
@@ -427,7 +504,8 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           gh release create "v$VERSION" \
-            assets/*.zip assets/*.msi assets/*.tar.gz assets/SHA256SUMS.txt \
+            assets/*.zip assets/*.msi assets/*.tar.gz assets/*.AppImage assets/*.dmg \
+            assets/*.sha256 assets/SHA256SUMS.txt \
             --title "rsRewind v$VERSION" \
             --prerelease \
             --notes-file notes.md
