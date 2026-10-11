@@ -227,6 +227,15 @@ fn a_v1_store_still_reads_and_has_no_marks() -> TestResult {
     let history = History::open(&data);
     assert!(history.problems().is_empty(), "{:?}", history.problems());
     assert!(history.marks()?.is_empty());
+    assert_eq!(history.own_schema(), Some(1));
+
+    // The first mark after the upgrade migrates the store under the open reader, which must see
+    // it without being reopened.
+    let writer = Store::open(&data)?;
+    writer.add_mark(Timestamp(T0 + 5), "after the upgrade", Timestamp(T0))?;
+    let marks = history.marks()?;
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].label, "after the upgrade");
     assert_eq!(
         history
             .keyframes(SourceFilter::All, Timestamp(T0), Timestamp(T0 + 800_000))?

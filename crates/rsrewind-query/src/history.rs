@@ -340,6 +340,12 @@ impl History {
         }
     }
 
+    /// The schema version of the data folder's own store when it was opened (`None` without one).
+    /// Below [`rsrewind_core::SCHEMA_VERSION`], the first `rsrewind mark` will migrate it.
+    pub fn own_schema(&self) -> Option<u32> {
+        self.lanes.iter().find(|l| l.own).map(|l| l.db.schema())
+    }
+
     /// Keyframes (automatic stops) of the selected sources whose moment starts in `[from, to]`,
     /// merged and thinned, oldest first. See [`crate::keyframes`].
     pub fn keyframes(
@@ -348,9 +354,21 @@ impl History {
         from: Timestamp,
         to: Timestamp,
     ) -> Result<Vec<Keyframe>> {
+        self.keyframes_toward(filter, from, to, false)
+    }
+
+    /// [`History::keyframes`]; a range denser than [`crate::keyframes::MAX_KEYFRAME_ROWS`] is read
+    /// from its newest end when `newest_first` (backward steps), else from its oldest.
+    fn keyframes_toward(
+        &self,
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+        newest_first: bool,
+    ) -> Result<Vec<Keyframe>> {
         let mut candidates = Vec::new();
         for lane in self.lanes(filter) {
-            candidates.extend(lane.db.keyframe_candidates(from, to)?);
+            candidates.extend(lane.db.keyframe_candidates(from, to, newest_first)?);
         }
         Ok(thin(candidates, KEYFRAME_SPACING_MS))
     }
@@ -392,7 +410,7 @@ impl History {
             if a > b {
                 return Ok(None);
             }
-            let found = self.keyframes(filter, Timestamp(a), Timestamp(b))?;
+            let found = self.keyframes_toward(filter, Timestamp(a), Timestamp(b), !forward)?;
             let pick = if forward {
                 found.into_iter().find(|k| k.at > from)
             } else {

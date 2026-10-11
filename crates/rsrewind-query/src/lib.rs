@@ -173,6 +173,11 @@ impl QueryDb {
         })
     }
 
+    /// The schema version this store had when it was opened.
+    pub fn schema(&self) -> u32 {
+        self.schema
+    }
+
     /// Results from this connection are attributed to `source` from now on.
     pub(crate) fn attribute_to(&mut self, source: Option<SourceId>) {
         self.source = source;

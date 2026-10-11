@@ -26,7 +26,8 @@ const CONTEXT_ROWS: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum KeyframeKind {
-    /// The first moment after a stretch with nothing recorded (or the first moment of history).
+    /// The first moment after at least [`RESUME_MIN_GAP_MS`] with nothing recorded inside the range
+    /// looked at (so the first moment of history is one only if the range starts that long before it).
     Resume,
     /// Another application has focus on this monitor.
     AppSwitch,
@@ -201,36 +202,73 @@ impl QueryDb {
         &self,
         from: Timestamp,
         to: Timestamp,
+        newest_first: bool,
+    ) -> Result<Vec<Keyframe>> {
+        self.keyframe_candidates_capped(from, to, newest_first, MAX_KEYFRAME_ROWS)
+    }
+
+    /// [`QueryDb::keyframe_candidates`] reading at most `cap` observations: the oldest of the range,
+    /// or with `newest_first` the newest (a backward step wants the stops nearest its start, which
+    /// is the newest end of its window).
+    pub(crate) fn keyframe_candidates_capped(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        newest_first: bool,
+        cap: u32,
     ) -> Result<Vec<Keyframe>> {
         if to < from {
             return Ok(Vec::new());
         }
-        let rows: Vec<Obs> = {
+        let order = if newest_first {
+            "DESC, e.id DESC"
+        } else {
+            ", e.id"
+        };
+        let mut rows: Vec<Obs> = {
             let mut stmt = self.conn.prepare(&format!(
                 "{OBS_SELECT}
                  WHERE e.kind = 'observation' AND e.started_at >= ?1 AND e.started_at <= ?2
-                 ORDER BY e.started_at, e.id LIMIT ?3"
+                 ORDER BY e.started_at {order} LIMIT ?3"
             ))?;
-            stmt.query_map(params![from.0, to.0, MAX_KEYFRAME_ROWS], obs)?
+            stmt.query_map(params![from.0, to.0, cap], obs)?
                 .collect::<rusqlite::Result<_>>()?
         };
-        if rows.is_empty() {
-            return Ok(Vec::new());
+        if newest_first {
+            rows.reverse();
         }
+        let Some(head) = rows.first().copied() else {
+            return Ok(Vec::new());
+        };
+        // Cut short at the old end: the range effectively starts at the first row read, so its
+        // monitors' previous states and its gaps are taken from there.
+        let cut = newest_first && rows.len() as u32 >= cap;
         let before: Vec<Obs> = {
             let mut stmt = self.conn.prepare(&format!(
                 "{OBS_SELECT}
-                 WHERE e.kind = 'observation' AND e.started_at < ?1
-                 ORDER BY e.started_at DESC, e.id DESC LIMIT ?2"
+                 WHERE e.kind = 'observation' AND (e.started_at, e.id) < (?1, ?2)
+                 ORDER BY e.started_at DESC, e.id DESC LIMIT ?3"
             ))?;
-            stmt.query_map(params![from.0, CONTEXT_ROWS], obs)?
+            stmt.query_map(params![head.started_at, head.event, CONTEXT_ROWS], obs)?
                 .collect::<rusqlite::Result<_>>()?
         };
+        let gaps_from = if cut {
+            Timestamp(head.started_at)
+        } else {
+            from
+        };
         let resumes: Vec<i64> = self
-            .gaps(from, Timestamp(to.0.saturating_add(1)), RESUME_MIN_GAP_MS)?
+            .gaps(
+                gaps_from,
+                Timestamp(to.0.saturating_add(1)),
+                RESUME_MIN_GAP_MS,
+            )?
             .into_iter()
             .map(|g| g.to.0)
             .collect();
+        if rows.len() as u32 >= cap {
+            tracing::debug!(cap, newest_first, "keyframe range read only partly");
+        }
         Ok(derive(&rows, &before, &resumes, self.source))
     }
 
@@ -371,5 +409,135 @@ mod tests {
         let out = thin(mixed, KEYFRAME_SPACING_MS);
         assert!(out[0].at < out[1].at);
         assert!(thin(Vec::new(), KEYFRAME_SPACING_MS).is_empty());
+    }
+
+    #[test]
+    fn thinning_follows_the_kept_stop_when_a_stronger_one_replaces_it() {
+        let k = |at: i64, kind: KeyframeKind, event: i64| Keyframe {
+            at: Timestamp(T + at),
+            kind,
+            score: 0,
+            source: None,
+            event_id: EventId(event),
+            visual_state_id: VisualStateId(event),
+        };
+        // 0 s is replaced by the stronger 10 s; spacing is then measured from 10 s, so 20 s (10 s
+        // after it) goes and 26 s (16 s after it) stays, although 20 s was 20 s from the first.
+        let thinned = thin(
+            vec![
+                k(0, KeyframeKind::WindowSwitch, 1),
+                k(10_000, KeyframeKind::AppSwitch, 2),
+                k(20_000, KeyframeKind::WindowSwitch, 3),
+                k(26_000, KeyframeKind::WindowSwitch, 4),
+            ],
+            KEYFRAME_SPACING_MS,
+        );
+        assert_eq!(
+            kinds(&thinned),
+            [
+                (2, KeyframeKind::AppSwitch),
+                (4, KeyframeKind::WindowSwitch)
+            ]
+        );
+    }
+
+    /// More observations than the cap: a backward read keeps the newest (nearest the step's start),
+    /// with correct context for the first row it kept; a forward read keeps the oldest.
+    #[test]
+    fn a_range_over_the_cap_is_read_from_the_end_a_step_needs()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use rsrewind_core::{ApplicationContext, DataDir, MonitorInfo, WindowContext};
+        use rsrewind_storage::media::{encode_webp, write_webp_exclusive};
+        use rsrewind_storage::{NewVisualState, Observation, Store};
+
+        let tmp = tempfile::tempdir()?;
+        let data = DataDir::new(tmp.path());
+        let store = Store::open(&data)?;
+        let session = store.begin_session(Timestamp(T - 1_000), "h", "t")?;
+        let monitor = store.upsert_monitor(
+            &MonitorInfo {
+                device_name: "m".into(),
+                left: 0,
+                top: 0,
+                width: 8,
+                height: 4,
+                dpi: 96,
+                primary: true,
+            },
+            Timestamp(T),
+        )?;
+        let bytes = encode_webp(
+            &rsrewind_core::BgraFrame {
+                width: 8,
+                height: 4,
+                stride: 32,
+                pixels: vec![9; 128],
+            },
+            50,
+        )?;
+        // 30 moments 20 s apart, each in a different application than the one before.
+        for i in 0..30i64 {
+            let at = Timestamp(T + i * 20_000);
+            let relative = rsrewind_core::paths::media_relative_path(at, monitor);
+            write_webp_exclusive(&data, &relative, &bytes)?;
+            let state = store.insert_visual_state(&NewVisualState {
+                monitor,
+                captured_at: at,
+                media_path: relative,
+                width: 8,
+                height: 4,
+                byte_size: bytes.len() as u64,
+                fingerprint: None,
+                ocr_enabled: false,
+            })?;
+            let app = store.upsert_application(
+                &ApplicationContext {
+                    process_name: format!("app{}", i % 2),
+                    exe_path: None,
+                },
+                at,
+            )?;
+            let window = store.upsert_window(
+                app,
+                &WindowContext {
+                    title: "w".into(),
+                    class_name: None,
+                },
+                at,
+            )?;
+            store.record_observation(&Observation {
+                session,
+                monitor,
+                visual_state: state,
+                application: Some(app),
+                window: Some(window),
+                at,
+                max_gap_ms: 1_000,
+            })?;
+        }
+        let db = QueryDb::open(&data)?;
+        let (from, to) = (Timestamp(T), Timestamp(T + 30 * 20_000));
+        let at = |keys: Vec<Keyframe>| -> Vec<i64> {
+            keys.iter().map(|k| (k.at.0 - T) / 20_000).collect()
+        };
+
+        let newest = db.keyframe_candidates_capped(from, to, true, 10)?;
+        assert_eq!(
+            at(newest),
+            (20..30).collect::<Vec<_>>(),
+            "every one of the newest ten, \
+            the first compared with the row before it"
+        );
+        let oldest = db.keyframe_candidates_capped(from, to, false, 10)?;
+        assert_eq!(
+            at(oldest),
+            (1..10).collect::<Vec<_>>(),
+            "the first moment has nothing before it"
+        );
+        // Uncapped, both directions agree.
+        let all = db.keyframe_candidates(from, to, true)?;
+        assert_eq!(all, db.keyframe_candidates(from, to, false)?);
+        assert_eq!(all.len(), 29);
+        Ok(())
     }
 }

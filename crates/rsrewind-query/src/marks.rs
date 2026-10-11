@@ -24,8 +24,16 @@ pub struct Mark {
 
 impl QueryDb {
     /// Every mark, oldest moment first (at most [`MAX_MARKS`]). A v1 store has none.
+    ///
+    /// Whether the table exists is checked on every call, not taken from the version seen at open:
+    /// the first `rsrewind mark` after an upgrade migrates a store this connection already holds.
     pub fn marks(&self) -> Result<Vec<Mark>> {
-        if self.schema < 2 {
+        let has_table: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'marks')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_table {
             return Ok(Vec::new());
         }
         let mut stmt = self.conn.prepare(
