@@ -3,98 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Install rsRewind</title>
-<meta name="description" content="Install, verify and first run of rsRewind v0.0.6 on Windows 11 and KDE Plasma.">
+<title>Get rsRewind</title>
+<meta name="description" content="Download Windows and Linux v0.0.6 or try the Apple Silicon development preview.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<header class="top">
-  <a class="brand" href="index.html">rs<span>Rewind</span></a>
-  <nav aria-label="Site">
-    <a href="index.html">Overview</a>
-    <a href="install.html" aria-current="page">Install</a>
-    <a href="probes.html">Many machines</a>
-    <a href="privacy.html">Privacy</a>
-    <a href="https://github.com/spilloid/rsRewind">Source</a>
-  </nav>
-</header>
-<section>
-  <div class="kicker">Version 0.0.6 · Windows 11 (x64) · Linux (x86-64)</div>
-  <h1>Install</h1>
-  <p class="lede">Two signed Windows downloads (the installer is per-user and needs no administrator rights) and a Linux tarball.</p>
-  <div class="cta">
-    <a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-x64.msi">Installer (.msi)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-windows-amd64.zip">Portable (.zip)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-linux-x86_64.tar.gz">Linux (.tar.gz)</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/SHA256SUMS.txt">SHA256SUMS.txt</a>
-  </div>
-  <p class="note">Before installing, read the <a href="https://github.com/spilloid/rsRewind/issues/12">known privacy issues (#12)</a>.</p>
-</section>
-
-<section>
-  <h2>Verify before you run it</h2>
-  <p>rsRewind records your screen, so check what you downloaded. In PowerShell, in the folder you saved the files to:</p>
-<pre><code>Get-FileHash .\rsrewind-v0.0.6-x64.msi -Algorithm SHA256
-Get-Content .\SHA256SUMS.txt          # the hash above must match its line
-
-Get-AuthenticodeSignature .\rsrewind-v0.0.6-x64.msi | Format-List Status,SignerCertificate</code></pre>
-  <p>Status must be <code>Valid</code> and the signer <code>CN=Joseph Spillers</code>, with a Microsoft timestamp. The same applies to <code>rsrewind.exe</code> inside the zip. If either check fails, do not run it, and please <a href="https://github.com/spilloid/rsRewind/issues">open an issue</a>.</p>
-</section>
-
-<section>
-  <h2>First run</h2>
-  <ol class="steps">
-    <li><strong>Install.</strong> The installer puts <code>rsrewind.exe</code> in <code>%LOCALAPPDATA%\Programs\rsRewind</code>. With the zip, put the exe wherever you like.</li>
-    <li><strong>Check the setup.</strong> <code>rsrewind doctor</code> reports whether capture works, whether Windows text recognition has a language installed, and how much disk is free.</li>
-    <li><strong>Record.</strong> <code>rsrewind start</code>, work normally for a few minutes, then <code>rsrewind status</code>.</li>
-    <li><strong>Look back.</strong> <code>rsrewind ui</code> opens the rewind room. Search at the top; click a result to jump to that moment.</li>
-  </ol>
-  <p>History lives in <code>%LOCALAPPDATA%\rsRewind</code>. Uninstalling never deletes it. To delete recent history, use <code>rsrewind forget 15m --yes</code>; it removes the screenshots, the recognized text and the window titles together.</p>
-</section>
-
-<section>
-  <h2>Linux (KDE Plasma on Wayland)</h2>
-  <p>The Linux build is not code-signed; check it against <code>SHA256SUMS.txt</code> from the same release:</p>
-<pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
+<header class="top"><a class="brand" href="index.html">rs<span>Rewind</span></a><nav aria-label="Site"><a href="index.html">Overview</a><a href="install.html" aria-current="page">Get rsRewind</a><a href="guide.html">Guide</a><a href="probes.html">Multiple computers</a><a href="privacy.html">Privacy</a></nav></header>
+<main id="main">
+<section class="hero"><div class="kicker">Start here</div><h1>Get rsRewind.</h1><p class="lede">Choose your computer, open the app, and try a small recording before making it part of your day.</p><div class="cta"><a class="btn primary" data-platform-download href="#platforms">Choose your platform</a><a class="btn" href="guide.html">First-run guide</a></div><p class="note" data-platform-note>Public release v0.0.6 for Windows and Linux. Mac is a development preview.</p><nav id="platforms" aria-label="Platforms"><a href="#windows">Windows</a><a href="#linux">Linux</a><a href="#macos">Apple Silicon Mac</a></nav><div class="callout warn"><p><strong>Start with a harmless test session.</strong> This is an early release with unencrypted history and <a href="https://github.com/spilloid/rsRewind/issues/12">known privacy gaps</a>. Read <a href="privacy.html">what gets recorded</a> before using it on your everyday desktop.</p></div></section>
+<section id="windows"><h2>Windows 11 · x64</h2><p>The signed installer installs for your user account without administrator rights.</p><div class="cta"><a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-x64.msi">Download Windows installer</a><a class="btn" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-windows-amd64.zip">Portable ZIP</a></div><ol class="steps"><li>Download and verify the installer using the checks below.</li><li>Run the installer, then open <strong>rsRewind</strong> from the Start menu.</li><li>Choose <strong>Start recording</strong> and follow the <a href="guide.html">first-run guide</a>.</li></ol><details><summary>Verify the download before installing</summary><p>Download <a href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/SHA256SUMS.txt">SHA256SUMS.txt</a> into the same folder. In PowerShell:</p><pre><code>Get-FileHash .\rsrewind-v0.0.6-x64.msi -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt
+Get-AuthenticodeSignature .\rsrewind-v0.0.6-x64.msi | Format-List Status,SignerCertificate</code></pre><p>The hash must match its line. Signature status must be <code>Valid</code>, with signer <code>CN=Joseph Spillers</code>. If checks fail, do not run it. For the portable ZIP, verify the ZIP hash and the signature of the extracted executable.</p></details><details><summary>Portable use and diagnostics</summary><p>Extract the ZIP, then run the executable with <code>ui</code> to open the viewer. For the installed version, use:</p><pre><code>&amp; "$env:LOCALAPPDATA\Programs\rsRewind\rsrewind.exe" doctor
+&amp; "$env:LOCALAPPDATA\Programs\rsRewind\rsrewind.exe" ui</code></pre><p>Windows 10 is unverified. The app does not require a browser runtime.</p></details></section>
+<section id="linux"><h2>Linux · KDE Plasma 6 on Wayland</h2><p>The x86-64 recorder requires Plasma on Wayland. Other desktops can browse and search imported history. Install Tesseract from your distribution for text recognition.</p><div class="cta"><a class="btn primary" href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/rsrewind-v0.0.6-linux-x86_64.tar.gz">Download Linux tarball</a><a href="https://github.com/spilloid/rsRewind/releases/download/v0.0.6/SHA256SUMS.txt">Checksums</a></div><p>Save both files in the same folder, then verify, extract and open:</p><pre><code>sha256sum --check --ignore-missing SHA256SUMS.txt
 tar -xzf rsrewind-v0.0.6-linux-x86_64.tar.gz
+mkdir -p ~/.local/bin
 install -m 755 rsrewind-v0.0.6-linux-x86_64/rsrewind ~/.local/bin/rsrewind
-rsrewind start
-rsrewind tray --autostart on   # the tray icon at every login
-rsrewind tray                  # and now</code></pre>
-  <p>Text recognition uses Tesseract (Apache-2.0), which rsRewind runs but does not include. Install it once from your distribution, then restart the recorder; moments recorded before are read in the background:</p>
-<pre><code>rpm-ostree install tesseract     # Fedora Atomic / Bazzite (then reboot), or: brew install tesseract
-sudo apt install tesseract-ocr   # Debian / Ubuntu
-rsrewind doctor                  # "Tesseract ready"</code></pre>
-  <p>To have the recorder start with your Plasma session and restart if it ever stops, run it as a systemd user service. Save this as <code>~/.config/systemd/user/rsrewind.service</code>:</p>
-<pre><code>[Unit]
-Description=rsRewind screen-history recorder
-PartOf=graphical-session.target
-After=graphical-session.target
-
-[Service]
-ExecStart=%h/.local/bin/rsrewind daemon
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=graphical-session.target</code></pre>
-<pre><code>rsrewind stop                                   # if you started it by hand
-systemctl --user daemon-reload
-systemctl --user enable --now rsrewind.service</code></pre>
-  <p>The recorder needs KDE Plasma 6 on Wayland. Its first start writes <code>~/.local/share/applications/rsrewind-recorder.desktop</code>, which is how KWin decides which programs may take screenshots; delete that file to withdraw the permission. History lives in <code>~/.local/share/rsRewind</code>, readable only by you. Text recognition uses Tesseract (above); until it is installed, moments appear in <code>rsrewind recent</code> and the rewind window but are not searchable by text. The window, <code>search</code>, <code>import</code> and the other commands work on any Linux desktop.</p>
-</section>
-
-<section>
-  <h2>Good to know</h2>
-  <div class="grid">
-    <div class="card"><h3>Idle means paused</h3><p>After five minutes without input nothing new is stored. Change <code>idle_after_secs</code> in <code>config.toml</code> if you want otherwise.</p></div>
-    <div class="card"><h3>The tray icon</h3><p><code>rsrewind tray</code> shows red while recording and green while not. Its menu pauses, resumes, forgets the last 10 minutes or hour (click twice to confirm) and opens the window. <code>rsrewind tray --autostart on</code> starts it at login.</p></div>
-    <div class="card"><h3>Privacy exclusions</h3><p>Password managers and private browser windows are excluded by default. A monitor is skipped entirely if any visible window on it matches. <a href="privacy.html">Details</a>.</p></div>
-    <div class="card"><h3>Disk use</h3><p>Defaults keep 90 days and cap storage at 50 GB. Both are settings, and <code>rsrewind doctor</code> warns when space is tight.</p></div>
-  </div>
-</section>
+~/.local/bin/rsrewind ui</code></pre><p>Confirm the tarball reports <code>OK</code> before extracting. Choose <strong>Start recording</strong> in the app.</p><details><summary>Enable text recognition and login startup</summary><pre><code>sudo apt install tesseract-ocr   # Debian / Ubuntu
+# Fedora Atomic / Bazzite instead: rpm-ostree install tesseract (then reboot)
+~/.local/bin/rsrewind doctor
+~/.local/bin/rsrewind tray --autostart on</code></pre><p>Restart the recorder after installing Tesseract. Existing moments are read in the background. Autostart starts the tray and recorder at login. Put <code>~/.local/bin</code> on PATH if you want to use the shorter command.</p></details><details><summary>Permissions and advanced service setup</summary><p>The recorder writes <code>~/.local/share/applications/rsrewind-recorder.desktop</code>, which KWin uses to authorize capture. Removing it withdraws that authorization. For a supervised user service instead of tray startup, see the <a href="https://github.com/spilloid/rsRewind/blob/main/docs/development.md">development reference</a>. Avoid configuring two startup mechanisms.</p></details></section>
+<section id="macos"><h2>Mac · Apple Silicon preview</h2><p>macOS 14 or newer, ARM64. The native app builds and passes hosted tests. Interactive capture, permissions, menu layout and sleep/wake still need real-Mac acceptance.</p><div class="callout"><p><strong>Development artifact, not a notarized release.</strong> This app is ad-hoc signed; it has no Developer ID signature or notarization. There is no Intel build. macOS may block opening it.</p></div><a class="btn primary" href="https://github.com/spilloid/rsRewind/actions/workflows/macos.yml?query=branch%3Amain">Find the Apple Silicon build</a><ol class="steps"><li>Open a successful <strong>main</strong> workflow run. Under Artifacts, download <strong>rsRewind-macos-arm64</strong>. GitHub sign-in is required; artifacts expire.</li><li>Extract the artifact ZIP. Verify the included app-package checksum, then extract the inner app ZIP and copy <strong>rsRewind.app</strong> to Applications.</li><li>Open the app. Grant screen-recording permission in System Settings → Privacy &amp; Security when requested, restarting if macOS asks. Choose <strong>Start recording</strong> for a harmless test.</li></ol><details><summary>Verify, diagnose and understand preview limits</summary><pre><code>shasum -a 256 -c rsRewind-0.0.6-macos-arm64.zip.sha256
+/Applications/rsRewind.app/Contents/MacOS/rsrewind doctor</code></pre><p>A matching checksum checks file integrity, not a verified publisher identity. If macOS blocks the app, treat that as a development-distribution limitation; review the source and build provenance before deciding to run it. Permission settings may be called Screen Recording or Screen &amp; System Audio Recording depending on macOS version.</p><p><a href="https://github.com/spilloid/rsRewind/blob/main/docs/macos.md">Full Mac setup, login startup and acceptance checklist →</a></p></details></section>
+</main>
 <footer>
   <span>rsRewind is MIT licensed. A Spillers Technology project.</span>
   <a href="https://github.com/spilloid/rsRewind/blob/main/CHANGELOG.md">Changelog</a>
@@ -102,6 +36,8 @@ systemctl --user enable --now rsrewind.service</code></pre>
   <a href="https://github.com/spilloid/rsRewind/issues">Issues</a>
   <span>This site loads nothing from other servers.</span>
 </footer>
+
 </div>
+<script src="platform.js" defer></script>
 </body>
 </html>

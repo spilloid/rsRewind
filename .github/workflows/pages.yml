@@ -13,6 +13,7 @@ on:
       - 'CHANGELOG.md'
       - 'Cargo.toml'
       - 'scripts/check-docs.sh'
+      - 'scripts/check-site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 

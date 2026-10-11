@@ -62,3 +62,14 @@ ol.steps{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:14px
 footer{border-top:1px solid var(--line);padding-top:24px;display:flex;flex-wrap:wrap;gap:8px 24px;color:var(--muted);font-size:.9rem}
 @media (max-width:560px){body{font-size:16px;padding-inline:16px}.wrap{gap:56px}table{min-width:0;font-size:.9rem}th,td{padding:9px 10px}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+main{display:flex;flex-direction:column;gap:64px;min-width:0}
+section[id]{scroll-margin-top:24px}
+details{border:1px solid var(--line);border-radius:10px;padding:16px 20px;background:var(--surface)}
+summary{cursor:pointer;font-weight:600;color:var(--gold)}
+summary:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
+details[open]>:not(summary){margin-top:18px}
+details section{margin-top:32px}
+.skip{position:absolute;top:-100px;left:16px;background:var(--surface);padding:12px;z-index:2}
+.skip:focus{top:8px}
+@media(max-width:560px){main{gap:48px}.btn{width:100%;text-align:center}}
