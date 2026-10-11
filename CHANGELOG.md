@@ -6,6 +6,66 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-10-11
+
+**Ninth release: one way in.** Search for rsRewind on any platform and the same thing happens: the tray
+icon comes up, recording starts (unless you turned that off), and the window opens. The tray icon is how
+you see that it is running.
+
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is
+> encrypted at rest. Use rsRewind only on machines you own, in sessions you are comfortable recording.
+> **Recording now starts by itself** when you open rsRewind or sign in; see Changed for how to turn that off.
+
+### Added
+
+- **`rsrewind launch`, and a branded launcher on every platform.** It brings up the tray icon (and, by
+  default, the recorder) and then the window, and is idempotent: a second launch finds the icon already up.
+  Running `rsrewind` with no arguments, or double-clicking the executable, does the same.
+  - **Windows:** the Start Menu shortcut runs `launch` and `rsrewind.exe` now carries the rsRewind icon, so
+    Windows search, Explorer and the taskbar show it.
+  - **Linux:** the first run adds `rsrewind.desktop` and its icon to your user menu, so KRunner and the GNOME
+    overview find "rsRewind" by name.
+  - **macOS:** the app bundle now has an icon, and opening it launches the tray item and the window.
+- **The AppImage installs itself on first run.** An AppImage runs from a temporary mount that vanishes when it
+  exits, so anything it started (the tray icon, the recorder) died with it, and KDE could not recognise the
+  program for screenshot authorization. The first run now copies the program to
+  `~/.local/share/rsRewind-app/` and continues from there; a newer AppImage refreshes the copy. The install
+  page now leads with the AppImage for Linux.
+- `capture.record_on_launch` in `config.toml` (default `true`).
+
+### Changed
+
+- **Recording starts when you open rsRewind or sign in.** Before, the window waited for you to press Start
+  recording. Recall is the point of the app, and a recorder that is off after installing is a recall tool that
+  has nothing to recall. The tray icon (red while recording, green when not) and `rsrewind status` always show
+  the state. Set `record_on_launch = false` under `[capture]` to bring up only the tray icon and window and
+  start recording yourself. A settings screen for this, and for time-of-day schedules, is planned for 0.0.10.
+- **The Windows installer's start-at-login entry is on by default** (it was opt-in), so the tray icon and
+  recording come up after every sign-in. Install without it with `msiexec /i rsrewind.msi ADDLOCAL=Application`
+  or run `rsrewind tray --autostart off` afterwards.
+- PRIVACY.md, the install page, the guide and the installer notes say all of the above.
+
+### Known issues
+
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- **Nothing in this release has been run on a real Windows or Mac machine.** The launcher, the exe icon, the
+  Start Menu shortcut (which runs minimized because `rsrewind.exe` is a console program, so a brief taskbar
+  flash is possible) and the Mac app icon were checked by build and test only. The Linux launcher and the
+  AppImage's copy-and-continue were run here.
+- On the first AppImage run the 30 MB program is copied once; it is not removed when you delete the AppImage
+  (delete `~/.local/share/rsRewind-app/` and `~/.local/share/applications/rsrewind.desktop`).
+- A running tray icon or recorder keeps its old version after an upgrade until it is restarted.
+- Everything listed for 0.0.8 that is not mentioned above still applies.
+
+### Upgrade notes
+
+- No database migration. **Recording now starts by itself**; set `record_on_launch = false` under
+  `[capture]` in `config.toml` if you do not want that.
+- Windows: an existing install keeps its old login entry until you run `rsrewind tray --autostart on` once or
+  reinstall with this MSI.
+- Linux: run the new AppImage once (or `rsrewind launch` from the tarball) to get the menu entry.
+
 ## [0.0.8] - 2026-10-11
 
 **Eighth release: the icon is there when you need it.** The Windows tray icon has existed since 0.0.5 but

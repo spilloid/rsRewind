@@ -10,8 +10,9 @@ menu layout and sleep/wake acceptance require a real Mac and are not proven by C
 
 ## Install and open
 
-Open a successful **main** run in the [Mac build workflow](https://github.com/spilloid/rsRewind/actions/workflows/macos.yml?query=branch%3Amain). Download the `rsRewind-macos-arm64` artifact (GitHub sign-in required; artifacts expire). Extract the outer ZIP, verify the included app ZIP with `shasum -a 256 -c rsRewind-0.0.6-macos-arm64.zip.sha256`, then extract that inner ZIP and copy `rsRewind.app` to Applications. The checksum checks integrity, not publisher identity. macOS may block this development app because it is not notarized. Open it to see the existing
-native rewind window. Recording starts only when you choose **Start recording**.
+Open a successful **main** run in the [Mac build workflow](https://github.com/spilloid/rsRewind/actions/workflows/macos.yml?query=branch%3Amain). Download the `rsRewind-macos-arm64` artifact (GitHub sign-in required; artifacts expire). Extract the outer ZIP, verify the included app ZIP with `shasum -a 256 -c rsRewind-0.0.6-macos-arm64.zip.sha256`, then extract that inner ZIP and copy `rsRewind.app` to Applications. The checksum checks integrity, not publisher identity. macOS may block this development app because it is not notarized. Open it: it starts the menu-bar item and recording
+(unless `capture.record_on_launch` is `false` in `config.toml`), then shows the native rewind window. The menu-bar item shows whether
+it is recording.
 macOS controls screen-recording access in System Settings → Privacy & Security →
 Screen Recording (or Screen & System Audio Recording, depending on macOS version). Grant access to the application you actually use
 and restart it if macOS asks. The app cannot bypass a denied permission.

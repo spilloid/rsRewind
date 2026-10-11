@@ -1,6 +1,8 @@
 //! `rsrewind.exe`: one executable for the recorder, the UI and every command-line tool.
 
 mod doctor;
+#[cfg(target_os = "linux")]
+mod launcher;
 mod macos_login;
 mod render;
 mod replicate;
@@ -146,6 +148,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Open rsRewind the way the Start menu or app launcher does: bring up the tray icon (and, unless
+    /// `capture.record_on_launch` is off, the recorder), then the window. Returns at once.
+    Launch,
     /// Open the rsRewind window (in its own process; this command returns at once).
     Ui {
         /// Run the window in this process and wait until it is closed.
@@ -161,7 +166,7 @@ enum Command {
         /// Run in this process and wait until the icon is quit.
         #[arg(long)]
         foreground: bool,
-        /// Start the recorder too, if it is not running.
+        /// Start the recorder too, if it is not running (unless `capture.record_on_launch` is false).
         #[arg(long)]
         start_recorder: bool,
         /// Start the icon and the recorder when you log in (`on`), or stop doing so (`off`).
@@ -185,22 +190,23 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    // Finder launches the app bundle without a subcommand. Open the front door;
-    // recording still requires the user's explicit action there.
-    #[cfg(target_os = "macos")]
+    // From an AppImage this replaces the process with the installed copy; elsewhere it does nothing.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = launcher::run_from_installed_copy() {
+        eprintln!(
+            "rsrewind: running from the AppImage in place (could not install a copy): {error:#}"
+        );
+    }
+    // Double-clicking the executable or the macOS app bundle passes no subcommand: do what the
+    // launcher does. On macOS the window runs in this process, so the app stays alive in the Dock.
     let cli = if std::env::args_os().len() == 1 {
         Cli {
             data_dir: None,
-            command: Command::Ui {
-                foreground: true,
-                appearance: Appearance::System,
-            },
+            command: Command::Launch,
         }
     } else {
         Cli::parse()
     };
-    #[cfg(not(target_os = "macos"))]
-    let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
         Err(error) => {
@@ -252,6 +258,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => replicate::export(&data, out, settle_minutes, max_events, label, json),
         Command::Import { paths, json } => replicate::import(&data, &paths, json),
         Command::Sources { json } => replicate::sources(&data, json),
+        Command::Launch => launch(&data),
         Command::Ui {
             foreground,
             appearance,
@@ -773,6 +780,22 @@ enum Toggle {
     Off,
 }
 
+/// What every launcher runs (Start menu, app search, the macOS bundle, a double-clicked executable):
+/// the tray icon first, because it is how a running recorder is seen, then the window. Idempotent: a
+/// second launch finds the icon already up (`rsrewind tray` exits at once) and just opens a window.
+fn launch(data: &DataDir) -> Result<ExitCode> {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = launcher::install(data.root()) {
+        eprintln!("rsrewind: could not add rsRewind to the application menu: {error:#}");
+    }
+    // The tray is a convenience: if it cannot start (no notification area, say), the window still opens.
+    if let Err(error) = tray(data, false, true, None) {
+        eprintln!("rsrewind: could not start the tray icon: {error:#}");
+    }
+    // The macOS app bundle's process is the window; elsewhere the window gets its own process.
+    ui(data, cfg!(target_os = "macos"), Appearance::System)
+}
+
 fn tray(
     data: &DataDir,
     foreground: bool,
@@ -819,7 +842,9 @@ fn tray(
         exe,
         data_dir: data.root().to_path_buf(),
     };
-    if start_recorder && live_status(data)?.is_none() {
+    // `--start-recorder` is what login entries and the launcher pass; `capture.record_on_launch = false`
+    // is how someone opts out of recording starting by itself.
+    if start_recorder && config.capture.record_on_launch && live_status(data)?.is_none() {
         runner.perform(rsrewind_tray::model::Action::StartRecorder);
     }
     rsrewind_tray::run(&runner)?;
@@ -846,6 +871,10 @@ fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Resul
                 data.root().display()
             );
             std::fs::write(&path, entry).with_context(|| format!("write {}", path.display()))?;
+            // Also make rsRewind findable by name in the application menu and search.
+            if let Err(error) = launcher::install(data.root()) {
+                eprintln!("rsrewind: could not add rsRewind to the application menu: {error:#}");
+            }
             println!(
                 "rsRewind will start (tray icon and recorder) when you log in: {}",
                 path.display()
@@ -1124,7 +1153,7 @@ mod tests {
         // Recording control, deletion, moving history, setup and the surfaces themselves stay with the person.
         let not_for_agents = [
             "daemon", "start", "stop", "resume", "forget", "doctor", "export", "import", "ui",
-            "tray", "mcp", "data-dir", "help",
+            "launch", "tray", "mcp", "data-dir", "help",
         ];
         let tools = rsrewind_mcp::tool_names();
         for (command, tool) in for_agents {

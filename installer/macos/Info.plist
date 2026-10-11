@@ -5,6 +5,7 @@
 <key>CFBundleName</key><string>rsRewind</string>
 <key>CFBundleDisplayName</key><string>rsRewind</string>
 <key>CFBundleExecutable</key><string>rsrewind</string>
+<key>CFBundleIconFile</key><string>rsrewind</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>RSREWIND_VERSION</string>
 <key>CFBundleVersion</key><string>RSREWIND_VERSION</string>

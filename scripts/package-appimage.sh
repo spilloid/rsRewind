@@ -25,16 +25,21 @@ cat > "$app/rsrewind.desktop" <<DESKTOP
 Type=Application
 Name=rsRewind
 Comment=Local screen history you can search and rewind
-Exec=rsrewind ui --foreground
+Exec=rsrewind launch
 Icon=rsrewind
 Categories=Utility;
 Terminal=false
+X-AppImage-Integrate=false
 DESKTOP
-# With arguments (rsrewind start, search ...) the AppImage behaves as the CLI; with none it opens the window.
+# With arguments (rsrewind start, search ...) the AppImage behaves as the CLI; with none it launches
+# rsRewind (tray icon, recorder, window). Either way rsrewind copies itself out of the temporary AppImage
+# mount on first run and continues from the copy, so the tray icon and recorder outlive this process.
+# X-AppImage-Integrate=false: the program adds its own menu entry (pointing at the copy), so desktop
+# integration tools should not add a second one that points back at the AppImage.
 cat > "$app/AppRun" <<'RUN'
 #!/bin/sh
 here=$(dirname "$(readlink -f "$0")")
-if [ "$#" -eq 0 ]; then exec "$here/usr/bin/rsrewind" ui --foreground; fi
+if [ "$#" -eq 0 ]; then exec "$here/usr/bin/rsrewind" launch; fi
 exec "$here/usr/bin/rsrewind" "$@"
 RUN
 chmod 755 "$app/AppRun"

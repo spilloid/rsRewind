@@ -56,6 +56,10 @@ pub struct CaptureConfig {
     pub image_quality: u8,
     /// Stop storing new states after this many seconds without keyboard/mouse input.
     pub idle_after_secs: u32,
+    /// Whether opening rsRewind (search, Start menu, `rsrewind launch`) and signing in also start the
+    /// recorder, so recall works without anyone remembering to press Start. `false` brings up only the
+    /// tray icon (which then says "not recording") and the window; recording starts when you press Start.
+    pub record_on_launch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +109,7 @@ impl Default for CaptureConfig {
             change_threshold: 0.02,
             image_quality: 80,
             idle_after_secs: 300,
+            record_on_launch: true,
         }
     }
 }
@@ -208,6 +213,17 @@ mod tests {
     #[test]
     fn empty_file_is_defaults() {
         assert_eq!(Config::parse("").ok(), Some(Config::default()));
+    }
+
+    #[test]
+    fn recording_starts_on_launch_unless_opted_out() -> std::result::Result<(), String> {
+        // Recall is the point of the app: launching it and signing in start recording by default.
+        assert!(Config::default().capture.record_on_launch);
+        let config = Config::parse("[capture]\nrecord_on_launch = false\n")?;
+        assert!(!config.capture.record_on_launch);
+        // Opting out changes nothing else.
+        assert_eq!(config.capture.idle_after_secs, 300);
+        Ok(())
     }
 
     #[test]

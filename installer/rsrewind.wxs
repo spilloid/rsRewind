@@ -7,10 +7,12 @@
 
   Design (see docs/installer.md for the full rationale):
     - Per-user install, no admin rights required: %LOCALAPPDATA%\Programs\rsRewind.
-    - Start Menu shortcut, launching `rsrewind.exe ui`.
-    - Optional startup registration (HKCU Run -> the `tray` command with its start-recorder option), modeled as a separate,
-      not-installed-by-default MSI feature (StartAtLogin) rather than a UI checkbox, since no
-      custom installer UI has been built yet.
+    - Start Menu shortcut, launching `rsrewind.exe launch`: the tray icon first, then the window.
+      Windows search finds Start Menu shortcuts by name; the icon is the one embedded in the exe.
+    - Startup registration (HKCU Run -> the `tray` command with its start-recorder option), on by
+      default as the separate MSI feature StartAtLogin, so the tray icon is there after every sign-in
+      and recording starts unless config.toml sets capture.record_on_launch to false. Deselect the
+      feature to install without it.
     - MajorUpgrade with version-based upgrade/downgrade handling.
     - Uninstall removes the installed program files and shortcuts only. It deliberately does NOT
       touch %LOCALAPPDATA%\rsRewind (the data directory: config.toml, recall.db, media\, logs\,
@@ -76,12 +78,13 @@
     </Feature>
 
     <!--
-      Not installed by default (Level="1000" is MSI's standard idiom for "present in the feature
-      tree but not selected unless explicitly requested"). No installer UI currently exposes a
-      checkbox for this; see docs/installer.md. Toggle it today via, e.g.,
-      `msiexec /i rsrewind.msi ADDLOCAL=Application,StartAtLogin`.
+      Installed by default (Level 1) so the tray icon, which is how a running recorder is seen, is
+      there after every sign-in. No installer UI currently exposes a checkbox for this; see
+      docs/installer.md. To install without it use
+      `msiexec /i rsrewind.msi ADDLOCAL=Application`, or later run `rsrewind tray` with its
+      autostart option set to off.
     -->
-    <Feature Id="StartAtLogin" Title="Start rsRewind at sign-in" Level="1000">
+    <Feature Id="StartAtLogin" Title="Start rsRewind at sign-in (tray icon and recording)" Level="1">
       <ComponentRef Id="StartupRegistration" />
     </Feature>
 
@@ -103,9 +106,10 @@
     <Component Id="ApplicationShortcut" Directory="ApplicationProgramsFolder" Guid="*">
       <Shortcut Id="ApplicationStartMenuShortcut"
                 Name="rsRewind"
-                Description="Browse and search your rsRewind screen history"
+                Description="Search and rewind your screen history; starts the tray icon"
                 Target="[APPDIR]rsrewind.exe"
-                Arguments="ui"
+                Arguments="launch"
+                Show="minimized"
                 WorkingDirectory="APPDIR" />
       <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
       <!--
