@@ -146,7 +146,7 @@ impl Control {
 
 /// Runs blocking work on its own thread and awaits the result without blocking the UI; `fallback`
 /// if the thread cannot start or vanishes.
-fn off_thread<T: Send + 'static>(
+pub(crate) fn off_thread<T: Send + 'static>(
     fallback: T,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> impl Future<Output = T> + Send + 'static {

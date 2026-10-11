@@ -7,6 +7,7 @@
 
 mod viewer;
 
+use crate::export::{self, ClipFormat, Progress};
 use crate::gaps;
 use crate::nav::{self, JumpTarget, Motion, Shortcut};
 use crate::pick::Picks;
@@ -126,6 +127,12 @@ pub enum Message {
     AskDelete(Option<i64>),
     DeleteMark(i64),
     ClearPicks,
+    /// Ask before an export (`Some`), or drop the question (`None`).
+    AskExport(Option<ExportKind>),
+    RunExport(ExportKind),
+    ExportDone(u64, Result<Exported, String>),
+    CancelExport,
+    ClipSize(u32),
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
@@ -137,6 +144,50 @@ pub enum Message {
     ViewerStepped(u64, bool, Answer),
     CloseViewer,
     ScaleFactor(f32),
+}
+
+/// What an export makes. Every kind leaves rsRewind's history (a file, or the clipboard).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportKind {
+    CopyImage,
+    Png,
+    Clip(ClipFormat),
+}
+
+impl ExportKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CopyImage => "Copying the picture",
+            Self::Png => "Saving a PNG",
+            Self::Clip(ClipFormat::Gif) => "Encoding a GIF",
+            Self::Clip(ClipFormat::Webm) => "Encoding a WebM (ffmpeg)",
+        }
+    }
+}
+
+/// A finished export.
+#[derive(Clone)]
+pub enum Exported {
+    Saved(std::path::PathBuf),
+    /// Full-size RGBA for the clipboard.
+    Image(Arc<(u32, u32, Vec<u8>)>),
+}
+
+impl std::fmt::Debug for Exported {
+    // Never the pixels: they are screen content.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Saved(path) => f.debug_tuple("Saved").field(path).finish(),
+            Self::Image(image) => write!(f, "Image({}x{})", image.0, image.1),
+        }
+    }
+}
+
+/// An export in progress.
+struct Running {
+    kind: ExportKind,
+    seq: u64,
+    progress: Arc<Progress>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,6 +276,17 @@ pub struct App {
     picks: Picks,
     picked: HashSet<FrameKey>,
     range_seq: u64,
+    /// The data folder (exports go to its `exports/`).
+    data_root: std::path::PathBuf,
+    /// An `ffmpeg` executable on PATH, for WebM (looked up once, at start).
+    ffmpeg: Option<std::path::PathBuf>,
+    clip_size: u32,
+    confirm_export: Option<ExportKind>,
+    exporting: Option<Running>,
+    export_seq: u64,
+    export_note: Option<String>,
+    /// Created on first copy and kept: on X11 the copied picture lives as long as its owner.
+    clipboard: Option<arboard::Clipboard>,
 
     /// The full-window image viewer, when open.
     viewer: Option<viewer::ViewerState>,
@@ -236,6 +298,7 @@ pub struct App {
 impl App {
     fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
         let control = Control::new(data.root().to_path_buf());
+        let data_root = data.root().to_path_buf();
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
@@ -303,6 +366,14 @@ impl App {
             picks: Picks::default(),
             picked: HashSet::new(),
             range_seq: 0,
+            data_root,
+            ffmpeg: export::find_ffmpeg(),
+            clip_size: export::DEFAULT_CLIP_SIZE,
+            confirm_export: None,
+            exporting: None,
+            export_seq: 0,
+            export_note: None,
+            clipboard: None,
             viewer: None,
             viewer_seq: 0,
             scale_factor: 1.0,
@@ -337,7 +408,8 @@ impl App {
         if self.appearance == crate::Appearance::System {
             subs.push(iced::system::theme_changes().map(Message::Appearance));
         }
-        if self.cue.is_some() {
+        // Frames drive the camera's motion and redraw an export's progress.
+        if self.cue.is_some() || self.exporting.is_some() {
             subs.push(window::frames().map(Message::Frame));
         }
         Subscription::batch(subs)
@@ -721,11 +793,7 @@ impl App {
                 let times = self.marks.iter().map(|m| m.at.0);
                 match nav::neighbour(times, self.target_cursor(), forward) {
                     Some(at) => {
-                        self.nav_note = self
-                            .marks
-                            .iter()
-                            .find(|m| m.at.0 == at)
-                            .map(|m| mark_title(m));
+                        self.nav_note = self.marks.iter().find(|m| m.at.0 == at).map(mark_title);
                         self.jump(at as f64, extend)
                     }
                     None => {
@@ -859,6 +927,37 @@ impl App {
             Message::ClearPicks => {
                 self.picks.clear();
                 self.picked.clear();
+                Task::none()
+            }
+            Message::AskExport(kind) => {
+                self.confirm_export = kind;
+                if kind.is_some() {
+                    self.panel_open = true;
+                }
+                Task::none()
+            }
+            Message::RunExport(kind) => self.run_export(kind),
+            Message::ExportDone(seq, result) => {
+                if self.exporting.as_ref().is_none_or(|r| r.seq != seq) {
+                    return Task::none();
+                }
+                self.exporting = None;
+                self.export_note = Some(match result {
+                    Ok(Exported::Saved(path)) => format!("Saved {}", path.display()),
+                    Ok(Exported::Image(image)) => self.put_on_clipboard(&image),
+                    Err(error) if error == export::CANCELLED => "Export cancelled.".into(),
+                    Err(error) => format!("Export failed: {error}"),
+                });
+                Task::none()
+            }
+            Message::CancelExport => {
+                if let Some(running) = &self.exporting {
+                    running.progress.cancel();
+                }
+                Task::none()
+            }
+            Message::ClipSize(size) => {
+                self.clip_size = size;
                 Task::none()
             }
             Message::Latest => {
@@ -1090,7 +1189,8 @@ impl App {
             Shortcut::Escape => {
                 if self.panel_open {
                     self.panel_open = false;
-                } else {
+                    self.confirm_export = None;
+                } else if !self.picks.is_empty() {
                     self.picks.clear();
                     self.picked.clear();
                 }
@@ -1107,9 +1207,133 @@ impl App {
         }
     }
 
-    /// Copies the picture on stage (filled in with the exports).
+    /// Copies the picked picture (or the one on stage) to the clipboard.
     fn copy_image(&mut self) -> Task<Message> {
-        Task::none()
+        self.run_export(ExportKind::CopyImage)
+    }
+
+    /// The one picture single-frame actions use: the only picked moment, else the one on stage.
+    fn single_frame(&self) -> Option<export::Frame> {
+        if self.picks.len() == 1
+            && let Some(entry) = self.picks.entries().next()
+        {
+            return Some(export::Frame {
+                source: entry.source,
+                media_path: entry.media_path.clone(),
+                at: entry.started_at,
+            });
+        }
+        let selection = self.selection.as_ref()?;
+        if let Some(entry) = self.stage_entry() {
+            return Some(export::Frame {
+                source: entry.source,
+                media_path: entry.media_path,
+                at: selection.at,
+            });
+        }
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|d| (d.source, d.visual_state_id) == selection.frame)?;
+        Some(export::Frame {
+            source: detail.source,
+            media_path: detail.media_path.clone(),
+            at: selection.at,
+        })
+    }
+
+    /// Starts an export on its own thread (never the UI thread; the recorder is another process).
+    fn run_export(&mut self, kind: ExportKind) -> Task<Message> {
+        self.confirm_export = None;
+        if self.exporting.is_some() {
+            self.export_note = Some("An export is already running.".into());
+            return Task::none();
+        }
+        let Some(media) = self.frames.as_ref().and_then(|f| f.media()) else {
+            self.export_note = Some("History is not open yet.".into());
+            return Task::none();
+        };
+        let dir = export::exports_dir(&self.data_root);
+        let progress = Arc::new(Progress::default());
+        let job_progress = progress.clone();
+        let work: Box<dyn FnOnce() -> Result<Exported, String> + Send> = match kind {
+            ExportKind::CopyImage | ExportKind::Png => {
+                let Some(frame) = self.single_frame() else {
+                    self.export_note = Some("Put a moment on stage or pick one first.".into());
+                    return Task::none();
+                };
+                if kind == ExportKind::Png {
+                    Box::new(move || export::save_png(&media, &frame, &dir).map(Exported::Saved))
+                } else {
+                    Box::new(move || {
+                        export::picture_rgba(&media, &frame)
+                            .map(|image| Exported::Image(Arc::new(image)))
+                    })
+                }
+            }
+            ExportKind::Clip(format) => {
+                let frames: Vec<export::Frame> = self
+                    .picks
+                    .entries()
+                    .map(|e| export::Frame {
+                        source: e.source,
+                        media_path: e.media_path.clone(),
+                        at: e.started_at,
+                    })
+                    .collect();
+                let ffmpeg = self.ffmpeg.clone();
+                let size = self.clip_size;
+                Box::new(move || {
+                    export::clip(
+                        &media,
+                        &frames,
+                        format,
+                        size,
+                        &dir,
+                        ffmpeg.as_deref(),
+                        &job_progress,
+                    )
+                    .map(Exported::Saved)
+                })
+            }
+        };
+        self.export_seq += 1;
+        let seq = self.export_seq;
+        self.export_note = None;
+        self.exporting = Some(Running {
+            kind,
+            seq,
+            progress,
+        });
+        Task::perform(
+            recorder::off_thread(Err("the export could not start".to_string()), work),
+            move |r| Message::ExportDone(seq, r),
+        )
+    }
+
+    /// Hands a decoded picture to the system clipboard; the sentence says how it went.
+    fn put_on_clipboard(&mut self, image: &(u32, u32, Vec<u8>)) -> String {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(clipboard) => self.clipboard = Some(clipboard),
+                Err(error) => return format!("Could not reach the clipboard: {error}"),
+            }
+        }
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return "Could not reach the clipboard.".into();
+        };
+        let data = arboard::ImageData {
+            width: image.0 as usize,
+            height: image.1 as usize,
+            bytes: std::borrow::Cow::Borrowed(&image.2),
+        };
+        match clipboard.set_image(data) {
+            Ok(()) => format!(
+                "Copied a {}x{} picture. It is now outside rsRewind's history.",
+                image.0, image.1
+            ),
+            Err(error) => format!("Could not copy the picture: {error}"),
+        }
     }
 
     fn load_marks(&mut self) -> Task<Message> {
@@ -1512,20 +1736,32 @@ impl App {
         .spacing(4)
         .align_y(Alignment::Center);
         if let Some((from, to)) = self.picks.span() {
+            group = group
+                .push(
+                    button(
+                        text(format!(
+                            "{} picked · {}",
+                            self.picks.len(),
+                            gaps::duration(to.0 - from.0)
+                        ))
+                        .size(12)
+                        .font(MONO)
+                        .wrapping(text::Wrapping::None),
+                    )
+                    .padding([4, 10])
+                    .style(move |_, status| t.row(true, status, t.mint))
+                    .on_press(Message::TogglePanel),
+                )
+                .push(nav("✕".into(), Message::ClearPicks));
+        }
+        if let Some(running) = &self.exporting {
+            let (done, total) = running.progress.get();
             group = group.push(
-                button(
-                    text(format!(
-                        "{} picked · {} ✕",
-                        self.picks.len(),
-                        gaps::duration(to.0 - from.0)
-                    ))
+                text(format!("{} {done}/{total}", running.kind.label()))
                     .size(12)
                     .font(MONO)
+                    .color(t.text_2)
                     .wrapping(text::Wrapping::None),
-                )
-                .padding([4, 10])
-                .style(move |_, status| t.row(true, status, t.mint))
-                .on_press(Message::ClearPicks),
             );
         }
         container(group)
@@ -1594,6 +1830,7 @@ impl App {
         if let Some(note) = &self.nav_note {
             col = col.push(text(note.clone()).size(12).color(t.text_2));
         }
+        col = col.push(self.export_section());
         col = col.push(heading(t, &format!("Marks · {}", self.marks.len())));
         let mut list = column![].spacing(2);
         if self.marks.is_empty() {
@@ -1678,6 +1915,133 @@ impl App {
             .max_height(560.0)
             .style(move |_| t.panel())
             .into()
+    }
+
+    /// Exports: the single picture (copy, PNG) and, with two or more picked, a silent clip.
+    fn export_section(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let idle = self.exporting.is_none();
+        let action = |label: &'static str, message: Option<Message>| {
+            let b = button(text(label).size(12))
+                .padding([3, 8])
+                .style(move |_, status| t.transport(status));
+            match message {
+                Some(m) if idle => b.on_press(m),
+                _ => b,
+            }
+        };
+        let single = self.single_frame().is_some();
+        let clip = self.picks.len() >= 2;
+        let title = match self.picks.span() {
+            Some((from, to)) if self.picks.len() > 1 => format!(
+                "Export · {} picked · {} to {}",
+                self.picks.len(),
+                format_clock(from.0),
+                format_clock(to.0)
+            ),
+            _ => "Export · the moment on stage".to_owned(),
+        };
+        let webm = action(
+            "WebM",
+            (clip && self.ffmpeg.is_some())
+                .then_some(Message::AskExport(Some(ExportKind::Clip(ClipFormat::Webm)))),
+        );
+        let webm: Element<'_, Message> = if self.ffmpeg.is_some() {
+            webm.into()
+        } else {
+            iced::widget::tooltip(
+                webm,
+                container(
+                    text("WebM needs ffmpeg on PATH; rsRewind does not bundle a video encoder.")
+                        .size(12),
+                )
+                .padding(6)
+                .style(move |_| t.panel()),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .into()
+        };
+        let mut sizes = row![text("Clip size").size(11).color(t.text_3)]
+            .spacing(4)
+            .align_y(Alignment::Center);
+        for size in export::CLIP_SIZES {
+            let selected = self.clip_size == size;
+            sizes = sizes.push(
+                button(text(size.to_string()).size(11).font(MONO))
+                    .padding([2, 6])
+                    .style(move |_, status| t.row(selected, status, t.mint))
+                    .on_press(Message::ClipSize(size)),
+            );
+        }
+        let mut col = column![
+            heading(t, &title),
+            row![
+                action(
+                    "Copy image",
+                    single.then_some(Message::RunExport(ExportKind::CopyImage))
+                ),
+                action(
+                    "Save PNG",
+                    single.then_some(Message::AskExport(Some(ExportKind::Png)))
+                ),
+                action(
+                    "GIF",
+                    clip.then_some(Message::AskExport(Some(ExportKind::Clip(ClipFormat::Gif))))
+                ),
+                webm,
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+            sizes,
+        ]
+        .spacing(6);
+        if !clip {
+            col = col.push(
+                text("Click a card, then Shift-click (or Shift+[ ] , .) to pick a stretch for a clip.")
+                    .size(11)
+                    .color(t.text_3),
+            );
+        }
+        if let Some(kind) = self.confirm_export {
+            col = col.push(
+                column![
+                    text(format!(
+                        "This writes a new file to {}. Exported files are copies outside \
+                         rsRewind's history: forget and retention will not delete them. Clips are \
+                         silent (rsRewind records no audio).",
+                        export::exports_dir(&self.data_root).display()
+                    ))
+                    .size(12)
+                    .color(t.gold),
+                    row![
+                        action("Export", Some(Message::RunExport(kind))),
+                        action("Cancel", Some(Message::AskExport(None))),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(4),
+            );
+        }
+        if let Some(running) = &self.exporting {
+            let (done, total) = running.progress.get();
+            col = col.push(
+                row![
+                    text(format!("{} · {done} of {total}", running.kind.label()))
+                        .size(12)
+                        .color(t.text_2),
+                    space::horizontal(),
+                    button(text("Cancel").size(12))
+                        .padding([3, 8])
+                        .style(move |_, status| t.transport(status))
+                        .on_press(Message::CancelExport),
+                ]
+                .align_y(Alignment::Center),
+            );
+        }
+        if let Some(note) = &self.export_note {
+            col = col.push(text(note.clone()).size(12).color(t.text_2));
+        }
+        col.into()
     }
 
     /// The empty window: what is happening, and the buttons that get recording going.

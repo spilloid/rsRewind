@@ -8,6 +8,7 @@
 //! (CLAUDE.md, enforced by `rsrewind-query/tests/ui_boundary.rs`).
 
 mod app;
+mod export;
 mod gaps;
 mod nav;
 mod pick;
