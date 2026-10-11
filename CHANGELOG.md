@@ -6,6 +6,38 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-10-11
+
+**Tenth release: closing the icon stops recording.** Quit on the tray (Windows, Linux) or menu-bar item
+(macOS) used to leave the recorder running with no icon to show it. Now Quit stops recording.
+
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is
+> encrypted at rest. Use rsRewind only on machines you own, in sessions you are comfortable recording.
+
+### Changed
+
+- **Quit on the tray icon stops the recorder, then removes the icon, on every platform.** The menu item now
+  reads "Quit rsRewind (stops recording)". If the recorder will not stop, the icon stays up and keeps
+  showing that it is still recording, rather than disappearing. Closing the history *window* still does
+  not stop recording; the icon is how you see and end it.
+- A crash or a forced kill of the tray process still leaves the recorder running, by design (the icon
+  holds no capture and no database); `rsrewind status` and `rsrewind stop` still work from a terminal.
+  Starting rsRewind again brings the icon back.
+
+### Known issues
+
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- If the tray process is killed or crashes, recording continues with no icon until you open rsRewind again or
+  run `rsrewind stop`.
+- Everything listed for 0.0.9 that is not mentioned above still applies, including that the launcher,
+  icons and Quit behaviour have not been run on real Windows or Mac machines.
+
+### Upgrade notes
+
+- No database migration and no required settings change.
+- A running tray keeps the old Quit behaviour until it is restarted: quit it once and open rsRewind again.
+
 ## [0.0.9] - 2026-10-11
 
 **Ninth release: one way in.** Search for rsRewind on any platform and the same thing happens: the tray

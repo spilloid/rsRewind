@@ -97,8 +97,9 @@ signing in to a computer where the Windows installer's start-at-login entry or `
 is set both start the recorder, so that history exists when you need it. The tray icon (red while
 recording, green when not) is the always-visible sign of it, and `rsrewind status` reports it. To stop
 recording from starting by itself set `record_on_launch = false` under `[capture]` in `config.toml`; the
-tray icon and window still open, and recording starts only when you press Start. Pausing and the
-privacy rules below apply either way.
+tray icon and window still open, and recording starts only when you press Start. Choosing **Quit** from
+the tray or menu-bar icon stops the recorder before the icon goes away, so recording does not carry on
+with nothing on screen to show it. Pausing and the privacy rules below apply either way.
 
 ## Pausing and resuming
 

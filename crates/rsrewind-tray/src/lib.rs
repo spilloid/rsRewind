@@ -2,8 +2,9 @@
 //! pause, resume, forget, open-the-window and start/stop.
 //!
 //! It runs as its own process and acts only through the `rsrewind` command line (see
-//! [`model`]): it opens no database and holds no capture, so closing or crashing it changes
-//! nothing about recording.
+//! [`model`]): it opens no database and holds no capture, so a crash or a kill of the icon changes
+//! nothing about recording. Choosing **Quit** from its menu is different: that means "stop
+//! rsRewind", so it stops the recorder first (see [`Runner::quit`]).
 
 #[cfg(any(target_os = "linux", windows))]
 mod icons;
@@ -68,9 +69,10 @@ impl Runner {
     }
 
     /// Carries out a menu action by running the matching `rsrewind` subcommand and waiting for it.
-    pub fn perform(&self, action: Action) {
+    /// True if there was nothing to run or the command succeeded.
+    pub fn perform(&self, action: Action) -> bool {
         let Some(args) = action.cli_args() else {
-            return;
+            return true;
         };
         let result = self
             .command()
@@ -79,10 +81,31 @@ impl Runner {
             .stderr(Stdio::null())
             .status();
         match result {
-            Ok(status) if status.success() => tracing::info!(?action, "done"),
-            Ok(status) => tracing::warn!(?action, code = ?status.code(), "command failed"),
-            Err(error) => tracing::warn!(?action, %error, "could not run rsrewind"),
+            Ok(status) if status.success() => {
+                tracing::info!(?action, "done");
+                true
+            }
+            Ok(status) => {
+                tracing::warn!(?action, code = ?status.code(), "command failed");
+                false
+            }
+            Err(error) => {
+                tracing::warn!(?action, %error, "could not run rsrewind");
+                false
+            }
         }
+    }
+
+    /// The **Quit** menu item: closing the icon means stopping rsRewind, on every platform, so recording
+    /// never continues with nothing on screen to show it. Stops the recorder and returns true once it
+    /// is no longer running. If it could not be stopped this returns false and the caller must keep the
+    /// icon up, because the icon is how you see that recording is still on.
+    pub fn quit(&self) -> bool {
+        if self.perform(Action::StopRecorder) {
+            return true;
+        }
+        // `stop` also fails when there was nothing to stop; the recorder's own state decides.
+        matches!(self.status().recorder, model::Recorder::NotRunning)
     }
 }
 
@@ -114,3 +137,57 @@ pub fn run(_: &Runner) -> anyhow::Result<()> {
 #[allow(dead_code)]
 #[path = "macos.rs"]
 mod macos_validation;
+
+#[cfg(all(test, unix))]
+mod quit_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in `rsrewind` whose `stop` exits with `stop_exit` and whose `status --json` reports `state`.
+    fn fake(
+        dir: &std::path::Path,
+        name: &str,
+        stop_exit: i32,
+        state: &str,
+    ) -> Result<Runner, Box<dyn std::error::Error>> {
+        let exe = dir.join(name);
+        // The tray passes `--data-dir <dir>` first, so the subcommand is the third argument.
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh\ncase \"$3\" in\n  stop) exit {stop_exit} ;;\n  status) echo '{{\"state\":\"{state}\"}}' ;;\nesac\n"
+            ),
+        )?;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))?;
+        Ok(Runner {
+            exe,
+            data_dir: dir.to_path_buf(),
+        })
+    }
+
+    #[test]
+    fn quit_stops_the_recorder_and_only_closes_the_icon_when_it_is_off()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("rsrewind-tray-quit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        // `stop` worked: the icon may go.
+        assert!(fake(&dir, "stopped", 0, "recording")?.quit());
+        // `stop` failed and the recorder is still running: the icon must stay and keep saying so.
+        assert!(!fake(&dir, "stuck", 1, "recording")?.quit());
+        assert!(!fake(&dir, "stuck-paused", 1, "paused")?.quit());
+        // `stop` failed because there was nothing to stop: nothing is recording, so the icon may go.
+        assert!(fake(&dir, "already-off", 1, "not_running")?.quit());
+        // `stop` failed and the state cannot be read: not provably off, so the icon stays.
+        assert!(!fake(&dir, "unknown", 1, "garbage")?.quit());
+        // The menu item says what it does.
+        assert!(model::menu(
+            &Status::UNKNOWN,
+            None,
+            std::time::Instant::now()
+        )
+        .iter()
+        .any(|item| matches!(item, model::Item::Button { label, action: Action::Quit, .. } if label == "Quit rsRewind (stops recording)")));
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+}

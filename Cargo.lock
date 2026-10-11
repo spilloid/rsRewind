@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-capture"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "rsrewind-core",
  "serde",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-cli"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-core"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "chrono",
  "serde",
@@ -2915,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-daemon"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "rsrewind-capture",
@@ -2933,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-mcp"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "chrono",
  "rsrewind-core",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-ocr"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "png",
  "rsrewind-core",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-query"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -2976,7 +2976,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-segment"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-storage"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "chrono",
  "getrandom 0.3.4",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-tray"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3018,7 +3018,7 @@ dependencies = [
 
 [[package]]
 name = "rsrewind-ui"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "iced",

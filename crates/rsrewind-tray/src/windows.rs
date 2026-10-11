@@ -36,6 +36,8 @@ use windows::core::{PCWSTR, w};
 const WM_TRAY: u32 = WM_APP + 1;
 /// A new status is waiting in the channel.
 const WM_STATUS: u32 = WM_APP + 2;
+/// The recorder has stopped after "Quit": remove the icon and end the message loop.
+const WM_QUIT_NOW: u32 = WM_APP + 3;
 const ICON_ID: u32 = 1;
 const CLASS: PCWSTR = w!("rsRewindTray");
 
@@ -115,8 +117,26 @@ pub fn run(runner: &Runner) -> anyhow::Result<()> {
         .spawn(move || {
             loop {
                 match inbox.recv_timeout(POLL) {
-                    Ok(Action::Quit) | Err(RecvTimeoutError::Disconnected) => break,
-                    Ok(action) => worker_runner.perform(action),
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    // Quit stops the recorder first; if it will not stop the icon stays up and keeps
+                    // saying so.
+                    Ok(Action::Quit) => {
+                        if worker_runner.quit() {
+                            // SAFETY: posting to a window that may already be gone just fails.
+                            let _ = unsafe {
+                                PostMessageW(
+                                    Some(HWND(hwnd_bits as *mut _)),
+                                    WM_QUIT_NOW,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                )
+                            };
+                            break;
+                        }
+                    }
+                    Ok(action) => {
+                        worker_runner.perform(action);
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                 }
                 if status_tx.send(worker_runner.status()).is_err() {
@@ -226,11 +246,6 @@ impl State {
         };
         match model::click(action, self.armed, Instant::now()) {
             Click::Arm(armed) => self.armed = Some(armed),
-            Click::Run(Action::Quit) => {
-                self.remove();
-                // SAFETY: our own window, on its own thread.
-                let _ = unsafe { DestroyWindow(self.hwnd) };
-            }
             Click::Run(action) => {
                 self.armed = None;
                 let _ = self.actions.send(action);
@@ -388,6 +403,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     s.show(NIM_MODIFY);
                 }
             });
+            LRESULT(0)
+        }
+        WM_QUIT_NOW => {
+            with_state(State::remove);
+            // SAFETY: our own window, on its own thread.
+            let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
         }
         // Menu ids posted directly (scripted checks use this; the popup returns its choice).

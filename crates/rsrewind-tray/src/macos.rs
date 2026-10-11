@@ -140,9 +140,14 @@ extern "C" fn clicked(context: *mut c_void, id: i32) {
         Click::Run(action) => {
             tray.armed = None;
             if action == Action::Quit {
-                // SAFETY: AppKit stop is invoked on its owning main thread. It only stops the
-                // tray event loop; capture belongs to a different process.
-                unsafe { rsrewind_tray_quit() };
+                // Quit means stop rsRewind: stop the recorder first, and stay up (still showing the
+                // truth) if it will not stop. This waits for `rsrewind stop` on the main thread,
+                // which is fine for the second or two it takes after the menu has closed.
+                if tray.runner.quit() {
+                    // SAFETY: AppKit stop is invoked on its owning main thread. It only stops the
+                    // tray event loop; capture belongs to a different process.
+                    unsafe { rsrewind_tray_quit() };
+                }
                 return;
             }
             // Each action has its own worker: a long-lived `ui` child cannot block status,
