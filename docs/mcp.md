@@ -1,6 +1,6 @@
 # Using rsRewind from an AI assistant (MCP)
 
-Use MCP when you want an assistant to find a moment you saw or query your timeline. Start with the desktop app and [first-run guide](https://spilloid.github.io/rsRewind/guide.html) before enabling access. **Available in development builds from main; not in the public v0.0.6 downloads.** It is off by default, and returned content may reach your assistant provider.
+Use MCP when you want an assistant to find a moment you saw or query your timeline. Start with the desktop app and [first-run guide](https://spilloid.github.io/rsRewind/guide.html) before enabling access. The server is part of the one `rsrewind` executable on Windows, macOS and Linux. It is off by default, and returned content may reach your assistant provider.
 
 
 `rsrewind mcp` lets an AI assistant search and read your screen history: "what was the error before lunch?",
@@ -22,7 +22,8 @@ unless you allow it, and they **cannot** resume recording, delete or move histor
 ## Connect your assistant
 
 Use the full path to `rsrewind` if it is not on your PATH (Windows MSI: `%LOCALAPPDATA%\Programs\rsRewind\rsrewind.exe`;
-Linux tarball: wherever you installed it, for example `~/.local/bin/rsrewind`).
+macOS: `/Applications/rsRewind.app/Contents/MacOS/rsrewind`; Linux AppImage: `~/.local/share/rsRewind-app/rsrewind`, or
+wherever you installed the tarball, for example `~/.local/bin/rsrewind`).
 
 | Client | Setup |
 |---|---|

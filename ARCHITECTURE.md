@@ -9,9 +9,10 @@ implementation proceeds and is reviewed.
 was stale. Actual state: `rsrewind-core`, `-storage`, `-query` and `-segment` are implemented and
 tested (these are the crates that build and test on Linux; run `cargo test -p rsrewind-core -p
 rsrewind-segment -p rsrewind-storage -p rsrewind-query -p rsrewind-cli`). `rsrewind-capture`,
-`-ocr`, `-daemon` and the recorder half of `-cli` have real code that only builds on Windows; the
-Astra-review remediation for them (Unit B in `docs/remediation-status.md`) is still open, so treat
-recorder behaviour as unverified. `rsrewind-ui` is an Iced application with a custom wgpu rewind
+`-ocr`, `-daemon` and the recorder half of `-cli` had real code that only built on Windows at that
+date; since then KDE Plasma (0.0.4) and macOS (0.0.7) backends were added behind the platform seam
+(see below). The Astra-review remediation for the recorder (Unit B in `docs/remediation-status.md`)
+is still open on every platform. `rsrewind-ui` is an Iced application with a custom wgpu rewind
 viewport, reading through the `rsrewind-query` history facade (built 2026-10-06; see
 [UI boundary](#ui-boundary)). Sections below say when something is design rather than built.
 
@@ -37,10 +38,11 @@ core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bind
   media path resolver both sides use (`DataDir::resolve_media_checked`). Every other
   crate depends on this one so they agree on vocabulary without depending on each other's
   internals. Implemented and tested.
-- **`rsrewind-capture`** — thin, typed wrappers around the Windows capture APIs (Windows.Graphics
-  Capture, foreground window/process inspection, visible-window enumeration for privacy
-  decisions, idle-time detection) plus a pure, Windows-free change-detection module. Not yet
-  implemented.
+- **`rsrewind-capture`** — thin, typed wrappers around each platform's capture APIs: Windows
+  (Windows.Graphics.Capture, foreground window/process inspection, visible-window enumeration for
+  privacy decisions, idle-time detection), KDE Plasma on Wayland (`kwin.rs`, `wayland_idle.rs`) and
+  macOS (`macos.rs` over a Swift ScreenCaptureKit/CoreGraphics bridge), plus a pure, portable
+  change-detection module and the window shapes the privacy rules work on.
 - **`rsrewind-segment`** — the sealed history segment: manifest types, writer and verifying
   reader for the single-file `.rsseg` format used to replicate history between installations.
   Pure format, no SQLite, no network, no Windows. See [Replication](#replication-probes-and-a-central-instance).
@@ -48,8 +50,9 @@ core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bind
   applications, windows, visual states, events, OCR blocks and the FTS5 index, plus the
   control/status tables the CLI and daemon use to communicate. Also owns WebP encode/decode and
   exclusive file writes. Not yet implemented.
-- **`rsrewind-ocr`** — wraps `Windows.Media.Ocr` to turn a captured frame into text blocks with
-  bounding boxes. Not yet implemented.
+- **`rsrewind-ocr`** — turns a captured frame into text blocks with bounding boxes using the
+  platform's engine: `Windows.Media.Ocr` on Windows, Apple Vision (in memory, Swift bridge) on
+  macOS, Tesseract as a child process on Linux.
 - **`rsrewind-query`** — a read-only query layer over the same database `rsrewind-storage`
   writes: safe FTS5 query parsing, search, recent/timeline, and point-in-time lookups, plus the
   **history facade** (`History`) that answers the same questions across this machine's store and
@@ -60,7 +63,7 @@ core, query                           <- ui   (Iced 0.14 + wgpu; no Windows bind
   bounded-channel pipeline, control-state polling, privacy enforcement, retention, and the
   single-instance/heartbeat/shutdown lifecycle. Portable behind the
   [platform seam](#platform-seam-and-capabilities); the Windows backends are wired in
-  `windows_platform.rs`.
+  `windows_platform.rs`, KDE Plasma in `linux_platform.rs`, macOS in `macos_platform.rs`.
 - **`rsrewind-cli`** — the `rsrewind` binary: argument parsing (`clap`) and dispatch to the
   daemon, storage, and query crates. Currently a placeholder `main.rs`.
 - **`rsrewind-ui`** — the desktop UI: Iced for the application chrome and a custom wgpu viewport
@@ -154,9 +157,10 @@ only through the traits in `rsrewind-daemon/src/platform.rs`:
 | `Lifecycle` / `SingleInstance` | `win::InstanceGuard`: `Local\rsRewind.Recorder` mutex, `rsrewind stop` event, console handler |
 | `Clock` — wall, monotonic, sleep | `SystemClock` |
 
-`run_with(options, Platform)` is the portable entry; `rsrewind_daemon::run` (Windows) builds the
-Windows `Platform` and calls it with the startup order it always had. Other platforms have no
-backends yet, so `rsrewind daemon` there still says the recorder is unsupported. Why traits in the
+`run_with(options, Platform)` is the portable entry; `rsrewind_daemon::run` builds the host's
+`Platform` (`windows_platform.rs`, `linux_platform.rs` or `macos_platform.rs`) and calls it with the
+startup order it always had. On any other target `rsrewind daemon` says the recorder is not
+available there. Why traits in the
 daemon rather than a new crate: the daemon is their only consumer, and implementing them next to
 the recorder keeps `rsrewind-capture`/`rsrewind-ocr` free of a dependency on the daemon. The pure
 window shapes (`VisibleWindow`, `ScreenRect`) and change detection in `rsrewind-capture` build on
@@ -506,6 +510,27 @@ functionality.
   warning here is meant to be investigated, not routinely allowed through, in line with the
   "no `unwrap()`/`expect()` in runtime code" rule in `docs/mvp-contract.md`.
 
-## macOS platform (2026-10-10)
+## macOS platform (2026-10-10; status refreshed 2026-10-11)
 
-Native Apple APIs are behind the same recorder platform seam; Swift bridges are compiled into static archives during the macOS Rust build and linked into the single executable. The menu bar remains a separate CLI-only process, and the UI keeps its read-only query boundary. Storage and per-monitor change detection are shared with Windows/Linux. Hosted ARM64 CI produces development artifacts; interactive permission and desktop acceptance are tracked in `docs/macos.md`.
+**macOS backend** (`rsrewind-daemon/src/macos_platform.rs`, since 0.0.7; Apple Silicon, macOS 14+).
+Native Apple APIs sit behind the same recorder platform seam as Windows and Plasma; the Swift
+bridges (`rsrewind-capture/src/macos.swift`, `rsrewind-ocr/src/macos.swift`,
+`rsrewind-tray/native/Tray.swift`) are compiled into static archives by the crates' build scripts
+and linked into the single executable. Displays and frames come from ScreenCaptureKit; the visible
+window list (process name, title, geometry) from `CGWindowListCopyWindowInfo`, so `MACOS`
+capabilities advertise `list_windows`, `window_titles`, `process_names`, `multi_monitor` and `ocr`.
+The foreground application is deliberately **not** attributed (`foreground()` returns `None`):
+CoreGraphics window ordering does not prove focus, and misattribution would be worse than no
+attribution, so Mac moments carry no app or window name while exclusions still see every window.
+Idle time is `CGEventSource`'s seconds since last input, and a tick counts only while the user's
+session is on the console and logged in; a missing frame, window list or idle value makes the tick
+unknown and nothing is stored, per the fail-closed contract. OCR is Apple Vision, in memory, on the
+OCR thread. Single instance is the same advisory `recorder.lock` as Linux. The menu bar is an AppKit
+status item in the separate `tray` process (acting only through CLI subcommands, as on every
+platform), login startup is a per-user LaunchAgent written by `rsrewind tray --autostart`, and the
+window runs inside the app bundle's process when launched from the Dock (elsewhere it is its own
+process). Storage, change detection, retention, query, UI and segments are the shared code. The
+bundle is assembled by `scripts/package-macos.sh`, signed ad hoc (no Developer ID, not notarized) and
+shipped as a disk image with every release. The maintainer's 2026-10-11 statement that macOS is as
+stable as the other platforms is an owner attestation; the real-Mac checklist lives in
+`docs/macos.md`.

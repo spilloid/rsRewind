@@ -4,7 +4,7 @@ Start with [installation](https://spilloid.github.io/rsRewind/install.html), the
 
 | I want to… | Read |
 |---|---|
-| Try the Apple Silicon preview | [macOS setup and acceptance](macos.md) |
+| Install or set up the Mac app | [macOS reference](macos.md) |
 | Understand what gets recorded | [Privacy and data handling](../PRIVACY.md) |
 | Bring history from another computer | [Multiple computers](https://spilloid.github.io/rsRewind/probes.html) |
 | Let an assistant search my history | [MCP setup and access controls](mcp.md) |
@@ -13,4 +13,4 @@ Start with [installation](https://spilloid.github.io/rsRewind/install.html), the
 | Understand the internals | [Architecture](../ARCHITECTURE.md) · [Distributed design](design/distributed.md) |
 | Check what is finished | [Changelog](../CHANGELOG.md) · [Remediation status](remediation-status.md) · [Standards](standards.md) |
 
-The public release is v0.0.6 for Windows and Linux. Main also contains the macOS and MCP development work; those features are not in the public v0.0.6 downloads.
+The current release is v0.1.0 for Windows 11, macOS 14+ (Apple Silicon) and KDE Plasma 6 on Wayland. Every release ships all three platforms, the MCP server and the command line from the same source and version.

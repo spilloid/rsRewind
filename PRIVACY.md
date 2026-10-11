@@ -14,7 +14,7 @@ that standard exists to catch.
 rsRewind has no network client code anywhere in the recording path. There is no cloud sync, no
 account, no analytics/telemetry call, and no listening socket. History stays in your local store unless you export or copy it, or enable optional MCP access for an assistant. Returned assistant content may reach its provider; see the MCP section below. Run `rsrewind data-dir` to locate your store on any platform.
 
-> **Early release:** known privacy enforcement gaps remain in [issue #12](https://github.com/spilloid/rsRewind/issues/12). The rules below describe intended behavior; use a session you are comfortable recording. Mac privacy, permission and lock/sleep acceptance still require a real Mac.
+> **Early release:** known privacy enforcement gaps remain in [issue #12](https://github.com/spilloid/rsRewind/issues/12), on every platform. The rules below describe intended behavior; use a session you are comfortable recording.
 
 ## What is captured
 
@@ -30,7 +30,7 @@ For each stored visual state:
 - **The foreground process's name and, where available, its full executable path** (reading an
   elevated process's path can fail; in that case the process name is still recorded, but the path
   is left empty — this never blocks capture).
-- **The foreground window's title and window class**, where available. The Mac development adapter currently reports no foreground application; its visible-window list is still used for exclusions.
+- **The foreground window's title and window class**, where available. On macOS the recorder does not attribute a foreground application or window to a moment (CoreGraphics window ordering does not prove focus, and it will not guess), so Mac moments carry no application or window name; the visible-window list is still used for exclusions.
 - **A timestamp** (UTC, millisecond precision) and which **monitor** (device name, resolution,
   position, DPI) the state came from.
 - **OCR text** recognized from the image, if OCR is enabled (`ocr.enabled`, on by default), stored
@@ -67,8 +67,9 @@ never what matched) is open work.
 
 **Where the rules cannot be enforced, rsRewind does not record.** Enforcing "any visible window"
 needs the list of every visible window with its position (and, for each kind of rule, its title
-or process name). Windows provides all of it, and so does KDE Plasma on Wayland, where KWin
-reports every window on the current virtual desktop that is not minimized. A platform that cannot (for example a Wayland
+or process name). Windows provides all of it, and so do KDE Plasma on Wayland, where KWin
+reports every window on the current virtual desktop that is not minimized, and macOS, where the
+window list comes from CoreGraphics once Screen Recording is granted. A platform that cannot (for example a Wayland
 desktop without a window-list protocol) makes the recorder **refuse to start** unless you set
 `unenforced_ok = true` under `[privacy]`. If you do, `rsrewind status` and `rsrewind doctor`
 say **"privacy rules NOT enforced"** for as long as the newest recording session ran that way,
@@ -83,7 +84,7 @@ it. The recorder writes `~/.local/share/applications/rsrewind-recorder.desktop` 
 path) each time it starts. That file is a standing permission for that program path; delete it to
 withdraw it.
 
-Suggested patterns primarily cover Windows/Linux app names; verify actual app names on the Mac preview. Editing a process or title list replaces that list, so preserve any defaults you still want.
+The suggested patterns are Windows and Linux process names; on macOS add the names of the apps you use (as `rsrewind doctor` and Activity Monitor report them) and check a rule with synthetic content before relying on it. Editing a process or title list replaces that list, so preserve any defaults you still want.
 
 These defaults are **suggestions, not a mandatory policy** — every rule can be edited or removed
 in `config.toml`, and you can add your own. `config.toml` rejects unknown keys (a typo like
@@ -249,6 +250,6 @@ window names from the last 30 days by default; screenshots only if you set `allo
 machines you list under `[mcp] sources`. Agents cannot resume recording, forget, export or import. rsRewind logs each
 agent call's tool name, request id, result count and duration, never what was returned. See `docs/mcp.md`.
 
-## macOS (2026-10-10, development client)
+## macOS (2026-10-10; refreshed 2026-10-11)
 
-macOS screen-recording authorization is required; the application cannot bypass denial. The backend follows the existing fail-closed platform contract for unavailable context and idle/session state, with native OCR in memory. The Mac port does not close the existing recorder findings in issue #12. Interactive permission, exclusion and lock/sleep behavior require real-Mac acceptance before a supported release claim. See `docs/macos.md`.
+macOS screen-recording authorization is required; the application cannot bypass a denial, and without it nothing is captured. The backend follows the same fail-closed platform contract as Windows and Plasma: a tick with no frame, no window list, no idle value, or a session that is not the logged-in console session stores nothing. Text recognition is Apple Vision, in memory, on device. No foreground application is attributed to Mac moments (see above). The Mac port does not close the recorder findings in issue #12, which apply to every platform. The maintainer states (2026-10-11) that macOS is as stable as the other platforms; that is an owner attestation about daily use, not an independent privacy review, and the real-Mac checklist in `docs/macos.md` is what a release should be checked against.

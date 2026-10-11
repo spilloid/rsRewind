@@ -2,14 +2,15 @@
 
 ## Threat model: local-only
 
-rsRewind is a local-first, single-user Windows application with no network component, no
-accounts, and no server. There is no remote attack surface by design — see `CLAUDE.md`'s hard
+rsRewind is a local-first, single-user desktop application (Windows, macOS, KDE Plasma) with no
+network component, no accounts, and no server. There is no remote attack surface by design — see `CLAUDE.md`'s hard
 rules ("no listening socket, no local HTTP server") and `ARCHITECTURE.md`. The realistic threats
 this project cares about are local ones:
 
 - **Another local user or process reading your recorded history.** Currently, the only
-  protection is normal Windows user-profile file permissions on `%LOCALAPPDATA%\rsRewind` — there
-  is **no encryption at rest yet**. See `PRIVACY.md` for the full, plain statement of this gap and
+  protection is normal per-user file permissions on the data folder (`%LOCALAPPDATA%\rsRewind`,
+  `~/Library/Application Support/rsRewind`, `~/.local/share/rsRewind`) — there is **no encryption at
+  rest yet**. See `PRIVACY.md` for the full, plain statement of this gap and
   what it means in practice (anyone who can log into your account, or any local administrator,
   can read everything rsRewind has recorded).
 - **A malicious or buggy file silently escaping the data directory.** `DataDir::resolve_media`

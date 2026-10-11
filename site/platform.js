@@ -3,11 +3,11 @@
   const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
   if (/android|iphone|ipad/i.test(navigator.userAgent) || (/mac/i.test(platform) && navigator.maxTouchPoints > 1)) return;
   const choices = /win/i.test(platform)
-    ? ['Download for Windows · x64', 'https://github.com/spilloid/rsRewind/releases/download/v0.1.0/rsrewind-v0.1.0-x64.msi', 'Windows 11 · v0.1.0 · signed installer']
+    ? ['Download for Windows · x64', 'https://github.com/spilloid/rsRewind/releases/download/v0.1.0/rsrewind-v0.1.0-x64.msi', 'Windows 11 · x64 · v0.1.0 · signed installer']
     : /mac/i.test(platform)
-      ? ['Get the Mac preview · Apple Silicon', 'install.html#macos', 'macOS 14+ · Apple Silicon only · development build, not notarized']
+      ? ['Download for Mac · Apple Silicon', 'https://github.com/spilloid/rsRewind/releases/download/v0.1.0/rsrewind-v0.1.0-macos-arm64.dmg', 'macOS 14+ · Apple Silicon · v0.1.0 · disk image, not notarized']
       : /linux/i.test(platform) && !/android/i.test(navigator.userAgent)
-        ? ['Download for Linux · x86-64 AppImage', 'https://github.com/spilloid/rsRewind/releases/download/v0.1.0/rsrewind-v0.1.0-linux-x86_64.AppImage', 'Recording requires KDE Plasma 6 on Wayland · v0.1.0']
+        ? ['Download for Linux · x86-64 AppImage', 'https://github.com/spilloid/rsRewind/releases/download/v0.1.0/rsrewind-v0.1.0-linux-x86_64.AppImage', 'Linux x86-64 · v0.1.0 · recording needs KDE Plasma 6 on Wayland']
         : null;
   if (!choices) return;
   document.querySelectorAll('[data-platform-download]').forEach(link => {

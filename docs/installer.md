@@ -1,5 +1,9 @@
 # MSI installer
 
+This page covers the Windows MSI. The macOS disk image (`scripts/package-macos.sh`,
+`scripts/package-macos-dmg.sh`, `installer/macos/Info.plist`) is described in [macos.md](macos.md), and the
+Linux AppImage in `scripts/package-appimage.sh`; all three are built by `.github/workflows/release.yml`.
+
 **Status: MSI builds with WiX 5.0.2 from a signed EXE.** `installer/rsrewind.wxs` has not yet
 been installed, upgraded, or uninstalled on a real machine. The install behavior below is
 intended design until those checks are done.

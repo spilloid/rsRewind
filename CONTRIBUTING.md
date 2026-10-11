@@ -13,7 +13,7 @@ If `cargo`/`rustc` aren't on your shell's `PATH` (installed via `rustup` but not
 prefix with the toolchain's `bin` directory — see `CLAUDE.md` for the exact prefix used on the
 maintainer's development machine.
 
-Build for your host platform. Windows requires MSVC Build Tools and the Windows SDK; see [platform build requirements](docs/development.md) and [Mac setup and acceptance](docs/macos.md). The Rust toolchain and lint components are pinned in `rust-toolchain.toml`.
+Build for your host platform: Windows (MSVC Build Tools and the Windows SDK), Linux (KDE Plasma 6 on Wayland to record; Tesseract for OCR) or an Apple Silicon Mac (macOS 14+, Xcode command-line tools for the Swift bridges). See [platform build requirements](docs/development.md) and the [macOS reference](docs/macos.md). The Rust toolchain and lint components are pinned in `rust-toolchain.toml`.
 
 ## The bar before a change ships
 
@@ -135,14 +135,18 @@ Shipping includes a documentation step, not a follow-up (STD-003 rule 3). In ord
    requests on the site, and checks referenced images exist. CI runs it on every PR.
 5. **Standards and quarantine.** Reconcile `docs/standards.md`, and re-date or retire the items in
    CLAUDE.md's "Things to re-verify before trusting them".
-6. **Gate.** PR green on Windows CI (`fmt`, `clippy -D warnings`, `test`, `build`). Run the Release
+6. **Gate.** PR green on Windows CI (`fmt`, `clippy -D warnings`, `test`, `build`) and on the macOS
+   workflow (`macos.yml`: the same lints and tests on Apple Silicon plus the app bundle). Run the Release
    workflow from `main` with `dry_run=true` when signing, packaging or the notes template changed.
 7. **Tag.** Merge, then tag `vX.Y.Z` on the merge commit. The workflow tests, builds, signs the EXE
-   and MSI, assembles the ZIP, writes `SHA256SUMS.txt`, and publishes a **prerelease** only if every
-   signature and checksum verifies.
+   and MSI, assembles the ZIP, the Linux tarball and AppImage and the macOS disk image, writes
+   `SHA256SUMS.txt` covering all five, and publishes a **prerelease** only if every signature and
+   checksum verifies.
 8. **Verify the published release** as a user would: download the assets, `sha256sum -c
    SHA256SUMS.txt`, `Get-AuthenticodeSignature` on the EXE and MSI, install the MSI on a real
-   Windows machine, run `rsrewind --version` and `rsrewind doctor` in an interactive session.
+   Windows machine, run `rsrewind --version` and `rsrewind doctor` in an interactive session. On a
+   real Mac, verify the disk image's checksum, open the app past Gatekeeper, grant Screen Recording
+   and run `doctor` from the bundle's executable; on Plasma, run the AppImage and `doctor`.
 9. **Promote** the prerelease to a normal release and Latest after step 8. Anything the release does
    not yet do safely must be in its Known issues *and* in a tracking issue linked from them (for
    privacy, #12); that, not the pre-release label, is how users are warned (maintainer decision,

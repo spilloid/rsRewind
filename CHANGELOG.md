@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **macOS is presented as a fully supported platform** alongside Windows 11 and KDE Plasma 6, on the
+  website, in the README and throughout the docs; the "development preview" wording is gone. The
+  maintainer stated on 2026-10-11 that the Mac app is as stable in daily use as the other two platforms
+  (an owner attestation, recorded as such in `CLAUDE.md`). What ships is unchanged: an Apple Silicon
+  app for macOS 14+, ad-hoc signed and not notarized, in the release disk image. No code change.
+- Website and README rewritten as a product pitch: value propositions, use cases, how it works, the
+  rewind window's features, the command line and MCP, and one download path per platform. Static
+  HTML/CSS/JS, nothing loaded from other servers.
+- Stale references to v0.0.6 and to MCP or macOS being "development builds only" removed from
+  `docs/README.md`, `docs/cli.md`, `docs/mcp.md` and `docs/standards.md`.
+
 ## [0.1.0] - 2026-10-11
 
 **Navigate and take clips out.** Marks, keyframes, a real navigator in the window, multi-select and

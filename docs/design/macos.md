@@ -1,5 +1,7 @@
 # macOS client contract — 2026-10-10
 
+> **Status (2026-10-11).** Implemented and shipped in every release since 0.0.7 as `rsrewind-vX.Y.Z-macos-arm64.dmg`; the maintainer states macOS is as stable as Windows and KDE Plasma (owner attestation, see `CLAUDE.md`). What exists is described in [`docs/macos.md`](../macos.md). The text below is the original contract, kept for the record; of its CI/distribution clauses, Developer ID signing and notarization remain undone.
+
 Implement in an isolated branch; preserve the operator's unrelated working-tree edits.
 Native Apple Silicon client, one rsrewind executable with daemon/UI/menu-bar subcommands.
 Use Apple's screen-recording authorization and ScreenCaptureKit on macOS 14+;

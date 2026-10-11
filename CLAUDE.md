@@ -5,8 +5,8 @@ repository.
 
 ## Mission
 
-rsRewind is a local-first screen-history recorder for Windows and KDE Plasma (Wayland), written in Rust, with no
-cloud component. It watches the screen, keeps a searchable visual/text record of what changed,
+rsRewind is a local-first screen-history recorder for Windows, macOS (Apple Silicon) and KDE Plasma (Wayland),
+written in Rust, with no cloud component. It watches the screen, keeps a searchable visual/text record of what changed,
 and gives the user that history back through a CLI and a native desktop UI — entirely on their
 own machine. See `README.md` for the product pitch, `ARCHITECTURE.md` for how it's built, and
 `docs/mvp-contract.md` for the contract the first vertical slice is implemented against.
@@ -95,14 +95,19 @@ crates/rsrewind-core/      shared domain types, config, paths, privacy rules —
 crates/rsrewind-segment/   sealed history segment file format (replication unit) — implemented
 crates/rsrewind-storage/   SQLite schema, migrations, media I/O, segment export/import — implemented
 crates/rsrewind-query/     read-only search/timeline queries + cross-source history facade — implemented
-crates/rsrewind-capture/   Windows capture backends; KDE Plasma backends (kwin.rs, wayland_idle.rs); change detection
+crates/rsrewind-capture/   Windows capture backends; KDE Plasma backends (kwin.rs, wayland_idle.rs); macOS backend
+                           (macos.rs + macos.swift: ScreenCaptureKit, CoreGraphics window list, idle); change detection
                            and window shapes (portable)
-crates/rsrewind-ocr/       Windows.Media.Ocr wrapper (Windows); Tesseract run as a child process (Linux)
+crates/rsrewind-ocr/       Windows.Media.Ocr wrapper (Windows); Apple Vision via Swift bridge (macOS); Tesseract run as a
+                           child process (Linux)
 crates/rsrewind-daemon/    recorder loop, persist/OCR threads, platform seam (platform.rs) — portable, tested on
-                           fakes (src/tests/); Windows backends in windows_platform.rs, Plasma in linux_platform.rs; Unit B partly open
-crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands Windows and Plasma only)
+                           fakes (src/tests/); Windows backends in windows_platform.rs, Plasma in linux_platform.rs,
+                           macOS in macos_platform.rs; Unit B partly open
+crates/rsrewind-cli/       rsrewind.exe, clap subcommands — implemented (recorder commands on Windows, macOS and Plasma;
+                           macos_login.rs writes the LaunchAgent)
 crates/rsrewind-mcp/       MCP server (stdio): reads through query only, acts through the CLI (boundary-tested)
-crates/rsrewind-tray/      notification-area icon; acts only through the CLI, depends on core alone (boundary-tested)
+crates/rsrewind-tray/      notification-area icon (Windows), StatusNotifierItem (Linux), AppKit menu bar (macOS,
+                           native/Tray.swift); acts only through the CLI, depends on core alone (boundary-tested)
 crates/rsrewind-ui/        desktop UI: Iced chrome + custom wgpu rewind viewport — implemented; Windows-verified on synthetic history only
 docs/mvp-contract.md       the orchestrator's pre-implementation contract for the first slice
 docs/design/distributed.md probe / central-instance architecture, options, threat model, stages
@@ -110,9 +115,13 @@ docs/design/probe-visualizer.md  the plan to a full-featured probe/visualizer sp
 docs/dev-process.md        STD-001 log: routing decisions and outcomes for this repo
 docs/standards.md          company standards (STD-001..008) adoption status for this repo
 docs/installer.md          MSI installer design and status
-installer/                 WiX v5 source (rsrewind.wxs) — written, not yet built or tested
-.github/workflows/ci.yml       fmt/clippy/test/build on every PR and push to main
-.github/workflows/release.yml  tag-triggered release: build, sign (fail-closed), MSI, publish
+installer/                 WiX v5 source (rsrewind.wxs); installer/macos/Info.plist for the app bundle
+scripts/                   package-macos.sh / package-macos-dmg.sh (app bundle, ad-hoc signed, disk image),
+                           package-appimage.sh, check-docs.sh, check-site.py
+.github/workflows/ci.yml       fmt/clippy/test/build on every PR and push to main (Windows)
+.github/workflows/macos.yml    the same lints and tests on an Apple Silicon runner, plus the app bundle artifact
+.github/workflows/release.yml  tag-triggered release: build, sign (fail-closed), MSI, Linux tarball/AppImage,
+                               macOS disk image, checksums, publish
 ```
 
 Before editing `rsrewind-core`, read `docs/mvp-contract.md`'s ground rules: shared types are
@@ -185,6 +194,13 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-08:** The Plasma recorder has run only on one machine (Plasma 6.7.5, one 2496x1664 screen
   at 135 %, Bazzite). Multiple screens, other scales, KWin restarts mid-run, and other compositors are
   untested. On excluded ticks KWin still takes the frame and the recorder drops it from memory.
+- **2026-10-11:** The owner stated that macOS (Apple Silicon, macOS 14+) is now as stable as Windows
+  and Plasma, and the docs and site were changed that day to present it as a fully supported platform.
+  This is an **owner attestation**, not something verified in that session: no real Mac was available,
+  hosted CI cannot exercise the screen-recording grant or a desktop, and the real-Mac checklist in
+  `docs/macos.md` (deny/grant permission, exclusions per display, lock/sleep/display changes, login
+  startup, light/dark and Retina scaling) has no dated run recorded in this repository. The bundle is
+  ad-hoc signed and not notarized; the backend attributes no foreground application to Mac moments.
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only. A read-only adversarial review by a different model ran on

@@ -2,9 +2,7 @@
 
 The desktop app is the easiest starting point. Use these commands for automation, diagnostics and deeper control. Run `rsrewind --help` or `rsrewind <command> --help` for flags.
 
-On Windows, the installer does not add the executable to PATH; in PowerShell use `& "$env:LOCALAPPDATA\Programs\rsRewind\rsrewind.exe"` followed by the command. On Mac use `/Applications/rsRewind.app/Contents/MacOS/rsrewind`. Linux installation instructions put it in `~/.local/bin`.
-
-MCP and macOS are available in development builds from main, not the v0.0.6 public assets.
+On Windows, the installer does not add the executable to PATH; in PowerShell use `& "$env:LOCALAPPDATA\Programs\rsRewind\rsrewind.exe"` followed by the command. On a Mac use `/Applications/rsRewind.app/Contents/MacOS/rsrewind`. On Linux the AppImage keeps its copy at `~/.local/share/rsRewind-app/rsrewind`, and the tarball instructions put it in `~/.local/bin`. Every command below works the same on all three platforms.
 
 ## CLI commands
 
@@ -24,8 +22,8 @@ MCP and macOS are available in development builds from main, not the v0.0.6 publ
 | `rsrewind export` | Seal settled history into segment files for another machine. |
 | `rsrewind import <files or folders>` | Merge segment files from other machines (safe to repeat). |
 | `rsrewind sources` | List the machines whose history this one holds. |
-| `rsrewind doctor [--json]` | Check capture, OCR, disk, database, privacy rules and replication. |
-| `rsrewind tray [--start-recorder] [--autostart on\|off]` | Notification-area icon: state at a glance, pause, resume, forget the last 10 min / 1 h, open the window, start/stop (Windows, Linux and macOS development builds). |
+| `rsrewind doctor [--json]` | Check capture (including screen-recording permission on macOS and the KWin `.desktop` grant on Plasma), OCR, disk, database, privacy rules and replication. |
+| `rsrewind tray [--start-recorder] [--autostart on\|off]` | The icon next to the clock (notification area on Windows, system tray on Linux, menu bar on macOS): state at a glance, pause, resume, forget the last 10 min / 1 h, open the window, start/stop, Quit (stops recording). `--autostart` registers or removes login startup (HKCU Run entry, XDG autostart file or LaunchAgent). |
 | `rsrewind mcp [--enable\|--disable]` | Let an AI assistant search your history over MCP (stdio; off until enabled; see `docs/mcp.md`). |
 | `rsrewind data-dir` | Print the data folder. |
 

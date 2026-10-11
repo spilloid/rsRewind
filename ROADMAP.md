@@ -179,6 +179,17 @@ Everything above, proven together:
 - Documented architecture (`ARCHITECTURE.md`) and privacy model (`PRIVACY.md`), kept current with
   the shipped product.
 
-### Apple Silicon release gate (2026-10-10)
+### macOS (2026-10-10; status 2026-10-11)
 
-Native Mac implementation and hosted ARM64 artifact are being added alongside MCP completion. Before calling macOS supported, require interactive TCC/capture/lock/sleep/multimonitor acceptance, synthetic native UI captures, independent privacy review, and a deliberate Developer ID/notarization distribution plan. `docs/macos.md` records the acceptance contract.
+The native Apple Silicon app has shipped with every release since 0.0.7 (ScreenCaptureKit capture,
+Apple Vision OCR, AppKit menu bar, LaunchAgent login startup; `docs/macos.md`). On 2026-10-11 the
+maintainer stated that macOS is as stable in daily use as Windows and KDE Plasma; rsRewind therefore
+presents the three as equal platforms. That is an owner attestation, not a CI result (hosted runners
+cannot exercise the screen-recording grant or a desktop). Still open for the Mac, as distribution
+rather than stability work:
+
+- Developer ID signing and notarization, so Gatekeeper stops asking on first launch. Today the
+  bundle is ad-hoc signed and users verify the SHA-256 instead.
+- An Intel (x86-64) build is not planned; macOS 14+ on Apple Silicon is the supported target.
+- Foreground-application attribution on macOS (the backend reports none rather than guess).
+- The recorder-side privacy findings in #12 apply to every platform, macOS included.

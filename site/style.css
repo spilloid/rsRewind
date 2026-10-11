@@ -73,3 +73,19 @@ details section{margin-top:32px}
 .skip{position:absolute;top:-100px;left:16px;background:var(--surface);padding:12px;z-index:2}
 .skip:focus{top:8px}
 @media(max-width:560px){main{gap:48px}.btn{width:100%;text-align:center}}
+
+/* Product pitch components (overview and install pages). */
+.pills{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.pills li{font:600 .8rem var(--mono);letter-spacing:.04em;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 12px;background:var(--surface)}
+ol.flow{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+ol.flow li{display:flex;gap:14px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;min-width:0}
+ol.flow li>div{display:flex;flex-direction:column;gap:8px;min-width:0}
+ol.flow p{font-size:.97rem;color:var(--muted)}
+.step{flex:0 0 auto;display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--gold);color:var(--on-gold);font:700 1rem var(--display)}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:24px;align-items:start}
+.split>div{display:flex;flex-direction:column;gap:14px;min-width:0}
+.split pre{min-width:0}
+ul.plain{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:.97rem}
+.platforms{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.platforms a.card{text-decoration:none;color:var(--ink)} .platforms a.card:hover{border-color:var(--gold)}
+.platforms .card span{color:var(--gold);font-weight:600}

@@ -34,6 +34,7 @@ and the record of how each obligation is met. Last reconciled 2026-10-10.
 |---|---|---|---|
 | Tesseract (`tesseract` on PATH) | text recognition on Linux | Apache-2.0; language data (`tessdata`, `tessdata_fast`) Apache-2.0; Leptonica BSD-2-style | the user installs it from their distribution; rsRewind invokes it as a child process. Bundling it later would require its license texts and Leptonica's in the notices and a changelog note. |
 | Windows.Media.Ocr | text recognition on Windows | part of Windows | OS API |
+| Apple Vision, ScreenCaptureKit, AppKit | text recognition, capture and the menu bar on macOS | part of macOS | system frameworks |
 | KWin, the Wayland compositor | screenshots, window list on Plasma | part of the desktop | D-Bus calls |
 
 ## Considered and not used
@@ -48,6 +49,6 @@ cargo deny check licenses                                  # the CI gate
 cargo about generate about.hbs -o THIRD-PARTY-NOTICES.html # what a release ships
 ```
 
-## macOS development bundle
+## macOS app bundle
 
-The Apple Silicon app bundle includes `LICENSE` and `THIRD-PARTY-NOTICES.html` in `Contents/Resources`. ScreenCaptureKit, Vision and AppKit are system frameworks supplied by macOS, not third-party libraries distributed inside the app. Packaging checks linked libraries to reject Xcode, Homebrew and runner-local runtime dependencies.
+The Apple Silicon app bundle shipped in each release's disk image includes `LICENSE` and `THIRD-PARTY-NOTICES.html` in `Contents/Resources`. ScreenCaptureKit, Vision and AppKit are system frameworks supplied by macOS, not third-party libraries distributed inside the app. Packaging checks linked libraries to reject Xcode, Homebrew and runner-local runtime dependencies.
