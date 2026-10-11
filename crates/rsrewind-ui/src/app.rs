@@ -161,6 +161,8 @@ pub struct App {
     recorder: Recorder,
     /// A front-door command is running.
     starting: bool,
+    /// Whether this window has already made sure the tray icon is up (once per window).
+    tray_ensured: bool,
     /// One line about the last front-door command (an error, or "starts at login").
     front_note: Option<String>,
 
@@ -224,6 +226,7 @@ impl App {
             control,
             recorder: Recorder::Unknown,
             starting: false,
+            tray_ensured: false,
             front_note: None,
             thumbs: ByteLru::new(),
             pending: HashSet::new(),
@@ -367,7 +370,20 @@ impl App {
             Message::Recorder(state) => {
                 let was = self.recorder;
                 self.recorder = state;
-                let next = Task::perform(self.control.status(recorder::POLL), Message::Recorder);
+                let mut next =
+                    Task::perform(self.control.status(recorder::POLL), Message::Recorder);
+                // A recorder that is running without its tray icon (started from the command line, or
+                // at login before the icon was part of that) gets one when the window opens. `rsrewind
+                // tray` exits at once if an icon is already up, so this is safe to ask once.
+                if !self.tray_ensured && matches!(state, Recorder::Recording | Recorder::Paused) {
+                    self.tray_ensured = true;
+                    next = Task::batch([
+                        next,
+                        Task::perform(self.control.run(&["tray"]), |r| {
+                            Message::FrontDoor("tray", r)
+                        }),
+                    ]);
+                }
                 // Waiting for the first moments: look for history again, so it appears on its own.
                 if self.sources.is_empty() && state == Recorder::Recording
                     || (was != state && self.sources.is_empty())
