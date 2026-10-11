@@ -1900,15 +1900,14 @@ impl App {
             };
             list = list.push(line);
         }
-        col = col
-            .push(scrollable(list).height(Fill))
-            .push(
-                text(
-                    "m mark · [ ] marks · , . or PgUp PgDn keyframes · ← → moments ·                      Shift extends the selection · g go to · Esc close",
-                )
-                .size(11)
-                .color(t.text_3),
-            );
+        col = col.push(scrollable(list).height(Fill)).push(
+            text(
+                "M mark · [ ] marks · , . keyframes · ← → moments
+Shift+any of these extends the selection · G go to · Esc close",
+            )
+            .size(11)
+            .color(t.text_3),
+        );
         container(col)
             .padding(12)
             .width(Length::Fixed(380.0))
@@ -1995,6 +1994,13 @@ impl App {
             sizes,
         ]
         .spacing(6);
+        if self.picks.len() > 1 && single {
+            col = col.push(
+                text("Copy image and Save PNG use the moment on stage.")
+                    .size(11)
+                    .color(t.text_3),
+            );
+        }
         if !clip {
             col = col.push(
                 text("Click a card, then Shift-click (or Shift+[ ] , .) to pick a stretch for a clip.")
@@ -2263,8 +2269,17 @@ impl App {
                 })
                 .collect();
             labelled.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (z, mark) in labelled.into_iter().take(ROOM_MARK_LABELS) {
+            // Nearest first; a label that would overlap one already placed is left out.
+            let mut taken: Vec<f32> = Vec::new();
+            for (z, mark) in labelled {
+                if taken.len() >= ROOM_MARK_LABELS {
+                    break;
+                }
                 let y = camera.floor_y(lanes, size.width, size.height, z) - 17.0;
+                if taken.iter().any(|t| (t - y).abs() < 14.0) {
+                    continue;
+                }
+                taken.push(y);
                 let label = if mark.label.is_empty() {
                     format!("◆ {}", format_clock(mark.at.0))
                 } else {

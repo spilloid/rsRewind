@@ -188,7 +188,12 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only and have had no adversarial review. The window was never looked at
-  with these features on real recorded history; see the next item for what was seen under Xvfb.
+  with these features on real recorded history. It was run once on synthetic history (360 moments,
+  three sources) under Xvfb with Mesa lavapipe (X11, 1280x800, dark): navigator, marks panel,
+  mark/keyframe stepping, labelled mark (written through `rsrewind mark`), delete confirmation,
+  Shift-click range, GIF and WebM export and Copy image (X11 clipboard, read back with `xclip`) all
+  worked as screenshots showed; keys work only once the window has focus (no window manager there).
+  Not seen: Wayland, a real GPU, light mode, scaling, multiple monitors, long histories.
   Keyframe thresholds (60 s gap, 24 dHash bits, 15 s spacing) are untuned guesses. Copy image
   (arboard), the WebM path and every Windows/macOS behaviour (clipboard, ffmpeg lookup, child
   process without a console) are unverified; the WebM encode ran only under `cargo test` on Linux
