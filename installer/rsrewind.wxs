@@ -8,7 +8,7 @@
   Design (see docs/installer.md for the full rationale):
     - Per-user install, no admin rights required: %LOCALAPPDATA%\Programs\rsRewind.
     - Start Menu shortcut, launching `rsrewind.exe ui`.
-    - Optional startup registration (HKCU Run -> `rsrewind.exe start`), modeled as a separate,
+    - Optional startup registration (HKCU Run -> `rsrewind.exe tray --start-recorder`), modeled as a separate,
       not-installed-by-default MSI feature (StartAtLogin) rather than a UI checkbox, since no
       custom installer UI has been built yet.
     - MajorUpgrade with version-based upgrade/downgrade handling.
@@ -122,16 +122,17 @@
     </Component>
 
     <!--
-      `rsrewind.exe start` spawns the recorder detached with no visible console window (see
-      README.md's CLI command table / docs/mvp-contract.md's rsrewind-cli section); this just
-      arranges for that command to run once at sign-in, exactly as if the user typed it.
+      `rsrewind.exe tray --start-recorder` puts the rsRewind icon in the notification area and
+      starts the recorder (detached, no console window) if it is not running; this arranges for
+      that command to run once at sign-in, exactly as `rsrewind tray --autostart on` does. The
+      icon is how the user sees that capture is on and pauses it.
     -->
     <Component Id="StartupRegistration" Directory="APPDIR" Guid="*">
       <RegistryValue Root="HKCU"
                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
                       Name="rsRewind"
                       Type="string"
-                      Value="&quot;[APPDIR]rsrewind.exe&quot; start"
+                      Value="&quot;[APPDIR]rsrewind.exe&quot; tray --start-recorder"
                       KeyPath="yes" />
     </Component>
 

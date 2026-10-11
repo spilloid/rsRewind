@@ -37,7 +37,7 @@ not require elevation any more than installing a normal desktop app for yourself
 - A per-user Start Menu shortcut ("rsRewind"), launching `rsrewind.exe ui` — i.e. the shortcut
   opens the desktop UI, not a bare console window.
 - **Optionally**, a startup registration: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\rsRewind`
-  = `"<install dir>\rsrewind.exe" start`, so the recorder starts automatically at sign-in.
+  = `"<install dir>\rsrewind.exe" tray --start-recorder`, so the tray icon and the recorder start automatically at sign-in.
 
 The startup registration is modeled as a **separate MSI feature** (`StartAtLogin`, `Level="1000"`
 — MSI's standard way of saying "present in the feature tree, not selected unless asked for") so

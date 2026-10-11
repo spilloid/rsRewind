@@ -6,6 +6,42 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-10-11
+
+**Eighth release: the icon is there when you need it.** The Windows tray icon has existed since 0.0.5 but
+nothing started it for you after an install. Now the window and the login entry both bring it up.
+
+> **Privacy: open issues, read before installing.** The recorder-side privacy gaps listed in
+> [#12](https://github.com/spilloid/rsRewind/issues/12) are still open on every platform, and nothing is
+> encrypted at rest. Use rsRewind only on machines you own, in sessions you are comfortable recording.
+
+### Changed
+
+- **The tray icon comes up with the recorder.** Opening the rewind window while the recorder is running (or
+  paused) now starts the tray icon if it is not already up; `rsrewind tray` exits at once when an icon exists,
+  so this never makes a second one. Quitting the icon from its menu stops it until the next time the window
+  opens or `rsrewind tray` runs.
+- **Windows login entry starts the icon.** The MSI's optional start-at-login registration now runs
+  `rsrewind.exe tray --start-recorder` (the same command `rsrewind tray --autostart on` writes) instead of
+  `rsrewind.exe start`, so the icon and the recorder start together and capture is visible after sign-in.
+  Existing installs keep their old entry until you run `rsrewind tray --autostart on` once or reinstall with
+  the start-at-login feature.
+- The install page says where to find the icon on Windows (it may sit in the hidden-icons overflow).
+
+### Known issues
+
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- **The Windows tray icon has not been checked by eye in the taskbar** (light and dark themes, several DPI
+  scales); it was verified by driving its menu commands in a real session.
+- **The macOS menu-bar item and app are a development preview**: not notarized, and not run on a real Mac.
+- The AppImage and the macOS DMG, first shipped in 0.0.7, have not been run from a published release yet.
+- Everything listed for 0.0.7 that is not mentioned above still applies.
+
+### Upgrade notes
+
+- No database migration and no required settings change.
+- Windows: to have the icon at every sign-in on an existing install, run `rsrewind tray --autostart on` once.
+
 ## [0.0.7] - 2026-10-11
 
 **Seventh release: ask your history, and a Mac.** AI assistants can now search your screen history through an
