@@ -46,5 +46,10 @@ done
 
 python3 scripts/check-site.py || fail=1
 
+# The installer source must be well-formed XML (a stray "--" inside a comment breaks the MSI build, which
+# only runs at release time).
+python3 -c 'import sys, xml.dom.minidom as m; m.parse(sys.argv[1])' installer/rsrewind.wxs \
+  || { say "installer/rsrewind.wxs is not well-formed XML"; fail=1; }
+
 if [ "$fail" -eq 0 ]; then echo "docs check ok: v$declared"; fi
 exit "$fail"
