@@ -45,8 +45,8 @@ private func displays() -> [Display]? {
         guard w[kCGWindowLayer as String] is Int else { return nil }
         // ScreenCaptureKit captures all layers; include every visible owner, including overlays.
         guard let pid = w[kCGWindowOwnerPID as String] as? Int32,
-              let bounds = w[kCGWindowBounds as String] as? CFDictionary,
-              let r = CGRect(dictionaryRepresentation: bounds),
+              let bounds = w[kCGWindowBounds as String] as? [String: Any],
+              let r = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               let app = NSRunningApplication(processIdentifier: pid),
               let process = app.executableURL?.lastPathComponent else { return nil }
         let title = w[kCGWindowName as String] as? String

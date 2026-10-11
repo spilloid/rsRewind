@@ -1,7 +1,6 @@
 mod common;
 
 use common::*;
-use rsrewind_core::Config;
 use rsrewind_mcp::{MAX_MESSAGE_BYTES, McpServer, Settings, serve};
 use serde_json::{Value, json};
 
@@ -113,21 +112,20 @@ fn ceiling_is_reread_and_invalid_configuration_fails_closed() -> Fallible<()> {
     let (_dir, data) = history()?;
     let path = data.root().join("config.toml");
     let server = McpServer::new(data.clone(), Settings::File(path.clone()), None, "test");
-    let mut config = Config::default();
-    config.mcp = enabled();
-    config.save(&path)?;
+    std::fs::write(&path, "[mcp]\nenabled = true\n")?;
     assert_eq!(
         call(&server, "search", json!({"query":"linker"}))?["isError"],
         false
     );
-    config.mcp.sources = vec!["0123456789abcdef0123456789abcdef".into()];
-    config.save(&path)?;
+    std::fs::write(
+        &path,
+        "[mcp]\nenabled = true\nsources = [\"0123456789abcdef0123456789abcdef\"]\n",
+    )?;
     assert_eq!(
         call(&server, "search", json!({"query":"linker"}))?["structuredContent"]["moments"],
         json!([])
     );
-    config.mcp.enabled = false;
-    config.save(&path)?;
+    std::fs::write(&path, "[mcp]\nenabled = false\n")?;
     assert_eq!(
         call(&server, "search", json!({"query":"linker"}))?["isError"],
         true
