@@ -107,9 +107,20 @@ impl Control {
         &self,
         args: &'static [&'static str],
     ) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        self.run_args(args.iter().map(|a| (*a).to_owned()).collect())
+    }
+
+    /// [`Control::run`] with arguments built at run time (marks: ids, times, labels). Each argument
+    /// is one argv element (no shell), so a label is never parsed as anything but itself; callers
+    /// pass labels in `--label=TEXT` form so one starting with `-` is not read as a flag.
+    pub fn run_args(
+        &self,
+        args: Vec<String>,
+    ) -> impl Future<Output = Result<(), String>> + Send + 'static {
         let this = self.clone();
         off_thread(Err("could not run rsrewind".to_string()), move || {
-            let Some(mut command) = this.command(args) else {
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let Some(mut command) = this.command(&refs) else {
                 return Err("could not find the rsrewind executable".into());
             };
             // `start` and `tray` leave a background process behind; it must not hold our pipes.
@@ -126,6 +137,7 @@ impl Control {
                     .last()
                     .unwrap_or("it did not work")
                     .trim()
+                    .trim_start_matches("rsrewind: ")
                     .to_string())
             }
         })

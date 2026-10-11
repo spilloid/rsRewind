@@ -8,6 +8,8 @@
 mod viewer;
 
 use crate::gaps;
+use crate::nav::{self, JumpTarget, Motion, Shortcut};
+use crate::pick::Picks;
 use crate::recorder::{self, Control, Recorder};
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
@@ -26,7 +28,7 @@ use iced::{
 use rsrewind_core::{
     DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineEntry, Timestamp, VisualDetail,
 };
-use rsrewind_query::{SourceFilter, SourceInfo, SourceKind, SourceProblem};
+use rsrewind_query::{Keyframe, Mark, SourceFilter, SourceInfo, SourceKind, SourceProblem};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -43,13 +45,16 @@ const DETAIL_H: u32 = 1600;
 const WINDOW_LIMIT: u32 = 200;
 /// Layout size used to decide which pictures to load before the real size is known.
 const NOMINAL: (f32, f32) = (1280.0, 640.0);
-/// The short settle when cueing to a moment (the brief: ~100-180 ms, no fake scrubbing).
-const CUE_MS: f32 = 180.0;
 const SEARCH_LIMIT: u32 = 100;
 /// How far back gaps are looked up (from now). Older gaps are not shown yet.
 const GAP_HORIZON_MS: i64 = 30 * 86_400_000;
 /// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
 const SEARCH_ID: &str = "search";
+/// The navigator panel's "Go to" and mark-label fields (`g`, Shift+M).
+const GOTO_ID: &str = "goto";
+const LABEL_ID: &str = "mark-label";
+/// Mark labels drawn in the room at once (the nearest).
+const ROOM_MARK_LABELS: usize = 6;
 
 pub fn run(data: DataDir, appearance: crate::Appearance) -> iced::Result {
     iced::application(
@@ -94,6 +99,33 @@ pub enum Message {
     DetailPicture(u64, FrameKey, FrameAnswer),
     Step(bool),
     Latest,
+    Oldest,
+    /// The user's marks, re-read after every change.
+    Marks(u64, Answer),
+    /// Keyframes of the loaded window (for drawing).
+    Keyframes(u64, Answer),
+    /// The answer to a keyframe step; `true` extends the selection to it.
+    SteppedKeyframe(u64, bool, Answer),
+    /// The moments of a selection range.
+    Ranged(u64, Answer),
+    /// Previous/next keyframe or mark; `true` second: extend the selection to it.
+    GoKeyframe(bool, bool),
+    GoMark(bool, bool),
+    JumpMark(i64),
+    /// Mark the moment on stage with the label in the panel (empty: none).
+    MarkNow,
+    MarkLabel(String),
+    /// A `rsrewind mark ...` command finished.
+    MarkDone(&'static str, Result<(), String>),
+    TogglePanel,
+    GotoText(String),
+    GotoSubmit,
+    EditMark(Option<i64>),
+    EditText(String),
+    SaveEdit,
+    AskDelete(Option<i64>),
+    DeleteMark(i64),
+    ClearPicks,
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
@@ -105,13 +137,6 @@ pub enum Message {
     ViewerStepped(u64, bool, Answer),
     CloseViewer,
     ScaleFactor(f32),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Cue {
-    from: f64,
-    to: f64,
-    started: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,7 +171,8 @@ pub struct App {
     camera: Camera,
     first: f64,
     last: f64,
-    cue: Option<Cue>,
+    /// The camera moving to a target (glide or cue; see `nav::Motion`).
+    cue: Option<Motion>,
     window_seq: u64,
     window_center: Option<f64>,
     moments: Vec<Moment>,
@@ -175,6 +201,30 @@ pub struct App {
     detail: Option<VisualDetail>,
     detail_picture: Option<(FrameKey, image::Handle)>,
     cue_seq: u64,
+
+    /// The user's marks, oldest first, and the panel that lists them.
+    marks: Vec<Mark>,
+    /// Their moments (Unix ms), for the room.
+    mark_times: Vec<f64>,
+    marks_seq: u64,
+    panel_open: bool,
+    mark_label: String,
+    goto_text: String,
+    editing: Option<(i64, String)>,
+    confirm_delete: Option<i64>,
+    /// A `rsrewind mark` command is running.
+    marking: bool,
+    /// Keyframes of the loaded window, and their pictures (for the cards' tabs).
+    keyframes: Vec<Keyframe>,
+    keyed: HashSet<FrameKey>,
+    keyframes_seq: u64,
+    step_seq: u64,
+    /// One line about the last navigation or mark action.
+    nav_note: Option<String>,
+    /// The multi-frame selection, and its pictures (for drawing).
+    picks: Picks,
+    picked: HashSet<FrameKey>,
+    range_seq: u64,
 
     /// The full-window image viewer, when open.
     viewer: Option<viewer::ViewerState>,
@@ -236,6 +286,23 @@ impl App {
             detail: None,
             detail_picture: None,
             cue_seq: 0,
+            marks: Vec::new(),
+            mark_times: Vec::new(),
+            marks_seq: 0,
+            panel_open: false,
+            mark_label: String::new(),
+            goto_text: String::new(),
+            editing: None,
+            confirm_delete: None,
+            marking: false,
+            keyframes: Vec::new(),
+            keyed: HashSet::new(),
+            keyframes_seq: 0,
+            step_seq: 0,
+            nav_note: None,
+            picks: Picks::default(),
+            picked: HashSet::new(),
+            range_seq: 0,
             viewer: None,
             viewer_seq: 0,
             scale_factor: 1.0,
@@ -243,6 +310,7 @@ impl App {
         let sources = app.ask(Ask::Sources, Message::Sources);
         let sources = Task::batch([
             sources,
+            app.ask(Ask::Marks, |a| Message::Marks(0, a)),
             Task::perform(
                 app.control.status(std::time::Duration::ZERO),
                 Message::Recorder,
@@ -348,8 +416,10 @@ impl App {
                 if seq != self.window_seq {
                     return Task::none();
                 }
+                let mut keyframes = Task::none();
                 if let Answer::Window(entries) = answer {
                     self.set_moments(entries);
+                    keyframes = self.load_keyframes();
                 }
                 // The first load (or a new filter) puts the moment at the cursor on the stage.
                 let follow = if self.selection.is_none() {
@@ -357,7 +427,7 @@ impl App {
                 } else {
                     Task::none()
                 };
-                Task::batch([self.load_thumbs(), follow])
+                Task::batch([self.load_thumbs(), follow, keyframes])
             }
             Message::Gaps(seq, answer) => {
                 if seq == self.gaps_seq
@@ -493,11 +563,25 @@ impl App {
                 self.scale_factor = factor;
                 Task::none()
             }
-            Message::Timeline(timeline::Event::Select(index)) => {
+            Message::Timeline(timeline::Event::Select {
+                index,
+                extend,
+                toggle,
+            }) => {
                 let Some(moment) = self.moments.get(index) else {
                     return Task::none();
                 };
                 let entry = moment.entry.clone();
+                if toggle {
+                    self.picks.toggle(&entry);
+                    self.picked = self.picks.frames();
+                    return Task::none();
+                }
+                if extend {
+                    return self.extend_to(entry.started_at);
+                }
+                self.picks.single(&entry);
+                self.picked = self.picks.frames();
                 self.selected_hit = None;
                 self.select(&entry)
             }
@@ -566,28 +650,216 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Step(forward) => {
-                let starts: Vec<i64> = self.moments.iter().map(|m| m.entry.started_at.0).collect();
-                let Some(target) = model::step(&starts, self.camera.cursor, forward) else {
+            Message::Step(forward) => self.step(forward, false),
+            Message::Oldest => {
+                self.cue_to(self.first);
+                self.refresh_window(true)
+            }
+            Message::Marks(seq, answer) => {
+                if seq == self.marks_seq {
+                    match answer {
+                        Answer::Marks(marks) => {
+                            self.mark_times = marks.iter().map(|m| m.at.0 as f64).collect();
+                            self.marks = marks;
+                        }
+                        Answer::Failed(error) => self.nav_note = Some(error),
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
+            Message::Keyframes(seq, answer) => {
+                if seq == self.keyframes_seq
+                    && let Answer::Keyframes(keyframes) = answer
+                {
+                    self.keyed = keyframes
+                        .iter()
+                        .map(|k| (k.source, k.visual_state_id))
+                        .collect();
+                    self.keyframes = keyframes;
+                }
+                Task::none()
+            }
+            Message::GoKeyframe(forward, extend) => {
+                self.step_seq += 1;
+                let seq = self.step_seq;
+                let from = Timestamp(self.target_cursor().round() as i64);
+                self.ask(
+                    Ask::StepKeyframe {
+                        filter: self.filter,
+                        from,
+                        forward,
+                    },
+                    move |a| Message::SteppedKeyframe(seq, extend, a),
+                )
+            }
+            Message::SteppedKeyframe(seq, extend, answer) => {
+                if seq != self.step_seq {
+                    return Task::none();
+                }
+                match answer {
+                    Answer::StepKeyframe(Some(k)) => {
+                        self.nav_note = Some(format!(
+                            "Keyframe · {} · {}",
+                            k.kind.describe(),
+                            format_time(k.at.0)
+                        ));
+                        self.jump(k.at.0 as f64, extend)
+                    }
+                    Answer::StepKeyframe(None) => {
+                        self.nav_note = Some("No more keyframes that way.".into());
+                        Task::none()
+                    }
+                    Answer::Failed(error) => {
+                        self.nav_note = Some(error);
+                        Task::none()
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Message::GoMark(forward, extend) => {
+                let times = self.marks.iter().map(|m| m.at.0);
+                match nav::neighbour(times, self.target_cursor(), forward) {
+                    Some(at) => {
+                        self.nav_note = self
+                            .marks
+                            .iter()
+                            .find(|m| m.at.0 == at)
+                            .map(|m| mark_title(m));
+                        self.jump(at as f64, extend)
+                    }
+                    None => {
+                        self.nav_note = Some(if self.marks.is_empty() {
+                            "No marks yet: press M to mark the moment on stage.".into()
+                        } else {
+                            "No more marks that way.".into()
+                        });
+                        Task::none()
+                    }
+                }
+            }
+            Message::JumpMark(id) => {
+                let Some(mark) = self.marks.iter().find(|m| m.id == id) else {
                     return Task::none();
                 };
-                let entry = self
-                    .moments
-                    .iter()
-                    .filter(|m| m.entry.started_at.0 == target)
-                    .max_by_key(|m| m.entry.cursor())
-                    .map(|m| m.entry.clone());
-                let jumped: Vec<Gap> =
-                    gaps::crossed(&self.gaps, self.filter, self.camera.cursor as i64, target)
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                self.skipped = (!jumped.is_empty()).then_some((jumped, target as f64));
-                self.cue_to(target as f64);
-                match entry {
-                    Some(entry) => Task::batch([self.select(&entry), self.refresh_window(false)]),
-                    None => self.refresh_window(false),
+                let at = mark.at.0 as f64;
+                self.nav_note = Some(mark_title(mark));
+                self.jump(at, false)
+            }
+            Message::MarkNow => self.mark_now(),
+            Message::MarkLabel(label) => {
+                self.mark_label = label;
+                Task::none()
+            }
+            Message::MarkDone(what, result) => {
+                self.marking = false;
+                match result {
+                    Ok(()) => {
+                        if what == "add" {
+                            self.mark_label.clear();
+                        }
+                        self.editing = None;
+                        self.confirm_delete = None;
+                    }
+                    Err(error) => {
+                        self.nav_note = Some(format!("Could not {what} the mark: {error}"))
+                    }
                 }
+                self.load_marks()
+            }
+            Message::TogglePanel => {
+                self.panel_open = !self.panel_open;
+                self.editing = None;
+                self.confirm_delete = None;
+                Task::none()
+            }
+            Message::GotoText(text) => {
+                self.goto_text = text;
+                Task::none()
+            }
+            Message::GotoSubmit => match nav::parse_jump(&self.goto_text, chrono::Local::now()) {
+                Ok(JumpTarget::Latest) => self.update(Message::Latest),
+                Ok(JumpTarget::Oldest) => self.update(Message::Oldest),
+                Ok(JumpTarget::At(ms)) => {
+                    let target = ms as f64;
+                    self.nav_note = Some(if target < self.first || target > self.last {
+                        format!(
+                            "{} is outside the history shown; went to the nearest end.",
+                            format_time(ms)
+                        )
+                    } else {
+                        format!("Went to {}", format_time(ms))
+                    });
+                    self.jump(target, false)
+                }
+                Err(error) => {
+                    self.nav_note = Some(error);
+                    Task::none()
+                }
+            },
+            Message::EditMark(id) => {
+                self.confirm_delete = None;
+                self.editing = id.and_then(|id| {
+                    self.marks
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| (id, m.label.clone()))
+                });
+                Task::none()
+            }
+            Message::EditText(text) => {
+                if let Some((_, label)) = self.editing.as_mut() {
+                    *label = text;
+                }
+                Task::none()
+            }
+            Message::SaveEdit => {
+                let Some((id, label)) = self.editing.clone() else {
+                    return Task::none();
+                };
+                self.run_mark(
+                    "rename",
+                    vec![
+                        "mark".into(),
+                        "rename".into(),
+                        id.to_string(),
+                        format!("--label={label}"),
+                    ],
+                )
+            }
+            Message::AskDelete(id) => {
+                self.editing = None;
+                self.confirm_delete = id;
+                Task::none()
+            }
+            Message::DeleteMark(id) => self.run_mark(
+                "remove",
+                vec!["mark".into(), "remove".into(), id.to_string()],
+            ),
+            Message::Ranged(seq, answer) => {
+                if seq != self.range_seq {
+                    return Task::none();
+                }
+                match answer {
+                    Answer::Between { entries, truncated } => {
+                        self.picks.apply_range(entries, truncated);
+                        self.picked = self.picks.frames();
+                        if truncated {
+                            self.nav_note = Some(format!(
+                                "Selected the first {} moments of that range (the most at once).",
+                                crate::worker::MAX_RANGE
+                            ));
+                        }
+                    }
+                    Answer::Failed(error) => self.nav_note = Some(error),
+                    _ => {}
+                }
+                Task::none()
+            }
+            Message::ClearPicks => {
+                self.picks.clear();
+                self.picked.clear();
+                Task::none()
             }
             Message::Latest => {
                 self.cue_to(self.last);
@@ -598,14 +870,10 @@ impl App {
                 Task::batch([self.refresh_window(true), self.load_thumbs()])
             }
             Message::Frame(now) => {
-                if let Some(cue) = self.cue {
-                    let t = (now.saturating_duration_since(cue.started).as_secs_f32() * 1000.0
-                        / CUE_MS)
-                        .clamp(0.0, 1.0);
-                    let eased = 1.0 - (1.0 - t).powi(3);
-                    self.camera.cursor = cue.from + (cue.to - cue.from) * f64::from(eased);
-                    if t >= 1.0 {
-                        self.camera.cursor = cue.to;
+                if let Some(motion) = self.cue {
+                    let (cursor, done) = motion.at(now);
+                    self.camera.cursor = cursor;
+                    if done {
                         self.cue = None;
                         return Task::batch([self.load_thumbs(), self.follow_cursor()]);
                     }
@@ -621,18 +889,12 @@ impl App {
             {
                 iced::widget::operation::focus(SEARCH_ID)
             }
-            Message::Key(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
-                keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
-                | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    self.update(Message::Step(false))
+            Message::Key(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                match nav::shortcut(key.as_ref(), modifiers) {
+                    Some(shortcut) => self.shortcut(shortcut),
+                    None => Task::none(),
                 }
-                keyboard::Key::Named(keyboard::key::Named::ArrowRight)
-                | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    self.update(Message::Step(true))
-                }
-                keyboard::Key::Named(keyboard::key::Named::End) => self.update(Message::Latest),
-                _ => Task::none(),
-            },
+            }
             Message::Key(_) => Task::none(),
         }
     }
@@ -711,17 +973,199 @@ impl App {
             .collect()
     }
 
-    /// Jumps to `target` with a short settle: the camera starts a little after the moment and
-    /// glides back onto it, instead of flying through everything in between.
+    /// Moves the camera to `target`: a glide from where it is when the target is within the
+    /// room's depth, otherwise a cue that starts a little after the moment and settles onto it,
+    /// instead of flying through everything in between (`nav::Motion::plan`).
     fn cue_to(&mut self, target: f64) {
         let target = target.clamp(self.first, self.last);
-        let from = (target + self.camera.age_at(0.12)).min(self.last.max(target));
-        self.camera.cursor = from;
-        self.cue = Some(Cue {
-            from,
-            to: target,
-            started: Instant::now(),
-        });
+        let motion = Motion::plan(
+            self.camera.cursor,
+            target,
+            self.camera.depth_ms,
+            self.camera.knee_ms,
+            self.last,
+            Instant::now(),
+        );
+        self.camera.cursor = motion.from;
+        self.cue = Some(motion);
+    }
+
+    /// Where the camera is going (or is): repeated steps chain from the target, not the
+    /// animation's current frame.
+    fn target_cursor(&self) -> f64 {
+        self.cue.map_or(self.camera.cursor, |c| c.to)
+    }
+
+    /// One moment back or forward; `extend` grows the selection to it.
+    fn step(&mut self, forward: bool, extend: bool) -> Task<Message> {
+        let starts: Vec<i64> = self.moments.iter().map(|m| m.entry.started_at.0).collect();
+        let Some(target) = model::step(&starts, self.target_cursor(), forward) else {
+            return Task::none();
+        };
+        let entry = self
+            .moments
+            .iter()
+            .filter(|m| m.entry.started_at.0 == target)
+            .max_by_key(|m| m.entry.cursor())
+            .map(|m| m.entry.clone());
+        let jumped: Vec<Gap> =
+            gaps::crossed(&self.gaps, self.filter, self.target_cursor() as i64, target)
+                .into_iter()
+                .cloned()
+                .collect();
+        self.skipped = (!jumped.is_empty()).then_some((jumped, target as f64));
+        self.cue_to(target as f64);
+        let moved = match entry {
+            Some(entry) => Task::batch([self.select(&entry), self.refresh_window(false)]),
+            None => self.refresh_window(false),
+        };
+        if extend {
+            return Task::batch([moved, self.extend_to(Timestamp(target))]);
+        }
+        moved
+    }
+
+    /// Goes to a time (a mark, a keyframe, "Go to"); `extend` grows the selection to it.
+    fn jump(&mut self, target: f64, extend: bool) -> Task<Message> {
+        self.skipped = None;
+        self.cue_to(target);
+        let moved = self.refresh_window(false);
+        if extend {
+            return Task::batch([moved, self.extend_to(Timestamp(target as i64))]);
+        }
+        moved
+    }
+
+    /// Selects every moment from the anchor (or the moment on stage) to `target`.
+    fn extend_to(&mut self, target: Timestamp) -> Task<Message> {
+        if let Some(stage) = self.stage_entry() {
+            self.picks.anchor_at(&stage);
+        }
+        let fallback = self.selection.as_ref().map(|s| s.at);
+        let Some((from, to)) = self.picks.range_to(target, fallback) else {
+            return Task::none();
+        };
+        self.range_seq += 1;
+        let seq = self.range_seq;
+        self.ask(
+            Ask::Between {
+                filter: self.filter,
+                from,
+                to,
+            },
+            move |a| Message::Ranged(seq, a),
+        )
+    }
+
+    /// The loaded moment the stage shows, if it is loaded.
+    fn stage_entry(&self) -> Option<TimelineEntry> {
+        let frame = self.selection.as_ref()?.frame;
+        self.moments
+            .iter()
+            .find(|m| m.frame() == frame)
+            .map(|m| m.entry.clone())
+    }
+
+    fn shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
+        match shortcut {
+            Shortcut::Moment { forward, extend } => self.step(forward, extend),
+            Shortcut::Keyframe { forward, extend } => {
+                self.update(Message::GoKeyframe(forward, extend))
+            }
+            Shortcut::Mark { forward, extend } => self.update(Message::GoMark(forward, extend)),
+            Shortcut::Oldest => self.update(Message::Oldest),
+            Shortcut::Latest => self.update(Message::Latest),
+            Shortcut::MarkNow => {
+                self.mark_label.clear();
+                self.mark_now()
+            }
+            Shortcut::MarkWithLabel => {
+                self.panel_open = true;
+                iced::widget::operation::focus(LABEL_ID)
+            }
+            Shortcut::GoTo => {
+                self.panel_open = true;
+                iced::widget::operation::focus(GOTO_ID)
+            }
+            Shortcut::Escape => {
+                if self.panel_open {
+                    self.panel_open = false;
+                } else {
+                    self.picks.clear();
+                    self.picked.clear();
+                }
+                Task::none()
+            }
+            Shortcut::SelectAll => {
+                let entries: Vec<TimelineEntry> =
+                    self.moments.iter().map(|m| m.entry.clone()).collect();
+                self.picks.all(&entries);
+                self.picked = self.picks.frames();
+                Task::none()
+            }
+            Shortcut::CopyImage => self.copy_image(),
+        }
+    }
+
+    /// Copies the picture on stage (filled in with the exports).
+    fn copy_image(&mut self) -> Task<Message> {
+        Task::none()
+    }
+
+    fn load_marks(&mut self) -> Task<Message> {
+        self.marks_seq += 1;
+        let seq = self.marks_seq;
+        self.ask(Ask::Marks, move |a| Message::Marks(seq, a))
+    }
+
+    /// Keyframes over the loaded moments, for the strip and the cards' tabs.
+    fn load_keyframes(&mut self) -> Task<Message> {
+        let (Some(first), Some(last)) = (self.moments.first(), self.moments.last()) else {
+            self.keyframes.clear();
+            self.keyed.clear();
+            return Task::none();
+        };
+        self.keyframes_seq += 1;
+        let seq = self.keyframes_seq;
+        self.ask(
+            Ask::Keyframes {
+                filter: self.filter,
+                from: first.entry.started_at,
+                to: last.entry.started_at,
+            },
+            move |a| Message::Keyframes(seq, a),
+        )
+    }
+
+    /// Marks the moment on stage (or, with nothing on stage, the cursor) with the panel's label,
+    /// through `rsrewind mark add` (the window may not write history itself).
+    fn mark_now(&mut self) -> Task<Message> {
+        if self.marking {
+            return Task::none();
+        }
+        let at = self
+            .selection
+            .as_ref()
+            .map_or(self.target_cursor().round() as i64, |s| s.at.0);
+        self.nav_note = Some(format!("Marked {}", format_time(at)));
+        let label = self.mark_label.trim().to_owned();
+        self.run_mark(
+            "add",
+            vec![
+                "mark".into(),
+                "add".into(),
+                "--at-ms".into(),
+                at.to_string(),
+                format!("--label={label}"),
+            ],
+        )
+    }
+
+    fn run_mark(&mut self, what: &'static str, args: Vec<String>) -> Task<Message> {
+        self.marking = true;
+        Task::perform(self.control.run_args(args), move |r| {
+            Message::MarkDone(what, r)
+        })
     }
 
     fn search(&mut self) -> Task<Message> {
@@ -956,6 +1400,18 @@ impl App {
             .height(Fill)
             .into()
         };
+        let body: Element<'_, Message> = if self.panel_open {
+            stack![
+                body,
+                container(self.panel())
+                    .align_right(Fill)
+                    .padding([0, 18])
+                    .height(Fill)
+            ]
+            .into()
+        } else {
+            body
+        };
         container(column![self.top_bar(), body].spacing(10).padding([10, 0]))
             .style(move |_| t.bar())
             .width(Fill)
@@ -976,19 +1432,7 @@ impl App {
             .size(15)
             .style(move |_, status| t.search(status))
             .width(Fill);
-        let moments: u64 = self.sources.iter().map(|s| s.observations).sum();
-        let status = container(
-            text(format!(
-                "{} source{} · {} moments",
-                self.sources.len(),
-                if self.sources.len() == 1 { "" } else { "s" },
-                moments
-            ))
-            .size(12)
-            .font(MONO),
-        )
-        .padding([4, 10])
-        .style(move |_| t.pill(t.mint));
+        let status = self.navigator();
         let recording = self.recorder;
         let chip_color = match recording {
             Recorder::Recording => t.rose,
@@ -1018,6 +1462,221 @@ impl App {
             .spacing(16)
             .padding([0, 18])
             .align_y(Alignment::Center)
+            .into()
+    }
+
+    /// The top-right navigator: keyframe and mark stepping around the marks list, "+ Mark", and the
+    /// selection's size when there is one.
+    fn navigator(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let ready = self.sources_loaded && !self.sources.is_empty();
+        let nav = |label: String, message: Message| {
+            let b = button(
+                text(label)
+                    .size(12)
+                    .font(MONO)
+                    .wrapping(text::Wrapping::None),
+            )
+            .padding([4, 8])
+            .style(move |_, status| t.transport(status));
+            if ready { b.on_press(message) } else { b }
+        };
+        let marks = button(
+            text(format!(
+                "Marks · {}{}",
+                self.marks.len(),
+                if self.panel_open { " ▴" } else { "" }
+            ))
+            .size(12)
+            .font(MONO)
+            .wrapping(text::Wrapping::None),
+        )
+        .padding([4, 10])
+        .style(move |_, status| t.row(self.panel_open, status, t.gold))
+        .on_press(Message::TogglePanel);
+        let mut group = row![
+            nav("« key".into(), Message::GoKeyframe(false, false)),
+            nav("‹ mark".into(), Message::GoMark(false, false)),
+            marks,
+            nav("mark ›".into(), Message::GoMark(true, false)),
+            nav("key »".into(), Message::GoKeyframe(true, false)),
+            nav(
+                if self.marking {
+                    "…".into()
+                } else {
+                    "+ Mark".into()
+                },
+                Message::MarkNow
+            ),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+        if let Some((from, to)) = self.picks.span() {
+            group = group.push(
+                button(
+                    text(format!(
+                        "{} picked · {} ✕",
+                        self.picks.len(),
+                        gaps::duration(to.0 - from.0)
+                    ))
+                    .size(12)
+                    .font(MONO)
+                    .wrapping(text::Wrapping::None),
+                )
+                .padding([4, 10])
+                .style(move |_, status| t.row(true, status, t.mint))
+                .on_press(Message::ClearPicks),
+            );
+        }
+        container(group)
+            .padding([2, 4])
+            .style(move |_| t.pill(t.gold))
+            .into()
+    }
+
+    /// The marks panel: what history holds, "Go to", a labelled mark, and every mark (jump, rename,
+    /// delete). Opened from the navigator, `g` or Shift+M; Esc closes it.
+    fn panel(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let moments: u64 = self.sources.iter().map(|s| s.observations).sum();
+        let small = |label: &'static str, message: Message| {
+            button(text(label).size(12))
+                .padding([3, 8])
+                .style(move |_, status| t.transport(status))
+                .on_press(message)
+        };
+        let mut col = column![
+            row![
+                text(format!(
+                    "{} source{} · {} moments",
+                    self.sources.len(),
+                    if self.sources.len() == 1 { "" } else { "s" },
+                    moments
+                ))
+                .size(12)
+                .font(MONO)
+                .color(t.text_3),
+                space::horizontal(),
+                small("Close", Message::TogglePanel),
+            ]
+            .align_y(Alignment::Center),
+            heading(t, "Go to"),
+            row![
+                text_input(
+                    "14:30, yesterday 9:00, 2026-10-08 14:00, 15m…",
+                    &self.goto_text
+                )
+                .id(GOTO_ID)
+                .on_input(Message::GotoText)
+                .on_submit(Message::GotoSubmit)
+                .padding([6, 10])
+                .size(13)
+                .style(move |_, status| t.search(status)),
+                small("Go", Message::GotoSubmit),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            heading(t, "Mark the moment on stage"),
+            row![
+                text_input("Label (optional)", &self.mark_label)
+                    .id(LABEL_ID)
+                    .on_input(Message::MarkLabel)
+                    .on_submit(Message::MarkNow)
+                    .padding([6, 10])
+                    .size(13)
+                    .style(move |_, status| t.search(status)),
+                small("Mark", Message::MarkNow),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8);
+        if let Some(note) = &self.nav_note {
+            col = col.push(text(note.clone()).size(12).color(t.text_2));
+        }
+        col = col.push(heading(t, &format!("Marks · {}", self.marks.len())));
+        let mut list = column![].spacing(2);
+        if self.marks.is_empty() {
+            list = list.push(
+                text("No marks yet. Press M to mark the moment on stage; [ and ] step between marks.")
+                    .size(12)
+                    .color(t.text_3),
+            );
+        }
+        // Newest first: the marks made today are the ones looked for.
+        for mark in self.marks.iter().rev() {
+            let id = mark.id;
+            let line: Element<'_, Message> = match (&self.editing, self.confirm_delete) {
+                (Some((editing, label)), _) if *editing == id => row![
+                    text_input("Label", label)
+                        .on_input(Message::EditText)
+                        .on_submit(Message::SaveEdit)
+                        .padding([4, 8])
+                        .size(12)
+                        .style(move |_, status| t.search(status)),
+                    small("Save", Message::SaveEdit),
+                    small("Cancel", Message::EditMark(None)),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+                (_, Some(confirm)) if confirm == id => row![
+                    text("Delete this mark?").size(12).color(t.rose),
+                    space::horizontal(),
+                    small("Delete", Message::DeleteMark(id)),
+                    small("Keep", Message::AskDelete(None)),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+                _ => row![
+                    button(
+                        column![
+                            text(format_time(mark.at.0))
+                                .size(11)
+                                .font(MONO)
+                                .color(t.text_2),
+                            text(if mark.label.is_empty() {
+                                "(no label)".to_owned()
+                            } else {
+                                mark.label.clone()
+                            })
+                            .size(13)
+                            .color(if mark.label.is_empty() {
+                                t.text_3
+                            } else {
+                                t.text
+                            }),
+                        ]
+                        .spacing(1),
+                    )
+                    .width(Fill)
+                    .padding([5, 8])
+                    .style(move |_, status| t.row(false, status, t.gold))
+                    .on_press(Message::JumpMark(id)),
+                    small("Rename", Message::EditMark(Some(id))),
+                    small("Delete", Message::AskDelete(Some(id))),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+            };
+            list = list.push(line);
+        }
+        col = col
+            .push(scrollable(list).height(Fill))
+            .push(
+                text(
+                    "m mark · [ ] marks · , . or PgUp PgDn keyframes · ← → moments ·                      Shift extends the selection · g go to · Esc close",
+                )
+                .size(11)
+                .color(t.text_3),
+            );
+        container(col)
+            .padding(12)
+            .width(Length::Fixed(380.0))
+            .max_height(560.0)
+            .style(move |_| t.panel())
             .into()
     }
 
@@ -1169,6 +1828,9 @@ impl App {
                 thumbs: &self.thumbs,
                 selected: self.selection.as_ref().map(|s| s.frame),
                 matched: &self.matched,
+                picked: &self.picked,
+                keyframes: &self.keyed,
+                marks: &self.mark_times,
                 tokens: t,
                 on_event: Message::Timeline,
             })
@@ -1227,6 +1889,34 @@ impl App {
                 .x(16.0)
                 .y(12.0),
             );
+            // The nearest marks' labels, at the right end of their floor line.
+            let mut labelled: Vec<(f32, &Mark)> = self
+                .marks
+                .iter()
+                .filter_map(|m| {
+                    let z = camera.depth(m.at.0, m.at.0).filter(|z| *z >= 0.0)?;
+                    Some((z, m))
+                })
+                .collect();
+            labelled.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (z, mark) in labelled.into_iter().take(ROOM_MARK_LABELS) {
+                let y = camera.floor_y(lanes, size.width, size.height, z) - 17.0;
+                let label = if mark.label.is_empty() {
+                    format!("◆ {}", format_clock(mark.at.0))
+                } else {
+                    format!("◆ {}", mark.label)
+                };
+                layers = layers.push(
+                    pin(text(label)
+                        .size(11)
+                        .color(t.gold)
+                        .width(220.0)
+                        .wrapping(text::Wrapping::None)
+                        .align_x(alignment::Horizontal::Right))
+                    .x((size.width - 236.0).max(0.0))
+                    .y(y),
+                );
+            }
             let notes = self.gap_notes();
             if !notes.is_empty() {
                 let lines = notes.into_iter().map(|(line, warning)| {
@@ -1313,6 +2003,9 @@ impl App {
             filament,
             gaps,
             marks,
+            stops: self.keyframes.iter().map(|k| k.at.0 as f64).collect(),
+            flags: self.marks.iter().map(|m| m.at.0 as f64).collect(),
+            picked: self.picks.span().map(|(a, b)| (a.0 as f64, b.0 as f64)),
             cursor: self.camera.cursor,
             tokens: t,
             on_event: Message::Timeline,
@@ -1613,6 +2306,19 @@ fn app_and_window(app: Option<&str>, window: Option<&str>) -> String {
         (Some(a), _) => a.to_owned(),
         (None, Some(w)) => w.to_owned(),
         (None, None) => "Unknown application".into(),
+    }
+}
+
+fn format_clock(ms: i64) -> String {
+    Timestamp(ms).to_local().format("%H:%M:%S").to_string()
+}
+
+/// "Mark · standup · Sat Oct 11 · 09:30:00".
+fn mark_title(mark: &Mark) -> String {
+    if mark.label.is_empty() {
+        format!("Mark · {}", format_time(mark.at.0))
+    } else {
+        format!("Mark · {} · {}", mark.label, format_time(mark.at.0))
     }
 }
 

@@ -9,6 +9,8 @@
 
 mod app;
 mod gaps;
+mod nav;
+mod pick;
 mod recorder;
 mod style;
 mod thumb;

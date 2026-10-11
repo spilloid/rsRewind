@@ -72,8 +72,13 @@ pub enum Event {
     Scrub(f64),
     /// The pointer is over this moment (index into the moments), or none.
     Hover(Option<usize>),
-    /// This moment was clicked.
-    Select(usize),
+    /// This moment was clicked: alone, with Shift (`extend`: select the range from the anchor), or
+    /// with Ctrl/Cmd (`toggle`: add or remove it from the selection).
+    Select {
+        index: usize,
+        extend: bool,
+        toggle: bool,
+    },
     /// This picture was double-clicked: open it in the viewer. A frame, not an index, because the
     /// loaded moments may change between the two clicks.
     Open(FrameKey),
@@ -121,12 +126,20 @@ pub struct Room<'a, F> {
     pub selected: Option<FrameKey>,
     /// Pictures that match the current search.
     pub matched: &'a HashSet<FrameKey>,
+    /// Pictures in the multi-frame selection.
+    pub picked: &'a HashSet<FrameKey>,
+    /// Pictures that are keyframes (automatic stops): drawn with a small tab.
+    pub keyframes: &'a HashSet<FrameKey>,
+    /// The user's marks (Unix ms): drawn as a line across the floor at their depth.
+    pub marks: &'a [f64],
     pub tokens: Tokens,
     pub on_event: F,
 }
 
 #[derive(Debug, Default)]
 pub struct RoomState {
+    /// Shift / Ctrl held, for selection clicks.
+    modifiers: iced::keyboard::Modifiers,
     drag: Option<Drag>,
     hovered: Option<usize>,
     /// The last click on a card: when, where, which card (for double-click).
@@ -154,6 +167,10 @@ where
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if let UiEvent::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) = event {
+            state.modifiers = *modifiers;
+            return None;
+        }
         let UiEvent::Mouse(event) = event else {
             return None;
         };
@@ -226,8 +243,19 @@ where
                     state.last_click = None;
                     return None;
                 };
-                state.last_click = self.moments.get(hit.index).map(|m| (now, at, m.frame()));
-                Some(Action::publish((self.on_event)(Event::Select(hit.index))).and_capture())
+                let (extend, toggle) = (state.modifiers.shift(), state.modifiers.command());
+                // A selection click is not the first half of a double-click.
+                state.last_click = (!extend && !toggle)
+                    .then(|| self.moments.get(hit.index).map(|m| (now, at, m.frame())))
+                    .flatten();
+                Some(
+                    Action::publish((self.on_event)(Event::Select {
+                        index: hit.index,
+                        extend,
+                        toggle,
+                    }))
+                    .and_capture(),
+                )
             }
             mouse::Event::WheelScrolled { delta } => {
                 cursor.position_in(bounds)?;
@@ -267,6 +295,22 @@ where
             ));
         }
 
+        // Marks: a gold line across the floor at their depth (labels are drawn by the app).
+        for &mark in self.marks {
+            let at = mark as i64;
+            let Some(z) = self.camera.depth(at, at).filter(|z| *z >= 0.0) else {
+                continue;
+            };
+            let y = self.camera.floor_y(self.lanes, w, h, z);
+            let span = w * (0.98 - 0.5 * z);
+            quads.push(Quad::solid(
+                [(w - span) / 2.0, y - 1.0, span, 2.0],
+                t.gold,
+                1.0,
+                0.95 - 0.6 * z,
+            ));
+        }
+
         for placed in place(self.moments, self.lanes, &self.camera, w, h) {
             let Some(moment) = self.moments.get(placed.index) else {
                 continue;
@@ -289,8 +333,11 @@ where
             let selected = self.selected == Some(key);
             let hovered = state.hovered == Some(placed.index);
             let matched = self.matched.contains(&key);
+            let picked = self.picked.contains(&key);
             let (border, border_width, glow) = if selected {
                 (t.rewind_bright, 2.5, 14.0)
+            } else if picked {
+                (t.mint, 2.5, 6.0)
             } else if matched {
                 (t.gold, 2.0, 0.0)
             } else if hovered {
@@ -313,6 +360,17 @@ where
                 glow,
                 texture: picture.as_ref().map(|_| TexKey::thumb(key)),
             });
+            if self.keyframes.contains(&key) {
+                // A small tab on the card's top edge: an automatic stop.
+                let tab_w = (rect.w * 0.18).clamp(6.0, 36.0);
+                let tab_h = (rect.h * 0.035).clamp(2.0, 5.0);
+                quads.push(Quad::solid(
+                    [rect.x + rect.w * 0.06, rect.y - tab_h, tab_w, tab_h],
+                    t.rewind_bright,
+                    tab_h / 2.0,
+                    placed.alpha,
+                ));
+            }
             if let Some(picture) = picture {
                 pictures.push((TexKey::thumb(key), picture));
             }
@@ -349,6 +407,12 @@ pub struct Strip<F> {
     pub gaps: Vec<(f64, f64, Color)>,
     /// `(time, lane colour)` per loaded moment, oldest first.
     pub marks: Vec<(f64, Color)>,
+    /// Keyframes in the loaded window (Unix ms).
+    pub stops: Vec<f64>,
+    /// The user's marks (Unix ms), over all history.
+    pub flags: Vec<f64>,
+    /// The multi-frame selection's span, if any.
+    pub picked: Option<(f64, f64)>,
     pub cursor: f64,
     pub tokens: Tokens,
     pub on_event: F,
@@ -433,6 +497,36 @@ where
                 0.75,
                 0.85,
             ));
+        }
+        if let Some((from, to)) = self.picked {
+            let (a, b) = (self.filament.x_of(from, w), self.filament.x_of(to, w));
+            quads.push(Quad::solid(
+                [a - 1.0, mid - 11.0, (b - a).max(0.0) + 2.0, 22.0],
+                t.mint,
+                3.0,
+                0.25,
+            ));
+        }
+        // Keyframes: short ticks rising from the line.
+        let mut last_x = f32::NEG_INFINITY;
+        for time in &self.stops {
+            let x = self.filament.x_of(*time, w);
+            if x - last_x < 2.0 {
+                continue;
+            }
+            last_x = x;
+            quads.push(Quad::solid(
+                [x - 1.0, mid - 11.0, 2.0, 6.0],
+                t.rewind_bright,
+                1.0,
+                0.9,
+            ));
+        }
+        // Marks: gold flags across the whole strip height.
+        for time in &self.flags {
+            let x = self.filament.x_of(*time, w);
+            quads.push(Quad::solid([x - 1.0, 2.0, 2.0, h - 4.0], t.gold, 1.0, 1.0));
+            quads.push(Quad::solid([x, 2.0, 6.0, 5.0], t.gold, 1.0, 1.0));
         }
         let x = self.filament.x_of(self.cursor, w);
         quads.push(Quad {

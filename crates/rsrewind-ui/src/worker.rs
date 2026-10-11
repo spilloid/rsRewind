@@ -17,11 +17,16 @@ use rsrewind_core::{
     DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineCursor, TimelineEntry, Timestamp,
     VisualDetail, VisualStateId,
 };
-use rsrewind_query::{History, MediaReader, SourceFilter, SourceInfo, SourceProblem};
+use rsrewind_query::{
+    History, Keyframe, Mark, MediaReader, SourceFilter, SourceInfo, SourceProblem,
+};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+
+/// Most moments one selection (a range between two moments) may hold.
+pub const MAX_RANGE: usize = 2_000;
 
 /// Decoded pictures waiting at most; older requests are dropped first.
 const MAX_QUEUED_FRAMES: usize = 192;
@@ -63,6 +68,26 @@ pub enum Ask {
         from: Timestamp,
         to: Timestamp,
     },
+    /// The user's marks (this data folder's own).
+    Marks,
+    /// Keyframes whose moment starts in `[from, to]`.
+    Keyframes {
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    },
+    /// The nearest keyframe strictly after (`forward`) or before `from`.
+    StepKeyframe {
+        filter: SourceFilter,
+        from: Timestamp,
+        forward: bool,
+    },
+    /// Every moment starting in `[from, to]`, oldest first, at most [`MAX_RANGE`].
+    Between {
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    },
 }
 
 impl Ask {
@@ -76,6 +101,10 @@ impl Ask {
             Self::Detail { .. } => 4,
             Self::Step { .. } => 5,
             Self::Gaps { .. } => 6,
+            Self::Marks => 7,
+            Self::Keyframes { .. } => 8,
+            Self::StepKeyframe { .. } => 9,
+            Self::Between { .. } => 10,
         }
     }
 }
@@ -92,6 +121,14 @@ pub enum Answer {
     Detail(Option<VisualDetail>),
     Step(Vec<TimelineEntry>),
     Gaps(Vec<Gap>),
+    Marks(Vec<Mark>),
+    Keyframes(Vec<Keyframe>),
+    StepKeyframe(Option<Keyframe>),
+    /// Moments of a range, and whether it held more than [`MAX_RANGE`].
+    Between {
+        entries: Vec<TimelineEntry>,
+        truncated: bool,
+    },
     /// A newer question of the same kind arrived first.
     Superseded,
     /// The query failed; the message is for display (no screen content in it).
@@ -224,6 +261,53 @@ fn answer(history: &History, ask: Ask) -> Answer {
         Ask::Detail { source, id } => history
             .visual_detail(source, id)
             .map_or_else(failed, Answer::Detail),
+        Ask::Marks => history.marks().map_or_else(failed, Answer::Marks),
+        Ask::Keyframes { filter, from, to } => history
+            .keyframes(filter, from, to)
+            .map_or_else(failed, Answer::Keyframes),
+        Ask::StepKeyframe {
+            filter,
+            from,
+            forward,
+        } => history
+            .step_keyframe(filter, from, forward)
+            .map_or_else(failed, Answer::StepKeyframe),
+        Ask::Between { filter, from, to } => {
+            between(history, filter, from, to).map_or_else(failed, |(entries, truncated)| {
+                Answer::Between { entries, truncated }
+            })
+        }
+    }
+}
+
+/// Pages forward from `from` until past `to` or [`MAX_RANGE`] moments.
+fn between(
+    history: &History,
+    filter: SourceFilter,
+    from: Timestamp,
+    to: Timestamp,
+) -> rsrewind_query::Result<(Vec<TimelineEntry>, bool)> {
+    let mut out: Vec<TimelineEntry> = Vec::new();
+    let mut after = TimelineCursor::at_or_before(Timestamp(from.0.saturating_sub(1)));
+    loop {
+        let page = history.later(filter, rsrewind_query::MAX_LIMIT, after)?;
+        let Some(last) = page.last() else {
+            return Ok((out, false));
+        };
+        after = last.cursor();
+        let full = page.len() as u32 >= rsrewind_query::MAX_LIMIT;
+        for entry in page {
+            if entry.started_at > to {
+                return Ok((out, false));
+            }
+            if out.len() >= MAX_RANGE {
+                return Ok((out, true));
+            }
+            out.push(entry);
+        }
+        if !full {
+            return Ok((out, false));
+        }
     }
 }
 
@@ -253,6 +337,8 @@ struct Queue {
 #[derive(Clone)]
 pub struct FramePool {
     shared: Arc<(Mutex<Queue>, Condvar)>,
+    /// The picture reader, once the history thread has opened the data folder (for exports).
+    media: Arc<OnceLock<MediaReader>>,
 }
 
 impl std::fmt::Debug for FramePool {
@@ -273,10 +359,17 @@ impl FramePool {
     fn new() -> Self {
         Self {
             shared: Arc::new((Mutex::new(Queue::default()), Condvar::new())),
+            media: Arc::new(OnceLock::new()),
         }
     }
 
+    /// The reader the decoders use, once history is open.
+    pub fn media(&self) -> Option<MediaReader> {
+        self.media.get().cloned()
+    }
+
     fn spawn_decoders(&self, media: MediaReader) {
+        let _ = self.media.set(media.clone());
         for n in 0..DECODERS {
             let pool = self.clone();
             let media = media.clone();
