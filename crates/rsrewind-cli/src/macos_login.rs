@@ -1,8 +1,8 @@
 //! LaunchAgent encoding, without shell command interpolation.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 use std::path::Path;
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn xml(value: &str) -> anyhow::Result<String> {
     if value
         .chars()
@@ -18,7 +18,7 @@ fn xml(value: &str) -> anyhow::Result<String> {
         .replace('\'', "&apos;"))
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn plist(exe: &Path, data: &Path) -> anyhow::Result<String> {
     if !exe.is_absolute() || !data.is_absolute() {
         anyhow::bail!("login startup requires absolute executable and data paths");
@@ -86,7 +86,7 @@ pub fn set(exe: &Path, data: &Path, enabled: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]
