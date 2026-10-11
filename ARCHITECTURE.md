@@ -87,7 +87,7 @@ so the UI still cannot reach capture or storage.
 `rsrewind tray` is a third kind of process: a notification-area icon that learns the recorder's
 state from `rsrewind status --json` and acts only by running `rsrewind` subcommands (pause, resume,
 forget, ui, start, stop). It depends on `rsrewind-core` alone (boundary-tested), opens no database
-and captures nothing, so a crashed tray is as harmless as a crashed window.
+and captures nothing, so a crashed tray is as harmless as a crashed window. Choosing Quit from the tray menu is the one deliberate exception: it means "stop rsRewind", so it stops the recorder before the icon goes away.
 
 Running the UI as its own process, started independently of the recorder, is deliberate: **the
 UI crashing cannot stop recording**, because they are different OS processes with no shared

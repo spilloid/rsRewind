@@ -106,8 +106,15 @@ pub fn run(runner: &Runner) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("could not show the tray icon: {e}"))?;
     loop {
         match inbox.recv_timeout(POLL) {
-            Ok(Action::Quit) => break,
-            Ok(action) => runner.perform(action),
+            // Quit stops the recorder first; if it will not stop the icon stays up and keeps saying so.
+            Ok(Action::Quit) => {
+                if runner.quit() {
+                    break;
+                }
+            }
+            Ok(action) => {
+                runner.perform(action);
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }

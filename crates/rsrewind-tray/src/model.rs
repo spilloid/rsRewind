@@ -220,7 +220,7 @@ pub fn menu(status: &Status, armed: Option<Armed>, now: Instant) -> Vec<Item> {
     }
     items.push(Item::Separator);
     items.push(button(
-        "Quit the tray icon (recording continues)",
+        "Quit rsRewind (stops recording)",
         Action::Quit,
         true,
     ));
