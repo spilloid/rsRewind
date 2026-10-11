@@ -5,5 +5,5 @@
 //! that owns the writes (and, through it, everything the recorder needs). Storage asserts at compile
 //! time that its last migration has exactly this version, so the two cannot drift apart.
 
-/// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 1;
+/// The schema version this build writes and expects. 2 added `marks` (2026-10-11).
+pub const SCHEMA_VERSION: u32 = 2;
