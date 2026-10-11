@@ -211,6 +211,10 @@ enum MarkAction {
         /// with '-'.
         #[arg(long, default_value = "", allow_hyphen_values = true)]
         label: String,
+        /// Read the label from standard input instead (one line), so it never shows in the
+        /// process list. What the window uses.
+        #[arg(long, conflicts_with = "label")]
+        label_stdin: bool,
         #[arg(long)]
         json: bool,
     },
@@ -222,8 +226,15 @@ enum MarkAction {
     /// Give a mark a new label (empty removes the label).
     Rename {
         id: i64,
-        #[arg(long, allow_hyphen_values = true)]
-        label: String,
+        #[arg(
+            long,
+            allow_hyphen_values = true,
+            required_unless_present = "label_stdin"
+        )]
+        label: Option<String>,
+        /// Read the label from standard input instead (one line).
+        #[arg(long, conflicts_with = "label")]
+        label_stdin: bool,
     },
     /// Delete a mark.
     Remove { id: i64 },
@@ -768,8 +779,14 @@ fn mark(data: &DataDir, action: MarkAction) -> Result<ExitCode> {
             at,
             at_ms,
             label,
+            label_stdin,
             json,
         } => {
+            let label = if label_stdin {
+                label_from_stdin()?
+            } else {
+                label
+            };
             let at = match (at, at_ms) {
                 (_, Some(ms)) => Timestamp(ms),
                 (Some(spec), None) => timespec::parse_timespec(&spec, chrono::Local::now())
@@ -823,7 +840,15 @@ fn mark(data: &DataDir, action: MarkAction) -> Result<ExitCode> {
                 }
             }
         }
-        MarkAction::Rename { id, label } => {
+        MarkAction::Rename {
+            id,
+            label,
+            label_stdin,
+        } => {
+            let label = match (label_stdin, label) {
+                (true, _) => label_from_stdin()?,
+                (false, label) => label.unwrap_or_default(),
+            };
             if !Store::open_existing(data)?.rename_mark(MarkId(id), &label, now)? {
                 bail!("there is no mark {id}");
             }
@@ -837,6 +862,19 @@ fn mark(data: &DataDir, action: MarkAction) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// One label line from standard input (a final line break is not part of it; the store refuses any
+/// other control character). Bounded: a label is at most 120 characters.
+fn label_from_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::io::stdin()
+        .take(4 * 1024)
+        .read_to_string(&mut text)
+        .context("read the label from standard input")?;
+    let text = text.strip_suffix('\n').unwrap_or(&text);
+    Ok(text.strip_suffix('\r').unwrap_or(text).to_owned())
 }
 
 fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {

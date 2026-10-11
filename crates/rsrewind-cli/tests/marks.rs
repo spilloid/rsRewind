@@ -75,6 +75,57 @@ fn marks_round_trip_through_the_command_line() -> TestResult {
     Ok(())
 }
 
+/// The window passes labels on standard input, so they never appear in the process list.
+#[test]
+fn labels_can_come_on_standard_input() -> TestResult {
+    use std::io::Write;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("data");
+    let send = |args: &[&str], input: &str| -> Result<Output, Box<dyn std::error::Error>> {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_rsrewind"))
+            .arg("--data-dir")
+            .arg(&root)
+            .args(args)
+            .env_remove("RSREWIND_DATA_DIR")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .ok_or("no stdin")?
+            .write_all(input.as_bytes())?;
+        Ok(child.wait_with_output()?)
+    };
+    let out = send(
+        &[
+            "mark",
+            "add",
+            "--at-ms",
+            "1790000000000",
+            "--label-stdin",
+            "--json",
+        ],
+        "secret plan\n",
+    )?;
+    assert!(out.status.success(), "{out:?}");
+    let id: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    let id = id["id"].as_i64().ok_or("id")?.to_string();
+    assert_eq!(list(&root)?[0]["label"], "secret plan");
+    let renamed = send(&["mark", "rename", &id, "--label-stdin"], "-dash first\r\n")?;
+    assert!(renamed.status.success(), "{renamed:?}");
+    assert_eq!(list(&root)?[0]["label"], "-dash first");
+    // Two lines are refused (one-line labels), and nothing changes.
+    let two = send(&["mark", "rename", &id, "--label-stdin"], "a\nb\n")?;
+    assert!(!two.status.success());
+    assert_eq!(list(&root)?[0]["label"], "-dash first");
+    // Both ways at once is a usage error.
+    let both = send(&["mark", "add", "--label", "x", "--label-stdin"], "y")?;
+    assert!(!both.status.success());
+    Ok(())
+}
+
 #[test]
 fn a_mark_inside_forgotten_time_is_refused() -> TestResult {
     let tmp = tempfile::tempdir()?;
