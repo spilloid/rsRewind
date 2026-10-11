@@ -190,6 +190,12 @@ fn relative_ms(text: &str) -> Option<i64> {
     number.checked_mul(scale)
 }
 
+/// Whether a failed `rsrewind mark rename/remove` failed because the mark no longer exists (it was
+/// removed elsewhere, or forgotten with its time): the list is stale and must be read again.
+pub fn mark_gone(error: &str) -> bool {
+    error.contains("there is no mark")
+}
+
 /// What a key press (one no widget captured) asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shortcut {
@@ -446,5 +452,12 @@ mod tests {
             shortcut(Key::Named(Named::Escape), none),
             Some(Shortcut::Escape)
         );
+    }
+
+    #[test]
+    fn a_mark_removed_elsewhere_is_recognised() {
+        assert!(mark_gone("there is no mark 12"));
+        assert!(!mark_gone("a mark label is at most 120 characters"));
+        assert!(!mark_gone("could not find the rsrewind executable"));
     }
 }

@@ -264,10 +264,12 @@ pub fn picture_rgba(
 pub fn save_png(pictures: &impl Pictures, frame: &Frame, dir: &Path) -> Result<PathBuf, String> {
     let picture = pictures.load(frame)?;
     let png = encode_png(&picture.to_rgba(), picture.width, picture.height)?;
-    let (path, part) = destination(dir, &stem(frame.at, 1), "png")?;
-    std::fs::write(&part, png).map_err(|e| format!("could not write {}: {e}", part.display()))?;
-    finish(&part, &path)?;
-    Ok(path)
+    let (mut reserved, mut file) = reserve(dir, &stem(frame.at, 1), "png")?;
+    file.write_all(&png)
+        .and_then(|()| file.flush())
+        .map_err(|e| format!("could not write {}: {e}", reserved.part.display()))?;
+    drop(file);
+    reserved.finish()
 }
 
 /// Encodes `frames` (oldest first) into a silent clip in `dir`, fitted to `max_dim`. `ffmpeg` is
@@ -297,33 +299,36 @@ pub fn clip(
     let canvas = fit(first.width, first.height, max_dim);
     check_clip(frames.len(), canvas)?;
     let delays = delays_ms(&frames.iter().map(|f| f.at.0).collect::<Vec<_>>());
-    let (path, part) = destination(dir, &stem(frames[0].at, frames.len()), format.extension())?;
-    let result = match format {
-        ClipFormat::Gif => write_gif(pictures, frames, first, canvas, &delays, &part, progress),
-        ClipFormat::Webm => match ffmpeg {
-            Some(ffmpeg) => write_webm(
-                pictures, frames, first, canvas, &delays, &part, ffmpeg, progress,
-            ),
-            None => Err("WebM needs ffmpeg".into()),
-        },
-    };
-    match result {
-        Ok(()) => {
-            finish(&part, &path)?;
-            tracing::debug!(
-                frames = frames.len(),
-                width = canvas.0,
-                height = canvas.1,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "clip exported"
-            );
-            Ok(path)
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(&part);
-            Err(error)
+    let (mut reserved, file) = reserve(dir, &stem(frames[0].at, frames.len()), format.extension())?;
+    match format {
+        ClipFormat::Gif => write_gif(pictures, frames, first, canvas, &delays, file, progress)?,
+        ClipFormat::Webm => {
+            // ffmpeg writes the reserved part file itself (`-y`); our handle must be closed first.
+            drop(file);
+            let ffmpeg = ffmpeg.ok_or("WebM needs ffmpeg")?;
+            let scratch = reserved.scratch()?;
+            write_webm(
+                pictures,
+                frames,
+                first,
+                canvas,
+                &delays,
+                &reserved.part,
+                &scratch,
+                ffmpeg,
+                progress,
+            )?;
         }
     }
+    let path = reserved.finish()?;
+    tracing::debug!(
+        frames = frames.len(),
+        width = canvas.0,
+        height = canvas.1,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "clip exported"
+    );
+    Ok(path)
 }
 
 fn write_gif(
@@ -332,15 +337,13 @@ fn write_gif(
     first: Bgra,
     canvas: (u32, u32),
     delays: &[i64],
-    part: &Path,
+    file: std::fs::File,
     progress: &Progress,
 ) -> Result<(), String> {
     let (w, h) = (
         u16::try_from(canvas.0).map_err(|_| "too wide for a GIF")?,
         u16::try_from(canvas.1).map_err(|_| "too tall for a GIF")?,
     );
-    let file = std::fs::File::create(part)
-        .map_err(|e| format!("could not write {}: {e}", part.display()))?;
     let mut encoder =
         gif::Encoder::new(BufWriter::new(file), w, h, &[]).map_err(|e| e.to_string())?;
     encoder
@@ -377,10 +380,10 @@ fn write_webm(
     canvas: (u32, u32),
     delays: &[i64],
     part: &Path,
+    scratch: &Path,
     ffmpeg: &Path,
     progress: &Progress,
 ) -> Result<(), String> {
-    let scratch = Scratch::new(part)?;
     let mut list = String::from("ffconcat version 1.0\n");
     let mut picture = Some(first);
     for (i, frame) in frames.iter().enumerate() {
@@ -391,11 +394,8 @@ fn write_webm(
         };
         let rgba = letterbox(&current, canvas)?;
         let name = format!("f{i:05}.png");
-        std::fs::write(
-            scratch.0.join(&name),
-            encode_png(&rgba, canvas.0, canvas.1)?,
-        )
-        .map_err(|e| format!("could not write a scratch frame: {e}"))?;
+        std::fs::write(scratch.join(&name), encode_png(&rgba, canvas.0, canvas.1)?)
+            .map_err(|e| format!("could not write a scratch frame: {e}"))?;
         let delay = delays.get(i).copied().unwrap_or(MAX_DELAY_MS);
         list.push_str(&format!(
             "file '{name}'\nduration {:.3}\n",
@@ -408,9 +408,9 @@ fn write_webm(
     }
     // The concat demuxer honours the last duration only if the last file is listed again.
     list.push_str(&format!("file 'f{:05}.png'\n", frames.len() - 1));
-    let list_path = scratch.0.join("frames.ffconcat");
+    let list_path = scratch.join("frames.ffconcat");
     std::fs::write(&list_path, list).map_err(|e| format!("could not write the frame list: {e}"))?;
-    let log_path = scratch.0.join("ffmpeg.log");
+    let log_path = scratch.join("ffmpeg.log");
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let mut command = Command::new(ffmpeg);
     command
@@ -469,24 +469,6 @@ fn write_webm(
     Ok(())
 }
 
-/// A scratch folder next to the output, removed when dropped (success, error or cancel).
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(part: &Path) -> Result<Self, String> {
-        let dir = part.with_extension("frames");
-        std::fs::create_dir(&dir)
-            .map_err(|e| format!("could not make a scratch folder {}: {e}", dir.display()))?;
-        Ok(Self(dir))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// `rsrewind-20261011-143005` or `rsrewind-20261011-143005-12f` (local time of the first moment).
 fn stem(at: Timestamp, frames: usize) -> String {
     let time = at.to_local().format("%Y%m%d-%H%M%S");
@@ -497,9 +479,40 @@ fn stem(at: Timestamp, frames: usize) -> String {
     }
 }
 
-/// A new file name in `dir` that does not exist yet, and the hidden part file written first.
-fn destination(dir: &Path, stem: &str, ext: &str) -> Result<(PathBuf, PathBuf), String> {
+/// An export's claim on its output name, held for as long as the export runs:
+///
+/// - `.<name>.lock`, created first and held with an exclusive lock: while it is locked, the export
+///   is alive (in this window or another);
+/// - `.<name>.part`, created with `create_new`, the file being written, renamed to `<name>` only
+///   when complete;
+/// - `.<name>.frames/`, WebM's scratch folder of full-size PNG frames.
+///
+/// Dropping it (success, error, cancel, panic) removes the scratch folder, an unfinished part file
+/// and the lock. A crash cannot run `Drop`, so [`sweep`] removes what a dead export left: it runs
+/// when the window opens and before every export.
+struct Reservation {
+    path: PathBuf,
+    part: PathBuf,
+    frames: PathBuf,
+    lock_path: PathBuf,
+    _lock: std::fs::File,
+    finished: bool,
+}
+
+/// What every name an export leaves behind starts with (`.` + the `rsrewind-` stem).
+const LEFTOVER_PREFIX: &str = ".rsrewind-";
+/// A lock file this young may belong to an export that has not taken its lock yet.
+const LOCK_GRACE: Duration = Duration::from_secs(60);
+
+fn reserve(dir: &Path, stem: &str, ext: &str) -> Result<(Reservation, std::fs::File), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    sweep(dir);
+    let create_new = |path: &Path| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+    };
     for n in 1..1_000 {
         let name = if n == 1 {
             format!("{stem}.{ext}")
@@ -507,9 +520,36 @@ fn destination(dir: &Path, stem: &str, ext: &str) -> Result<(PathBuf, PathBuf), 
             format!("{stem}-{n}.{ext}")
         };
         let path = dir.join(&name);
+        if path.exists() {
+            continue;
+        }
+        let lock_path = dir.join(format!(".{name}.lock"));
+        let lock = match create_new(&lock_path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not write {}: {e}", lock_path.display())),
+        };
+        if lock.try_lock().is_err() {
+            let _ = std::fs::remove_file(&lock_path);
+            continue;
+        }
         let part = dir.join(format!(".{name}.part"));
-        if !path.exists() && !part.exists() {
-            return Ok((path, part));
+        let frames = dir.join(format!(".{name}.frames"));
+        let reserved = Reservation {
+            path,
+            part,
+            frames,
+            lock_path,
+            _lock: lock,
+            finished: false,
+        };
+        // A leftover under this name without a live lock is stale: we hold the lock now.
+        remove_leftover(&reserved.part);
+        remove_leftover(&reserved.frames);
+        match create_new(&reserved.part) {
+            Ok(file) => return Ok((reserved, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not write {}: {e}", reserved.part.display())),
         }
     }
     Err(format!(
@@ -518,16 +558,108 @@ fn destination(dir: &Path, stem: &str, ext: &str) -> Result<(PathBuf, PathBuf), 
     ))
 }
 
-/// Moves a finished part file into place without replacing anything that appeared meanwhile.
-fn finish(part: &Path, path: &Path) -> Result<(), String> {
-    if path.exists() {
-        let _ = std::fs::remove_file(part);
-        return Err(format!(
-            "{} appeared while exporting; try again",
-            path.display()
-        ));
+impl Reservation {
+    /// The (new, empty) scratch folder for WebM frames.
+    fn scratch(&self) -> Result<PathBuf, String> {
+        std::fs::create_dir(&self.frames).map_err(|e| {
+            format!(
+                "could not make a scratch folder {}: {e}",
+                self.frames.display()
+            )
+        })?;
+        Ok(self.frames.clone())
     }
-    std::fs::rename(part, path).map_err(|e| format!("could not finish {}: {e}", path.display()))
+
+    /// Moves the finished part file into place without replacing anything that appeared meanwhile.
+    fn finish(&mut self) -> Result<PathBuf, String> {
+        if self.path.exists() {
+            return Err(format!(
+                "{} appeared while exporting; try again",
+                self.path.display()
+            ));
+        }
+        std::fs::rename(&self.part, &self.path)
+            .map_err(|e| format!("could not finish {}: {e}", self.path.display()))?;
+        self.finished = true;
+        Ok(self.path.clone())
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        remove_leftover(&self.frames);
+        if !self.finished {
+            remove_leftover(&self.part);
+        }
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
+}
+
+/// Removes a leftover file or folder; a link is removed as a link, never followed.
+fn remove_leftover(path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        Ok(_) => {
+            let _ = std::fs::remove_file(path);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Removes what dead exports left in `dir`: `.rsrewind-*.part` files and `.rsrewind-*.frames`
+/// folders whose `.lock` is missing or held by nobody (and older than [`LOCK_GRACE`]). Only names
+/// of that exact shape are touched, never anything else in the folder. Returns how many names
+/// were removed.
+pub fn sweep(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut bases: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.starts_with(LEFTOVER_PREFIX) {
+            continue;
+        }
+        for suffix in [".part", ".frames", ".lock"] {
+            if let Some(base) = name.strip_suffix(suffix) {
+                bases.insert(base.to_owned());
+            }
+        }
+    }
+    let mut removed = 0;
+    for base in bases {
+        let lock_path = dir.join(format!("{base}.lock"));
+        let alive = match std::fs::OpenOptions::new().write(true).open(&lock_path) {
+            Ok(lock) => {
+                let young = std::fs::metadata(&lock_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_none_or(|age| age < LOCK_GRACE);
+                // Held by a running export, or so new its owner may not have locked it yet.
+                lock.try_lock().is_err() || young
+            }
+            Err(_) => false,
+        };
+        if alive {
+            continue;
+        }
+        for suffix in [".part", ".frames", ".lock"] {
+            let path = dir.join(format!("{base}{suffix}"));
+            if std::fs::symlink_metadata(&path).is_ok() {
+                remove_leftover(&path);
+                removed += 1;
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::debug!(removed, "removed leftovers of interrupted exports");
+    }
+    removed
 }
 
 /// An `ffmpeg` executable on PATH, if there is one (looked up when the window opens).
@@ -763,7 +895,7 @@ mod tests {
     #[test]
     fn webm_through_ffmpeg_when_present() -> Result<(), Box<dyn std::error::Error>> {
         let Some(ffmpeg) = find_ffmpeg() else {
-            eprintln!("no ffmpeg on PATH: skipping the WebM encode");
+            skipped("no ffmpeg on PATH, the WebM encode was not exercised");
             return Ok(());
         };
         let tmp = tempfile::tempdir()?;
@@ -788,6 +920,213 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert_eq!(left.len(), 1, "the scratch folder is gone: {left:?}");
+        // Four moments lasting 0.4 + 0.4 + 0.4 + 1.5 s, and no audio stream. The concat list
+        // names the last picture twice (so its duration is honoured), which decodes as a fifth
+        // frame at the very end.
+        let Some(ffprobe) = find_on_path("ffprobe", std::env::var_os("PATH")) else {
+            skipped("no ffprobe on PATH, the WebM's frames and duration were not checked");
+            return Ok(());
+        };
+        let probe = Command::new(ffprobe)
+            .args(["-v", "error", "-count_frames", "-show_entries"])
+            .args(["stream=codec_type,codec_name,nb_read_frames:format=duration"])
+            .args(["-of", "default=noprint_wrappers=1"])
+            .arg(&path)
+            .output()?;
+        let text = String::from_utf8_lossy(&probe.stdout);
+        assert!(text.contains("codec_name=vp9"), "{text}");
+        assert!(!text.contains("codec_type=audio"), "{text}");
+        assert!(text.contains("nb_read_frames=5"), "{text}");
+        let duration: f64 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("duration="))
+            .ok_or("no duration")?
+            .parse()?;
+        assert!((duration - 2.7).abs() < 0.15, "{duration} s");
+        Ok(())
+    }
+
+    /// Says a test was skipped where `cargo test` shows it even without `--nocapture` (the macros
+    /// are captured; a direct write to stderr is not).
+    fn skipped(why: &str) {
+        let _ = writeln!(std::io::stderr(), "SKIPPED: {why}");
+    }
+
+    /// Cancels as it loads `at`: a cancel that lands in the middle of an export.
+    struct CancelAt<'a> {
+        inner: Fake,
+        progress: &'a Progress,
+        at: &'static str,
+    }
+
+    impl Pictures for CancelAt<'_> {
+        fn load(&self, frame: &Frame) -> Result<Bgra, String> {
+            if frame.media_path == self.at {
+                self.progress.cancel();
+            }
+            self.inner.load(frame)
+        }
+    }
+
+    #[test]
+    fn a_gif_cancelled_mid_encode_leaves_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let (fake, frames) = fixture(6, 500);
+        let progress = Progress::default();
+        let cancelling = CancelAt {
+            inner: fake,
+            progress: &progress,
+            at: "m1",
+        };
+        let result = clip(
+            &cancelling,
+            &frames,
+            ClipFormat::Gif,
+            64,
+            tmp.path(),
+            None,
+            &progress,
+        );
+        assert_eq!(result.err().as_deref(), Some(CANCELLED));
+        // Cancelled while loading the second picture: the frame in hand is finished, no more.
+        let (done, total) = progress.get();
+        assert!(done < total, "{done} of {total}");
+        assert_eq!(
+            std::fs::read_dir(tmp.path())?.count(),
+            0,
+            "no part, lock or clip"
+        );
+        Ok(())
+    }
+
+    /// A stand-in `ffmpeg` that records its pid and sleeps: cancelling while it runs must kill it
+    /// and remove the part file, the scratch frames and the lock.
+    #[cfg(unix)]
+    #[test]
+    fn a_webm_cancelled_while_ffmpeg_runs_kills_it_and_leaves_nothing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        let tools = tempfile::tempdir()?;
+        let pid_file = tools.path().join("pid");
+        let fake_ffmpeg = tools.path().join("ffmpeg");
+        std::fs::write(
+            &fake_ffmpeg,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )?;
+        std::fs::set_permissions(&fake_ffmpeg, std::fs::Permissions::from_mode(0o755))?;
+
+        let out = tempfile::tempdir()?;
+        let (fake, frames) = fixture(3, 500);
+        let progress = std::sync::Arc::new(Progress::default());
+        let canceller = {
+            let progress = progress.clone();
+            let pid_file = pid_file.clone();
+            std::thread::spawn(move || {
+                for _ in 0..400 {
+                    if std::fs::read_to_string(&pid_file).is_ok_and(|p| !p.trim().is_empty()) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                progress.cancel();
+            })
+        };
+        let result = clip(
+            &fake,
+            &frames,
+            ClipFormat::Webm,
+            64,
+            out.path(),
+            Some(&fake_ffmpeg),
+            &progress,
+        );
+        canceller.join().map_err(|_| "canceller panicked")?;
+        assert_eq!(result.err().as_deref(), Some(CANCELLED));
+        let pid = std::fs::read_to_string(&pid_file)?.trim().to_owned();
+        let alive = Command::new("kill").args(["-0", &pid]).status()?.success();
+        assert!(!alive, "ffmpeg (pid {pid}) is still running");
+        let left: Vec<_> = std::fs::read_dir(out.path())?
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn leftovers_of_a_dead_export_are_swept_and_nothing_else()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+        // A crash mid-WebM: part, scratch frames, and a lock nobody holds (old enough).
+        std::fs::write(dir.join(".rsrewind-20261011-1-3f.webm.part"), b"x")?;
+        std::fs::create_dir(dir.join(".rsrewind-20261011-1-3f.webm.frames"))?;
+        std::fs::write(
+            dir.join(".rsrewind-20261011-1-3f.webm.frames/f00000.png"),
+            b"x",
+        )?;
+        let old_lock = dir.join(".rsrewind-20261011-1-3f.webm.lock");
+        std::fs::write(&old_lock, b"")?;
+        std::fs::File::options()
+            .write(true)
+            .open(&old_lock)?
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(600))?;
+        // A crash with no lock at all, and a scratch folder alone.
+        std::fs::write(dir.join(".rsrewind-20261011-2.png.part"), b"x")?;
+        std::fs::create_dir(dir.join(".rsrewind-20261011-4-2f.webm.frames"))?;
+        // Not ours: kept.
+        for keep in ["notes.txt", ".other.part", "rsrewind-20261011-1-3f.webm"] {
+            std::fs::write(dir.join(keep), b"mine")?;
+        }
+        // A live export (locked) in this process: kept.
+        let (live, _file) = reserve(dir, "rsrewind-20261011-3", "gif")?;
+
+        assert_eq!(sweep(dir), 0, "reserve already swept them");
+        let mut left: Vec<String> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                ".other.part",
+                ".rsrewind-20261011-3.gif.lock",
+                ".rsrewind-20261011-3.gif.part",
+                "notes.txt",
+                "rsrewind-20261011-1-3f.webm",
+            ]
+        );
+        drop(live);
+        // The live one cleans up after itself.
+        assert!(!dir.join(".rsrewind-20261011-3.gif.lock").exists());
+        assert!(!dir.join(".rsrewind-20261011-3.gif.part").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_scratch_folder_does_not_block_the_next_export()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let (fake, frames) = fixture(3, 500);
+        let name = format!("{}.gif", stem(frames[0].at, 3));
+        // What a crash during frame writing used to leave: scratch frames, no part file.
+        std::fs::create_dir(tmp.path().join(format!(".{name}.frames")))?;
+        let path = clip(
+            &fake,
+            &frames,
+            ClipFormat::Gif,
+            32,
+            tmp.path(),
+            None,
+            &Progress::default(),
+        )?;
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some(name.as_str())
+        );
+        assert_eq!(std::fs::read_dir(tmp.path())?.count(), 1);
         Ok(())
     }
 }

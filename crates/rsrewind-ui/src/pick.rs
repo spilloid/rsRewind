@@ -61,11 +61,27 @@ impl Picks {
         }
     }
 
-    /// Replaces the selection with a fetched range (the anchor stays, so extending again from the
-    /// same anchor shrinks or grows the range, as in any list).
-    pub fn apply_range(&mut self, entries: Vec<TimelineEntry>, truncated: bool) {
+    /// Whether a Shift-extension has somewhere to start (else a Shift-click is a plain click).
+    pub fn has_anchor(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Replaces the selection with a fetched range `[from, to]` of the sources `admits` lets in.
+    /// The anchor stays picked (so extending again from it shrinks or grows the range, as in any
+    /// list), but only if it lies in that range and its source is still admitted.
+    pub fn apply_range(
+        &mut self,
+        entries: Vec<TimelineEntry>,
+        truncated: bool,
+        (from, to): (Timestamp, Timestamp),
+        admits: impl Fn(Option<rsrewind_core::SourceId>) -> bool,
+    ) {
         self.items = entries.into_iter().map(|e| (e.cursor(), e)).collect();
-        if let Some(anchor) = &self.anchor {
+        if let Some(anchor) = &self.anchor
+            && anchor.started_at >= from
+            && anchor.started_at <= to
+            && admits(anchor.source)
+        {
             self.items.insert(anchor.cursor(), anchor.clone());
         }
         self.truncated = truncated;
@@ -143,10 +159,17 @@ mod tests {
         p.apply_range(
             vec![e(1_000, 1, None), e(2_000, 2, None), e(3_000, 3, None)],
             false,
+            (Timestamp(1_000), Timestamp(3_000)),
+            |_| true,
         );
         assert_eq!(ids(&p), [1, 2, 3]);
         // Extending again from the same anchor replaces the range (shrinks it).
-        p.apply_range(vec![e(2_000, 2, None), e(3_000, 3, None)], false);
+        p.apply_range(
+            vec![e(2_000, 2, None), e(3_000, 3, None)],
+            false,
+            (Timestamp(2_000), Timestamp(3_000)),
+            |_| true,
+        );
         assert_eq!(ids(&p), [2, 3]);
         // Ctrl-click removes, then adds back; the toggled one is the new anchor.
         p.toggle(&e(2_000, 2, None));
@@ -181,9 +204,42 @@ mod tests {
     fn a_range_too_long_says_so() {
         let mut p = Picks::default();
         p.single(&e(1, 1, None));
-        p.apply_range(vec![e(2, 2, None)], true);
+        p.apply_range(
+            vec![e(2, 2, None)],
+            true,
+            (Timestamp(1), Timestamp(2)),
+            |_| true,
+        );
         assert!(p.truncated);
         p.single(&e(3, 3, None));
         assert!(!p.truncated);
+    }
+
+    #[test]
+    fn the_anchor_rejoins_a_range_only_if_it_belongs_there() {
+        let other = Some(SourceId::from_bytes([4; 16]));
+        let mut p = Picks::default();
+        assert!(
+            !p.has_anchor(),
+            "nothing to extend from: a Shift-click is a plain click"
+        );
+        p.single(&e(1_000, 1, other));
+        assert!(p.has_anchor());
+        // The filter now shows only this machine: the remote anchor is not picked again.
+        p.apply_range(
+            vec![e(1_500, 2, None), e(2_000, 3, None)],
+            false,
+            (Timestamp(1_000), Timestamp(2_000)),
+            |s| s.is_none(),
+        );
+        assert_eq!(ids(&p), [2, 3]);
+        // A range that does not reach the anchor's time leaves it out too.
+        p.apply_range(
+            vec![e(5_000, 5, None)],
+            false,
+            (Timestamp(4_000), Timestamp(6_000)),
+            |_| true,
+        );
+        assert_eq!(ids(&p), [5]);
     }
 }

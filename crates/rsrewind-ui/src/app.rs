@@ -133,6 +133,8 @@ pub enum Message {
     ExportDone(u64, Result<Exported, String>),
     CancelExport,
     ClipSize(u32),
+    /// About ten times a second while an export or a mark command runs (progress, "working").
+    Tick,
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
@@ -263,8 +265,12 @@ pub struct App {
     goto_text: String,
     editing: Option<(i64, String)>,
     confirm_delete: Option<i64>,
-    /// A `rsrewind mark` command is running.
-    marking: bool,
+    /// When the running `rsrewind mark` command started, if one is running.
+    marking: Option<Instant>,
+    /// This folder's own store is older than this build: the next mark command migrates it.
+    store_behind: bool,
+    /// The Tick chain is running.
+    ticking: bool,
     /// Keyframes of the loaded window, and their pictures (for the cards' tabs).
     keyframes: Vec<Keyframe>,
     keyed: HashSet<FrameKey>,
@@ -276,6 +282,8 @@ pub struct App {
     picks: Picks,
     picked: HashSet<FrameKey>,
     range_seq: u64,
+    /// The range and filter of the last range asked for (applied with its answer).
+    range_ask: (Timestamp, Timestamp, SourceFilter),
     /// The data folder (exports go to its `exports/`).
     data_root: std::path::PathBuf,
     /// An `ffmpeg` executable on PATH, for WebM (looked up once, at start).
@@ -299,6 +307,13 @@ impl App {
     fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
         let control = Control::new(data.root().to_path_buf());
         let data_root = data.root().to_path_buf();
+        // What an export that died with a previous window left (scratch frames, part files).
+        {
+            let exports = export::exports_dir(&data_root);
+            let _ = std::thread::Builder::new()
+                .name("rsrewind-ui-sweep".into())
+                .spawn(move || export::sweep(&exports));
+        }
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
@@ -357,7 +372,9 @@ impl App {
             goto_text: String::new(),
             editing: None,
             confirm_delete: None,
-            marking: false,
+            marking: None,
+            store_behind: false,
+            ticking: false,
             keyframes: Vec::new(),
             keyed: HashSet::new(),
             keyframes_seq: 0,
@@ -366,6 +383,7 @@ impl App {
             picks: Picks::default(),
             picked: HashSet::new(),
             range_seq: 0,
+            range_ask: (Timestamp(0), Timestamp(0), SourceFilter::All),
             data_root,
             ffmpeg: export::find_ffmpeg(),
             clip_size: export::DEFAULT_CLIP_SIZE,
@@ -408,8 +426,8 @@ impl App {
         if self.appearance == crate::Appearance::System {
             subs.push(iced::system::theme_changes().map(Message::Appearance));
         }
-        // Frames drive the camera's motion and redraw an export's progress.
-        if self.cue.is_some() || self.exporting.is_some() {
+        // Frames drive the camera's motion (an export's progress redraws on the slower Tick).
+        if self.cue.is_some() {
             subs.push(window::frames().map(Message::Frame));
         }
         Subscription::batch(subs)
@@ -430,7 +448,12 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Sources(Answer::Sources { sources, problems }) => {
+            Message::Sources(Answer::Sources {
+                sources,
+                problems,
+                own_schema,
+            }) => {
+                self.store_behind = own_schema.is_some_and(|v| v < rsrewind_core::SCHEMA_VERSION);
                 self.sources = sources;
                 self.problems = problems;
                 self.sources_loaded = true;
@@ -512,8 +535,12 @@ impl App {
             Message::Recorder(state) => {
                 let was = self.recorder;
                 self.recorder = state;
-                let mut next =
-                    Task::perform(self.control.status(recorder::POLL), Message::Recorder);
+                // Marks may change from elsewhere (the command line, another window): re-read them
+                // as often as the recorder's state.
+                let mut next = Task::batch([
+                    Task::perform(self.control.status(recorder::POLL), Message::Recorder),
+                    self.load_marks(),
+                ]);
                 // A recorder that is running without its tray icon (started from the command line, or
                 // at login before the icon was part of that) gets one when the window opens. `rsrewind
                 // tray` exits at once if an icon is already up, so this is safe to ask once.
@@ -649,7 +676,8 @@ impl App {
                     self.picked = self.picks.frames();
                     return Task::none();
                 }
-                if extend {
+                // Shift with nothing to extend from (no anchor, nothing on stage) is a plain click.
+                if extend && (self.picks.has_anchor() || self.selection.is_some()) {
                     return self.extend_to(entry.started_at);
                 }
                 self.picks.single(&entry);
@@ -812,7 +840,8 @@ impl App {
                 };
                 let at = mark.at.0 as f64;
                 self.nav_note = Some(mark_title(mark));
-                self.jump(at, false)
+                // In case it changed elsewhere since the list was read.
+                Task::batch([self.jump(at, false), self.load_marks()])
             }
             Message::MarkNow => self.mark_now(),
             Message::MarkLabel(label) => {
@@ -820,7 +849,7 @@ impl App {
                 Task::none()
             }
             Message::MarkDone(what, result) => {
-                self.marking = false;
+                self.marking = None;
                 match result {
                     Ok(()) => {
                         if what == "add" {
@@ -829,9 +858,21 @@ impl App {
                         self.editing = None;
                         self.confirm_delete = None;
                     }
+                    Err(error) if nav::mark_gone(&error) => {
+                        self.editing = None;
+                        self.confirm_delete = None;
+                        self.nav_note = Some(
+                            "That mark was changed or removed elsewhere; the list is reloaded."
+                                .into(),
+                        );
+                    }
                     Err(error) => {
                         self.nav_note = Some(format!("Could not {what} the mark: {error}"))
                     }
+                }
+                if what == "add" {
+                    // The command migrated the store if it was behind.
+                    self.store_behind = false;
                 }
                 self.load_marks()
             }
@@ -891,8 +932,9 @@ impl App {
                         "mark".into(),
                         "rename".into(),
                         id.to_string(),
-                        format!("--label={label}"),
+                        "--label-stdin".into(),
                     ],
+                    Some(label),
                 )
             }
             Message::AskDelete(id) => {
@@ -903,6 +945,7 @@ impl App {
             Message::DeleteMark(id) => self.run_mark(
                 "remove",
                 vec!["mark".into(), "remove".into(), id.to_string()],
+                None,
             ),
             Message::Ranged(seq, answer) => {
                 if seq != self.range_seq {
@@ -910,7 +953,9 @@ impl App {
                 }
                 match answer {
                     Answer::Between { entries, truncated } => {
-                        self.picks.apply_range(entries, truncated);
+                        let (from, to, filter) = self.range_ask;
+                        self.picks
+                            .apply_range(entries, truncated, (from, to), |s| filter.admits(s));
                         self.picked = self.picks.frames();
                         if truncated {
                             self.nav_note = Some(format!(
@@ -955,6 +1000,14 @@ impl App {
                     running.progress.cancel();
                 }
                 Task::none()
+            }
+            Message::Tick => {
+                if self.exporting.is_some() || self.marking.is_some() {
+                    tick()
+                } else {
+                    self.ticking = false;
+                    Task::none()
+                }
             }
             Message::ClipSize(size) => {
                 self.clip_size = size;
@@ -1144,6 +1197,7 @@ impl App {
         let Some((from, to)) = self.picks.range_to(target, fallback) else {
             return Task::none();
         };
+        self.range_ask = (from, to, self.filter);
         self.range_seq += 1;
         let seq = self.range_seq;
         self.ask(
@@ -1305,10 +1359,13 @@ impl App {
             seq,
             progress,
         });
-        Task::perform(
-            recorder::off_thread(Err("the export could not start".to_string()), work),
-            move |r| Message::ExportDone(seq, r),
-        )
+        Task::batch([
+            Task::perform(
+                recorder::off_thread(Err("the export could not start".to_string()), work),
+                move |r| Message::ExportDone(seq, r),
+            ),
+            self.start_ticking(),
+        ])
     }
 
     /// Hands a decoded picture to the system clipboard; the sentence says how it went.
@@ -1364,7 +1421,7 @@ impl App {
     /// Marks the moment on stage (or, with nothing on stage, the cursor) with the panel's label,
     /// through `rsrewind mark add` (the window may not write history itself).
     fn mark_now(&mut self) -> Task<Message> {
-        if self.marking {
+        if self.marking.is_some() {
             return Task::none();
         }
         let at = self
@@ -1380,15 +1437,44 @@ impl App {
                 "add".into(),
                 "--at-ms".into(),
                 at.to_string(),
-                format!("--label={label}"),
+                "--label-stdin".into(),
             ],
+            Some(label),
         )
     }
 
-    fn run_mark(&mut self, what: &'static str, args: Vec<String>) -> Task<Message> {
-        self.marking = true;
-        Task::perform(self.control.run_args(args), move |r| {
-            Message::MarkDone(what, r)
+    /// Runs `rsrewind mark ...`; a label travels on stdin, never in the (visible) arguments.
+    fn run_mark(
+        &mut self,
+        what: &'static str,
+        args: Vec<String>,
+        label: Option<String>,
+    ) -> Task<Message> {
+        self.marking = Some(Instant::now());
+        Task::batch([
+            Task::perform(self.control.run_args(args, label), move |r| {
+                Message::MarkDone(what, r)
+            }),
+            self.start_ticking(),
+        ])
+    }
+
+    /// Starts the ~10 Hz Tick chain unless it runs already; it stops when nothing needs it.
+    fn start_ticking(&mut self) -> Task<Message> {
+        if self.ticking {
+            return Task::none();
+        }
+        self.ticking = true;
+        tick()
+    }
+
+    /// What a slow mark command is doing, after a second without an answer.
+    fn marking_note(&self) -> Option<&'static str> {
+        let started = self.marking?;
+        (started.elapsed() >= std::time::Duration::from_secs(1)).then_some(if self.store_behind {
+            "Updating the history format (first change after an upgrade)…"
+        } else {
+            "Working…"
         })
     }
 
@@ -1432,14 +1518,17 @@ impl App {
         let seq = self.window_seq;
         // A little ahead of the cursor, so moments drifting past the camera are loaded too.
         let at = Timestamp((target + 120_000.0) as i64);
-        self.ask(
-            Ask::Window {
-                filter: self.filter,
-                at: Some(at),
-                limit: WINDOW_LIMIT,
-            },
-            move |a| Message::Window(seq, a),
-        )
+        Task::batch([
+            self.ask(
+                Ask::Window {
+                    filter: self.filter,
+                    at: Some(at),
+                    limit: WINDOW_LIMIT,
+                },
+                move |a| Message::Window(seq, a),
+            ),
+            self.load_marks(),
+        ])
     }
 
     fn set_moments(&mut self, entries: Vec<TimelineEntry>) {
@@ -1725,7 +1814,7 @@ impl App {
             nav("mark ›".into(), Message::GoMark(true, false)),
             nav("key »".into(), Message::GoKeyframe(true, false)),
             nav(
-                if self.marking {
+                if self.marking.is_some() {
                     "…".into()
                 } else {
                     "+ Mark".into()
@@ -1753,6 +1842,15 @@ impl App {
                     .on_press(Message::TogglePanel),
                 )
                 .push(nav("✕".into(), Message::ClearPicks));
+        }
+        if let Some(note) = self.marking_note() {
+            group = group.push(
+                text(note)
+                    .size(12)
+                    .font(MONO)
+                    .color(t.text_2)
+                    .wrapping(text::Wrapping::None),
+            );
         }
         if let Some(running) = &self.exporting {
             let (done, total) = running.progress.get();
@@ -2686,6 +2784,16 @@ fn app_and_window(app: Option<&str>, window: Option<&str>) -> String {
         (None, Some(w)) => w.to_owned(),
         (None, None) => "Unknown application".into(),
     }
+}
+
+/// One Tick, a tenth of a second from now (iced's thread-pool executor has no timer of its own).
+fn tick() -> Task<Message> {
+    Task::perform(
+        recorder::off_thread((), || {
+            std::thread::sleep(std::time::Duration::from_millis(100))
+        }),
+        |()| Message::Tick,
+    )
 }
 
 fn format_clock(ms: i64) -> String {
