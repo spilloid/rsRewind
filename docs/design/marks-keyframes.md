@@ -38,10 +38,19 @@ timeline, and jumping to a mark puts the camera at `at`, where the stage shows w
 there, in any lane the filter admits.
 
 **Writes go through the CLI, like the tray.** The UI may not link `rsrewind-storage`
-(`rsrewind-query/tests/ui_boundary.rs`), so it runs `rsrewind mark add --at-ms <ms> --label=<text>`,
-`mark rename <id> --label=<text>` and `mark remove <id>` as child processes (no shell; the label is one
-argv element in `--label=` form so a label starting with `-` is never read as a flag), then re-reads
-the list. Reads go through `rsrewind-query` (`History::marks`), read-only.
+(`rsrewind-query/tests/ui_boundary.rs`), so it runs `rsrewind mark add --at-ms <ms> --label-stdin`,
+`mark rename <id> --label-stdin` and `mark remove <id>` as child processes (no shell). The label goes
+on the child's standard input, not in its arguments, so it is never shown in the process list and can
+never be read as a flag. Reads go through `rsrewind-query` (`History::marks`), read-only. The window
+re-reads marks with every recorder-status poll (5 s), with every window of moments it loads, after
+every mark command, and when a rename or delete says "there is no mark" (changed elsewhere).
+
+**Migration by keypress.** `rsrewind mark add` opens the store for writing, so the first mark after
+an upgrade migrates a v1 database (with its backup), possibly while an older recorder still runs.
+That recorder keeps working (v2 only adds a table) but an older binary started later refuses the
+store. Migration semantics are unchanged; the window only says "Updating the history format…" when a
+mark command has run for over a second while the store it opened was v1 (else "Working…"). The
+reader checks for the `marks` table on every read, so the new mark shows without reopening.
 
 **Storage: schema v2** (`0002_marks.sql`, `SCHEMA_VERSION` 1 → 2):
 
@@ -101,7 +110,7 @@ what the recorder already stores (`rsrewind_query::keyframes`, pure and unit-tes
 
 | Kind | When | Priority |
 |---|---|---|
-| `resume` | the first observation after a stretch of at least 60 s with nothing recorded (`QueryDb::gaps`: recorder off or died, paused, idle/locked); also the first moment of history | 3 |
+| `resume` | the first observation after a stretch of at least 60 s with nothing recorded (`QueryDb::gaps`: recorder off or died, paused, idle/locked). The first moment of history counts only when the range looked at starts at least 60 s before it and the recorder was not running then; otherwise it is not a stop | 3 |
 | `app_switch` | an observation whose application differs from the previous observation **on the same monitor** | 2 |
 | `window_switch` | same application, different window | 1 |
 | `visual_change` | the stored dHash (`visual_states.fingerprint`) differs from the previous state on that monitor by at least 24 of 64 bits: a different screen, not an edited one | 1 (scored by bits) |
@@ -117,7 +126,10 @@ produces a stop per second. Ranges are capped at 20 000 observations per lane.
 **Stepping.** `History::step_keyframe(filter, from, forward)` looks in widening windows (30 min,
 doubling, bounded by the first and last observation) and returns the nearest stop strictly after (or
 before) `from`. Thinning depends on the window, so a stop near a window's edge can differ between two
-windows; stepping is still monotonic because each answer is strictly past `from`.
+windows; stepping is still monotonic because each answer is strictly past `from`. A window denser
+than 20 000 observations per source is read from the end the step needs: the newest rows for a
+backward step, the oldest for a forward one, with each monitor's previous state taken from just
+before the first row read.
 
 Heuristics, honestly: the thresholds (60 s, 24 bits, 15 s) were chosen on synthetic history and need
 tuning on real use. A stored fingerprint is `NULL` in history built by tests and old imports; those
@@ -160,7 +172,13 @@ recorder is another process and is never involved. Pictures come from `MediaRead
 - **Guards.** At least 2 and at most 300 frames; at most 300 x 1280 x 800 pixels in total.
 - **Where.** New files in `<data folder>/exports/` (no file dialog: it would need another native
   dependency; the path is shown after every export). Never overwrites: a name that exists gets a
-  `-2` suffix, and a `.part` file is renamed into place only when complete.
+  `-2` suffix, and a `.part` file (made with `create_new`) is renamed into place only when complete.
+- **Crash-safe leftovers.** An export holds `.<name>.lock` with an exclusive lock for its whole run;
+  its `.part` file and WebM's `.frames/` scratch folder are removed on success, failure, cancel or
+  panic. A crash leaves them, so when the window opens and before every export,
+  `export::sweep` removes `.rsrewind-*.part` / `.frames` / `.lock` whose lock is missing or held by
+  nobody (older than 60 s), and nothing else. A stale scratch folder never blocks the next export.
+- **Progress** redraws on a ~10 Hz tick, not every frame.
 - **Leaving the store.** Every file export first asks, saying the file is a copy outside
   rsRewind's history that `forget` and retention will not delete (`PRIVACY.md`). Copy says so after.
 - **Forgotten pictures.** A moment picked before a `forget` (or retention) has no file any more: the

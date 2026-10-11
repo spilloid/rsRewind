@@ -29,6 +29,11 @@ Planned for v0.1.0 (not tagged, version unchanged at 0.0.10).
   `backups/recall-v1-*.db` and migrates it; older versions then refuse it. Readers (the window,
   `search`, `recent`) also accept a v1 store, so imported sources stay visible until the next import
   migrates them. `forget` reports the marks it deleted.
+  **Any** command of this version that opens the database for writing migrates it, including
+  `rsrewind mark add` (pressing M in the window) and `status`. If an older recorder is still running
+  at that moment, it keeps writing to the migrated database (v2 only adds a table), but older
+  binaries started afterwards refuse it; restart the recorder from this version. The window says
+  "Updating the history format…" if a mark takes over a second while the store is still v1.
 
 ## [0.0.10] - 2026-10-11
 
