@@ -90,6 +90,16 @@ in `config.toml`, and you can add your own. `config.toml` rejects unknown keys (
 `excluded_proceses` fails to parse rather than silently doing nothing), specifically so a mistake
 in a privacy rule is loud, not silent.
 
+## When recording starts
+
+Opening rsRewind (from search, the Start menu, the application menu or the Mac Applications folder) and
+signing in to a computer where the Windows installer's start-at-login entry or `rsrewind tray --autostart on`
+is set both start the recorder, so that history exists when you need it. The tray icon (red while
+recording, green when not) is the always-visible sign of it, and `rsrewind status` reports it. To stop
+recording from starting by itself set `record_on_launch = false` under `[capture]` in `config.toml`; the
+tray icon and window still open, and recording starts only when you press Start. Pausing and the
+privacy rules below apply either way.
+
 ## Pausing and resuming
 
 `rsrewind pause` requests a pause until you run `rsrewind resume`. Check `rsrewind status` after requesting it; known acknowledgement/enforcement gaps are tracked in [issue #12](https://github.com/spilloid/rsRewind/issues/12). `rsrewind pause

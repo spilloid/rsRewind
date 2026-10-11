@@ -40,6 +40,10 @@ rsrewind-capture.workspace = true
 rsrewind-ocr.workspace = true
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Registry"] }
 
+# Embeds assets/icon/rsrewind.ico in rsrewind.exe (Explorer, the taskbar and the Start menu use it).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 tempfile.workspace = true
 

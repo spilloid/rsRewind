@@ -34,20 +34,25 @@ not require elevation any more than installing a normal desktop app for yourself
 ## What it installs
 
 - `rsrewind.exe`, `LICENSE.txt`, `README.md` under `%LOCALAPPDATA%\Programs\rsRewind`.
-- A per-user Start Menu shortcut ("rsRewind"), launching `rsrewind.exe ui` — i.e. the shortcut
-  opens the desktop UI, not a bare console window.
-- **Optionally**, a startup registration: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\rsRewind`
+- A per-user Start Menu shortcut ("rsRewind", with the rsRewind icon embedded in the exe), launching
+  `rsrewind.exe launch`: the tray icon first (and recording, unless `capture.record_on_launch` is
+  `false`), then the window. Windows search finds it by name. The shortcut runs minimized because
+  `rsrewind.exe` is a console program; the window is its own detached process.
+- By default, a startup registration: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\rsRewind`
   = `"<install dir>\rsrewind.exe" tray --start-recorder`, so the tray icon and the recorder start automatically at sign-in.
 
-The startup registration is modeled as a **separate MSI feature** (`StartAtLogin`, `Level="1000"`
-— MSI's standard way of saying "present in the feature tree, not selected unless asked for") so
-it is genuinely optional and independently toggleable, rather than always-on. No installer UI
-currently exposes a checkbox for it (the `.wxs` doesn't define a UI sequence yet — see
-[Known gaps](#known-gaps) below); until one exists, it can be selected explicitly:
+The startup registration is a **separate MSI feature** (`StartAtLogin`, `Level="1"`, so it is
+installed by default): recall is the point of the app, and the tray icon is how a running recorder
+is seen, so a fresh install brings both up at every sign-in. It stays independently removable. No
+installer UI currently exposes a checkbox for it (the `.wxs` doesn't define a UI sequence yet — see
+[Known gaps](#known-gaps) below); to install without it:
 
 ```powershell
-msiexec /i rsrewind.msi ADDLOCAL=Application,StartAtLogin
+msiexec /i rsrewind.msi ADDLOCAL=Application
 ```
+
+or, after installing, `rsrewind tray --autostart off`. To keep the tray icon at sign-in but stop
+recording from starting by itself, set `record_on_launch = false` under `[capture]` in `config.toml`.
 
 ## Upgrades
 
