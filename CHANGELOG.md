@@ -6,7 +6,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-Planned for v0.1.0 (not tagged, version unchanged at 0.0.10).
+## [0.1.0] - 2026-10-11
+
+**Navigate and take clips out.** Marks, keyframes, a real navigator in the window, multi-select and
+exports. The 8-hour acceptance run for this version has **not** been run; see the ROADMAP.
 
 ### Added
 
@@ -34,6 +37,24 @@ Planned for v0.1.0 (not tagged, version unchanged at 0.0.10).
   at that moment, it keeps writing to the migrated database (v2 only adds a table), but older
   binaries started afterwards refuse it; restart the recorder from this version. The window says
   "Updating the history format…" if a mark takes over a second while the store is still v1.
+
+### Known issues
+
+- **The 8-hour acceptance run for v0.1.0 has not been run** (ROADMAP). Treat this as an early release.
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- The window was run on synthetic history under a virtual display with software rendering, once on real
+  Linux history before this release, and never on Windows or Mac with these features. The clipboard, the
+  `ffmpeg` lookup and keyboard shortcuts are unverified there. Keyframe thresholds are untuned guesses.
+- Exports are copies outside rsRewind's history; `forget` does not delete them.
+- Marks are local to this data folder and are not part of `.rsseg` segments.
+- Reviewed read-only by a second model on 2026-10-11 and the findings fixed; there has been no review by a person.
+
+### Upgrade notes
+
+- The first command of this version that opens the database for writing backs it up to
+  `backups/recall-v1-*.db` and migrates it to schema v2. Older versions then refuse the database, so restart the
+  recorder from this version.
+- Install `ffmpeg` if you want WebM export; GIF and PNG need nothing extra.
 
 ## [0.0.10] - 2026-10-11
 
