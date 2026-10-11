@@ -57,7 +57,7 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 "the UI crashing cannot stop recording" true by construction rather than by convention.
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
-`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `forget`, `export`, `import`, `sources`,
+`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `mark`, `forget`, `export`, `import`, `sources`,
 `doctor`, `ui`, `tray`, `mcp`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 
@@ -185,5 +185,14 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-08:** The Plasma recorder has run only on one machine (Plasma 6.7.5, one 2496x1664 screen
   at 135 %, Bazzite). Multiple screens, other scales, KWin restarts mid-run, and other compositors are
   untested. On excluded ticks KWin still takes the frame and the recorder drops it from memory.
+- **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
+  `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
+  integration tests on Linux only and have had no adversarial review. The window was never looked at
+  with these features on real recorded history; see the next item for what was seen under Xvfb.
+  Keyframe thresholds (60 s gap, 24 dHash bits, 15 s spacing) are untuned guesses. Copy image
+  (arboard), the WebM path and every Windows/macOS behaviour (clipboard, ffmpeg lookup, child
+  process without a console) are unverified; the WebM encode ran only under `cargo test` on Linux
+  with ffmpeg 6.1.1 (Ubuntu) and its libvpx-vp9. Schema v2 migration was tested on fixtures, not on a real
+  installed v0.0.10 database.
 - **2026-10-07:** The recorder-side privacy findings in `docs/remediation-status.md` (Unit B) are
   open; every statement about privacy guarantees applies to the design, not to a reviewed build.

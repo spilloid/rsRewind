@@ -6,6 +6,30 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+Planned for v0.1.0 (not tagged, version unchanged at 0.0.10).
+
+### Added
+
+- **Marks.** Mark the moment on stage (M, or "+ Mark"), with an optional label; step between marks
+  ([ ]); list, rename and delete them in the marks panel; `rsrewind mark add/list/rename/remove`.
+  Marks stay in this data folder and are never exported to other machines.
+- **Keyframes.** Automatic stops derived when reading history (recording resumed, application or
+  window switched on a monitor, a different screen); step with `,` `.` or PageUp/PageDown. No
+  recorder change.
+- **The navigator.** The top-right pill now steps keyframes and marks, opens the marks panel, and has
+  "Go to" (`14:30`, `yesterday 9:00`, `15m`, ...). The camera glides to nearby targets and cues to
+  far ones.
+- **Selection and exports.** Click, Shift-click and Ctrl/Cmd-click cards (Shift with any navigation
+  key extends to it); copy a picture, save a PNG, export a silent GIF, or a WebM when `ffmpeg` is
+  installed. Exports go to `<data folder>/exports/` and are copies outside rsRewind's history.
+
+### Changed
+
+- **Database schema v2** (adds `marks`). The first run of this version backs the database up to
+  `backups/recall-v1-*.db` and migrates it; older versions then refuse it. Readers (the window,
+  `search`, `recent`) also accept a v1 store, so imported sources stay visible until the next import
+  migrates them. `forget` reports the marks it deleted.
+
 ## [0.0.10] - 2026-10-11
 
 **Tenth release: closing the icon stops recording.** Quit on the tray (Windows, Linux) or menu-bar item

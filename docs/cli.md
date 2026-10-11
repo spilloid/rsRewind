@@ -17,6 +17,8 @@ MCP and macOS are available in development builds from main, not the v0.0.6 publ
 | `rsrewind search <text> [--app] [--title] [--since] [--until] [--limit] [--json]` | Full-text search over recognized text, on this machine and every imported one. |
 | `rsrewind recent [--limit] [--json]` | The most recent moments across all machines, newest first. |
 | `rsrewind gaps [--since] [--until] [--min-seconds] [--json]` | When nothing was recorded, and why (off, crashed, paused, idle or locked, ...). |
+| `rsrewind mark add [--at TIME \| --at-ms MS] [--label TEXT] [--json]` | Mark a moment (default: now) with an optional one-line label of up to 120 characters. Refused inside forgotten time. |
+| `rsrewind mark list [--json]` / `mark rename <id> --label TEXT` / `mark remove <id>` | List, relabel or delete marks. Marks stay in this data folder (never exported); `forget` and age retention delete the ones in their range. The window's M key and marks panel run these. |
 | `rsrewind forget <since> --yes` | Delete recent history from the active store (screenshots, text, window titles). |
 | `rsrewind ui` | Open the rewind window (its own process; `--foreground` stays attached). |
 | `rsrewind export` | Seal settled history into segment files for another machine. |

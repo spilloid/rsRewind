@@ -50,6 +50,20 @@ The recorder can see the screen and not fall over.
 **Acceptance criterion:** an 8-hour recording session completes without uncontrolled memory
 growth and without catastrophic capture failure (the daemon does not crash, does not leak memory
 without bound, and does not stop producing new visual states partway through).
+**Status (2026-10-11): TODO, not yet run.**
+
+Also in v0.1.0 (decided 2026-10-11; built on `claude/nifty-einstein-dd0bhh`, review pending; design in
+`docs/design/marks-keyframes.md`):
+
+- **Marks**: mark a moment with an optional label, list/rename/delete, step between them;
+  `rsrewind mark`; schema v2 with backup-before-migrate; local to the data folder, never exported.
+- **Keyframes**: automatic stops (resume after a gap, app/window switch per monitor, a different
+  screen), derived at read time in `rsrewind-query`.
+- **Navigation**: the top-right navigator, the marks panel with "Go to", keyboard stepping, glides to
+  nearby moments and cues to far ones.
+- **Multi-select and clip export**: click / Shift / Ctrl selection and Shift+navigation ranges; copy
+  image, PNG, GIF, and WebM only when an `ffmpeg` executable is on PATH (run-time exception, not a
+  dependency). Silent; exports leave the store and say so.
 
 ## v0.2.0 — Memory
 

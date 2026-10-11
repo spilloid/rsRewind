@@ -32,6 +32,7 @@ rsRewind keeps a searchable visual history of your screen on your own computer. 
 ## Make it yours
 
 - **Find a moment:** search recognized screen text, inspect the full screenshot, and move backward or forward through your history.
+- **Find your way back (development builds):** mark moments with a label (M), hop between marks and automatic keyframes (app switches, resumed recording, a new screen), jump to a time, and save a picture, GIF or (with `ffmpeg` installed) silent WebM of a stretch you select. Exports are copies outside rsRewind's history.
 - **Keep control:** visible recorder state, pause and stop controls, configurable exclusions and retention. Defaults keep 90 days with a 50 GB soft storage limit.
 - **Bring another computer:** [export and import history](https://spilloid.github.io/rsRewind/probes.html) into one view. Transfers are manual; integrity checks do not authenticate the sender.
 - **Connect an assistant:** [optional MCP access](docs/mcp.md) in development builds. Off by default; returned history can reach the assistant provider.

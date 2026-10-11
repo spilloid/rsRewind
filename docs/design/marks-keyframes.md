@@ -15,13 +15,17 @@ for a new mark, and has a "Go to" field that understands `14:30`, `yesterday 09:
 | Key | Does |
 |---|---|
 | `←` `→` (`↓` `↑`) | previous / next moment (existing) |
-| `Shift+←` `Shift+→`, `PageUp` `PageDown` | previous / next keyframe |
+| `,` `.` or `PageUp` `PageDown` | previous / next keyframe |
 | `[` `]` | previous / next mark |
+| `Shift` + any of the above (`<` `>` `{` `}`) | go there **and extend the selection** to it |
+| click / `Shift`-click / `Ctrl`(`Cmd`)-click a card | select one / the range from the anchor / toggle one |
+| `Ctrl+A` | select every moment loaded around the cursor |
+| `Ctrl+C` | copy the picked picture (or the one on stage) |
 | `m` | mark the moment on stage (no label; rename later) |
 | `Shift+M` | open the panel to mark it with a label |
 | `g` | open the panel at "Go to" |
 | `Home` / `End` | oldest / latest moment |
-| `Esc` | close the panel (or the image viewer) |
+| `Esc` | close the panel, else clear the selection (the image viewer keeps its own Esc) |
 
 Shortcuts are read only from key presses no widget captured, so typing in the search box or a label
 field never triggers them.
@@ -129,7 +133,48 @@ states never yield `visual_change`.
   hours of history.
 - Marks are drawn on the strip (gold flags, over all history) and in the room (a floor line at their
   depth, with the label); keyframes in the loaded window are ticks on the strip and a small tab on
-  their card.
+  their card; picked cards get a mint border.
+
+## 4. Selection and exports (added to the same branch, 2026-10-11)
+
+**Selection** (`ui::pick`, pure): the moment on stage is still "what the detail pane shows"; the
+*picks* are what exports act on. A plain click picks one moment and makes it the anchor; Shift-click
+or a Shift+navigation key picks every moment from the anchor (or, with none, the moment on stage) to
+the target, in timeline order across the lanes the filter admits, filled from history
+(`History::later` paging, at most 2 000), not just the loaded window; Ctrl/Cmd-click toggles one.
+The navigator shows "N picked · duration" and a clear button; the strip shows the span.
+
+**Exports** (`ui::export`) run on a thread of the window's process with progress and cancel; the
+recorder is another process and is never involved. Pictures come from `MediaReader` (no database).
+
+| Export | Acts on | How |
+|---|---|---|
+| Copy image (`Ctrl+C`) | the one picked moment, else the one on stage | full size, `arboard` (X11 / Wayland data-control / Win32) |
+| Save PNG | same | full size, `png` crate |
+| GIF | 2-300 picked moments | `gif` crate, NeuQuant palette per frame, letterboxed to the first frame's size fitted to 480/720/960/1280 |
+| WebM | same, only if `ffmpeg` is on PATH | PNG frames in a scratch folder + an `ffconcat` list with real durations, `ffmpeg -an -c:v libvpx-vp9`, scratch folder always removed |
+
+- **Timing.** Each frame shows for the real time to the next moment, clamped to 0.25-1.5 s, so a
+  ten-minute idle stretch is 1.5 s, not ten minutes; a clip longer than 60 s is sped up evenly
+  (no frame under 60 ms). The last frame shows 1.5 s.
+- **Guards.** At least 2 and at most 300 frames; at most 300 x 1280 x 800 pixels in total.
+- **Where.** New files in `<data folder>/exports/` (no file dialog: it would need another native
+  dependency; the path is shown after every export). Never overwrites: a name that exists gets a
+  `-2` suffix, and a `.part` file is renamed into place only when complete.
+- **Leaving the store.** Every file export first asks, saying the file is a copy outside
+  rsRewind's history that `forget` and retention will not delete (`PRIVACY.md`). Copy says so after.
+- **Forgotten pictures.** A moment picked before a `forget` (or retention) has no file any more: the
+  export stops with "the picture from ... is gone", deletes its partial file, and never writes a
+  blank frame.
+- **Silent.** rsRewind records no audio; `-an` keeps WebM silent by construction.
+- **ffmpeg is an optional, run-time-detected exception, not a dependency.** Nothing links libvpx or
+  ships FFmpeg; `ARCHITECTURE.md`'s "no FFmpeg until benchmarks justify it" is about storage and
+  still holds. Without an `ffmpeg` on PATH the WebM button is disabled with a tooltip saying why.
+  It is looked up once when the window opens.
+- **Boundary.** New UI dependencies are third-party and local-only (`png`, `gif`, `arboard`, which
+  brings `image`, `x11rb`, `wl-clipboard-rs`); no first-party crate was added, so
+  `ui_boundary.rs` is unchanged and green. No CLI `clip` command was needed: the UI may spawn
+  `ffmpeg` itself, as it spawns `rsrewind`.
 
 ## Tests
 
@@ -138,6 +183,7 @@ states never yield `visual_change`.
 - query: marks read on v2, empty on a v1 store (which still opens); keyframe derivation (pure) and over
   a fixture store (resume after a gap, per-monitor app switch, thinning, stepping both ways).
 - UI: navigation model (`nav`: glide/cue choice, easing, mark/keyframe neighbours, jump-time parsing,
-  shortcut mapping).
+  shortcut mapping); selection (`pick`); exports (`export`: GIF timing and guards, PNG round trip,
+  a forgotten picture, cancel, no ffmpeg, and a real WebM encode when ffmpeg is installed).
 - CLI: `mark` round trip through the binary; the command is classified for agents.
 - Boundary tests unchanged and green: the UI still reaches only core and query.

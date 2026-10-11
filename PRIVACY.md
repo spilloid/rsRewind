@@ -164,6 +164,27 @@ DPAPI-based (or equivalent) encryption at rest is planned future work (see
 will be updated the moment it is, per this repo's documentation-freshness commitment
 (`docs/standards.md`, STD-003).
 
+## Marks
+
+A mark (`rsrewind mark`, or M in the window) is a moment you chose plus an optional label you typed.
+It is stored in `recall.db` with the rest of your history, unencrypted like it. Marks are never put
+into segment files, so they never reach another machine through `rsrewind export`. `forget` deletes
+the marks inside the forgotten range, age retention deletes marks older than the retention horizon,
+and a mark cannot be added inside forgotten time. Size retention keeps marks (they are a few bytes
+each). Labels are never logged.
+
+## Saving pictures and clips from the window
+
+The window can copy a moment's picture to the clipboard and save pictures and silent clips (PNG,
+GIF, and WebM when an `ffmpeg` executable is installed) to `<data folder>/exports/`. **An export is a
+copy that leaves rsRewind's history**: `forget`, retention and uninstall do not delete exported files
+or clipboard contents, and other programs can read them. The window says so before writing a file.
+Exports happen only when you ask, in the window's own process; the recorder is not involved, nothing
+is sent anywhere, and clips contain no audio (rsRewind records none). A moment that was forgotten
+after you picked it is not exported: the export stops and says the picture is gone. When WebM is
+used, frames are written to a scratch folder next to the output and removed when `ffmpeg` finishes,
+fails or is cancelled.
+
 ## Exporting history to another machine
 
 `rsrewind export` writes segment files containing screenshots, window titles, process names and

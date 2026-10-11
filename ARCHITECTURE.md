@@ -250,7 +250,12 @@ ocr_fts  = fts5(text, tokenize='unicode61 remove_diacritics 2')  -- rowid = visu
 control(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT, paused_until NULL, updated_at)
 recorder_status(id CHECK(id=1), pid, started_at, heartbeat_at, state, counters_json)
 settings(key PRIMARY KEY, value)
+marks(id AUTOINCREMENT, at, label CHECK(length <= 120), created_at, updated_at)  -- schema v2
 ```
+
+Schema v2 (2026-10-11) added only `marks` (`docs/design/marks-keyframes.md`). `rsrewind-query` reads
+any version from 1 to the current one (a read-only reader cannot migrate, and every version so far
+only added tables); a v1 store simply has no marks.
 
 Indexes on every foreign key, plus `events(started_at)`, `events(kind, started_at)`,
 `visual_states(captured_at)`, `visual_states(ocr_status)`.
@@ -357,6 +362,17 @@ thumbnails from a GPU texture LRU bounded at 128 MB (on-screen textures are neve
 thumbnails are cached on the CPU in a separate 96 MB LRU. Search hits cue the room to the hit's
 matching observation (not its first capture) with a 180 ms settle rather than a fly-through.
 
+**Navigation, marks, keyframes, selection, exports** (2026-10-11, `docs/design/marks-keyframes.md`).
+The top-right navigator steps between keyframes (derived at read time by
+`rsrewind_query::keyframes`, no recorder involvement) and marks (read through `History::marks`,
+written by running `rsrewind mark ...` as a child process, as the tray acts). Camera motion is
+`nav::Motion`: a log-time glide to targets within the room's depth, a short cue to farther ones. The
+multi-frame selection (`pick`) feeds exports (`export`): clipboard and PNG for one picture, GIF for
+several (pure Rust), and WebM only by running an `ffmpeg` found on PATH at run time as a child
+process. **This is an explicit, optional exception, not a dependency**: no FFmpeg or libvpx is
+linked or shipped, and the storage decision below ("no FFmpeg until benchmarks justify it") is
+unchanged. Exports run on a thread of the window's process and write to `<data>/exports/`.
+
 **Image viewer.** Double-clicking a card or the detail picture replaces the window's contents with
 one screenshot over a dark backdrop (`viewer/`). As with the timeline, the view math (fit, zoom
 toward the pointer, clamped pan, 100 %/fit toggle where 100 % is one image pixel per physical
@@ -411,7 +427,8 @@ quality setting (80 by default) that stays legible for OCR and for a human looki
 timeline. Starting with WebP keyframes rather than reaching for video encoding (FFmpeg,
 H.264/AV1 inter-frame compression) keeps the dependency surface small and the per-frame storage
 model simple: one file per visual state, independently readable, independently deletable.
-**No FFmpeg until benchmarks justify it** — if disk usage at realistic retention windows turns
+**No FFmpeg until benchmarks justify it** (for storage; the window's optional WebM export runs an
+`ffmpeg` the user installed, see [UI boundary](#ui-boundary)) — if disk usage at realistic retention windows turns
 out to need real video compression, that is a deliberate, benchmarked future change, not a
 default.
 
