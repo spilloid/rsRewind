@@ -100,6 +100,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Mark a moment on the timeline, list marks, rename or remove one.
+    ///
+    /// Marks are your own guide marks: a moment with an optional short label. They stay in this
+    /// data folder (never exported to other machines); `forget` deletes the ones in its range.
+    Mark {
+        #[command(subcommand)]
+        action: MarkAction,
+    },
     /// Permanently delete everything recorded since a time (e.g. `forget 15m`).
     Forget {
         since: String,
@@ -189,6 +197,38 @@ enum Command {
     DataDir,
 }
 
+#[derive(Subcommand)]
+enum MarkAction {
+    /// Mark a moment (now, unless --at or --at-ms says when).
+    Add {
+        /// When: '2026-09-30 14:32', '15m' (ago), 'now', ...
+        #[arg(long, conflicts_with = "at_ms")]
+        at: Option<String>,
+        /// When, as Unix milliseconds (what the window passes).
+        #[arg(long, value_name = "MS")]
+        at_ms: Option<i64>,
+        /// A short label (one line, at most 120 characters). Write it as --label=TEXT if it starts
+        /// with '-'.
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        label: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List every mark, oldest moment first.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Give a mark a new label (empty removes the label).
+    Rename {
+        id: i64,
+        #[arg(long, allow_hyphen_values = true)]
+        label: String,
+    },
+    /// Delete a mark.
+    Remove { id: i64 },
+}
+
 fn main() -> ExitCode {
     // From an AppImage this replaces the process with the installed copy; elsewhere it does nothing.
     #[cfg(target_os = "linux")]
@@ -247,6 +287,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             min_seconds,
             json,
         } => gaps(&data, &since, until.as_deref(), min_seconds, json),
+        Command::Mark { action } => mark(&data, action),
         Command::Forget { since, yes } => forget(&data, &since, yes),
         Command::Doctor { json } => doctor::run(&data, json),
         Command::Export {
@@ -717,6 +758,87 @@ fn source_labels(history: &History) -> Result<render::SourceLabels> {
         .collect())
 }
 
+/// `rsrewind mark ...`: writes through the store (creating this folder's database if it has none,
+/// e.g. on a folder that only holds imported sources); reads through the history facade.
+fn mark(data: &DataDir, action: MarkAction) -> Result<ExitCode> {
+    use rsrewind_storage::MarkId;
+    let now = Timestamp::now();
+    match action {
+        MarkAction::Add {
+            at,
+            at_ms,
+            label,
+            json,
+        } => {
+            let at = match (at, at_ms) {
+                (_, Some(ms)) => Timestamp(ms),
+                (Some(spec), None) => timespec::parse_timespec(&spec, chrono::Local::now())
+                    .map_err(anyhow::Error::msg)?,
+                (None, None) => now,
+            };
+            let store = Store::open(data)?;
+            let id = match store.add_mark(at, &label, now) {
+                Err(StorageError::Fenced { .. }) => {
+                    bail!("that moment is inside history you deleted (forget); nothing was marked")
+                }
+                other => other?,
+            };
+            if json {
+                println!("{}", serde_json::json!({ "id": id.0, "at": at.0 }));
+            } else {
+                println!(
+                    "Marked {} (mark {id}).",
+                    at.to_local().format("%a %b %-d %H:%M:%S")
+                );
+            }
+        }
+        MarkAction::List { json } => {
+            let history = History::open(data);
+            let marks = history.marks()?;
+            if json {
+                let rows: Vec<serde_json::Value> = marks
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "id": m.id,
+                            "at": m.at.0,
+                            "at_utc": m.at.to_utc().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            "label": m.label,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if marks.is_empty() {
+                println!(
+                    "No marks yet. Mark a moment with `rsrewind mark add` or M in the window."
+                );
+            } else {
+                for m in &marks {
+                    println!(
+                        "{:>5}  {}  {}",
+                        m.id,
+                        m.at.to_local().format("%Y-%m-%d %H:%M:%S"),
+                        render::plain(&m.label)
+                    );
+                }
+            }
+        }
+        MarkAction::Rename { id, label } => {
+            if !Store::open_existing(data)?.rename_mark(MarkId(id), &label, now)? {
+                bail!("there is no mark {id}");
+            }
+            println!("Renamed mark {id}.");
+        }
+        MarkAction::Remove { id } => {
+            if !Store::open_existing(data)?.remove_mark(MarkId(id))? {
+                bail!("there is no mark {id}");
+            }
+            println!("Removed mark {id}.");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
     let since =
         timespec::parse_timespec(since, chrono::Local::now()).map_err(anyhow::Error::msg)?;
@@ -741,6 +863,12 @@ fn forget(data: &DataDir, since: &str, yes: bool) -> Result<ExitCode> {
         report.visual_states_deleted,
         human_bytes(report.bytes_freed)
     );
+    if report.marks_deleted > 0 {
+        println!(
+            "Also deleted {} mark(s) in that time.",
+            report.marks_deleted
+        );
+    }
     if report.orphan_files_deleted > 0 {
         println!(
             "Also removed {} leftover screenshot files that had no database entry.",
@@ -1152,8 +1280,8 @@ mod tests {
         ];
         // Recording control, deletion, moving history, setup and the surfaces themselves stay with the person.
         let not_for_agents = [
-            "daemon", "start", "stop", "resume", "forget", "doctor", "export", "import", "ui",
-            "launch", "tray", "mcp", "data-dir", "help",
+            "daemon", "start", "stop", "resume", "forget", "mark", "doctor", "export", "import",
+            "ui", "launch", "tray", "mcp", "data-dir", "help",
         ];
         let tools = rsrewind_mcp::tool_names();
         for (command, tool) in for_agents {
