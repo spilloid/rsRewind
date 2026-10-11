@@ -72,8 +72,9 @@ impl McpServer {
             Settings::Fixed(config) => config.clone(),
             Settings::File(path) => match Config::load_or_default(path) {
                 Ok(config) => config.mcp,
-                Err(error) => {
-                    tracing::warn!(%error, "config.toml unreadable: agent access off until it is fixed");
+                Err(_) => {
+                    // Parser diagnostics may echo configuration contents; only log the decision.
+                    tracing::warn!("config.toml unreadable: agent access off until it is fixed");
                     McpConfig::default()
                 }
             },
@@ -256,7 +257,9 @@ impl Session {
             return None;
         }
         if valid
-            && message.get("id").is_some()
+            && message
+                .get("id")
+                .is_some_and(|id| id.is_string() || id.is_i64() || id.is_u64())
             && ((method == Some("initialize") && self.version.is_some())
                 || (method.is_some()
                     && !self.ready

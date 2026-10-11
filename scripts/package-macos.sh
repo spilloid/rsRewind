@@ -26,4 +26,4 @@ if grep -E '/Applications/Xcode|/Library/Developer|/opt/homebrew|/Users/runner' 
   exit 1
 fi
 ditto -c -k --sequesterRsrc --keepParent "$app" "dist/rsRewind-$version-macos-arm64.zip"
-shasum -a 256 "dist/rsRewind-$version-macos-arm64.zip" > "dist/rsRewind-$version-macos-arm64.zip.sha256"
+(cd dist && shasum -a 256 "rsRewind-$version-macos-arm64.zip" > "rsRewind-$version-macos-arm64.zip.sha256")

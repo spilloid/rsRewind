@@ -129,6 +129,11 @@ fn every_workflow_runs_through_the_real_stdio_binary() -> Fallible<()> {
             "{name}: {}",
             replies[index + 1]
         );
+        if let Some(tool) = tools.iter().find(|tool| tool["name"] == *name)
+            && let Some(schema) = tool.get("outputSchema")
+        {
+            assert_schema(schema, &replies[index + 1]["result"]["structuredContent"])?;
+        }
     }
     assert_eq!(
         replies[1]["result"]["structuredContent"]["moments"][0]["moment"],
@@ -146,15 +151,63 @@ fn every_workflow_runs_through_the_real_stdio_binary() -> Fallible<()> {
     );
     assert_eq!(replies[5]["result"]["content"][0]["type"], "image");
     // Protective action shares the CLI's monotone pause semantics and persisted control table.
-    let status = Command::new(env!("CARGO_BIN_EXE_rsrewind"))
-        .arg("--data-dir")
-        .arg(data.root())
-        .args(["status", "--json"])
-        .output()?;
-    assert_eq!(
-        serde_json::from_slice::<Value>(&status.stdout)?["state"],
-        "paused"
-    );
+    let store = rsrewind_storage::Store::open(&data)?;
+    assert!(matches!(
+        store.read_control()?,
+        rsrewind_core::CaptureState::Paused { until: Some(_) }
+    ));
+    Ok(())
+}
+
+/// Validate the actual advertised output contracts, rather than mirroring a result fixture.
+fn assert_schema(schema: &Value, value: &Value) -> Fallible<()> {
+    let matches_type = |kind: &str| match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    };
+    let correct_type = match &schema["type"] {
+        Value::String(kind) => matches_type(kind),
+        Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).any(matches_type),
+        _ => false,
+    };
+    assert!(correct_type, "{value} does not match {schema}");
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema["required"].as_array() {
+            for key in required {
+                assert!(
+                    object.contains_key(key.as_str().ok_or("required key")?),
+                    "missing {key}"
+                );
+            }
+        }
+        if let Some(properties) = schema["properties"].as_object() {
+            for (key, field) in object {
+                if let Some(definition) = properties.get(key) {
+                    assert_schema(definition, field)?;
+                } else {
+                    assert_ne!(schema["additionalProperties"], false, "unexpected {key}");
+                }
+            }
+        }
+    }
+    if let Some(array) = value.as_array() {
+        if let Some(max) = schema["maxItems"].as_u64() {
+            assert!(array.len() <= max as usize);
+        }
+        if let Some(items) = schema.get("items") {
+            for item in array {
+                assert_schema(items, item)?;
+            }
+        }
+    }
+    if let (Some(text), Some(max)) = (value.as_str(), schema["maxLength"].as_u64()) {
+        assert!(text.chars().count() <= max as usize);
+    }
     Ok(())
 }
 
