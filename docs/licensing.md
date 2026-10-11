@@ -47,3 +47,7 @@ and the record of how each obligation is met. Last reconciled 2026-10-10.
 cargo deny check licenses                                  # the CI gate
 cargo about generate about.hbs -o THIRD-PARTY-NOTICES.html # what a release ships
 ```
+
+## macOS development bundle
+
+The Apple Silicon app bundle includes `LICENSE` and `THIRD-PARTY-NOTICES.html` in `Contents/Resources`. ScreenCaptureKit, Vision and AppKit are system frameworks supplied by macOS, not third-party libraries distributed inside the app. Packaging checks linked libraries to reject Xcode, Homebrew and runner-local runtime dependencies.
