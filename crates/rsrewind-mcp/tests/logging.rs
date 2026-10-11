@@ -10,6 +10,17 @@ fn the_call_log_carries_no_screen_content() -> Fallible<()> {
     use std::sync::{Arc, Mutex};
     let (_dir, data) = history()?;
     let s = server(&data, enabled());
+    let config_path = data.root().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[mcp]\nenabled = secret_configuration_value\n",
+    )?;
+    let invalid_config = rsrewind_mcp::McpServer::new(
+        data.clone(),
+        rsrewind_mcp::Settings::File(config_path),
+        None,
+        "test",
+    );
     let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
     let writer = buffer.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -25,13 +36,33 @@ fn the_call_log_carries_no_screen_content() -> Fallible<()> {
             "get_moment",
             json!({ "moment": "this:3", "include_lines": true }),
         );
+        let _ = call(&s, "get_screenshot", json!({"moment":"this:3"}));
+        let _ = call(&s, "secret_unknown_tool", json!({}));
+        assert!(!invalid_config.config().enabled);
     });
     let log = String::from_utf8(buffer.lock().map_err(|_| "lock")?.clone())?;
     assert!(
         log.contains("mcp call") && log.contains("tool=\"search\""),
         "{log}"
     );
-    for secret in ["linker", "exit code", "konsole", "build", "Blue"] {
+    for field in [
+        "channel=\"mcp\"",
+        "principal=\"os_process_owner\"",
+        "process_id=",
+        "decision=\"executed\"",
+        "decision=\"refused\"",
+    ] {
+        assert!(log.contains(field), "missing audit field {field}: {log}");
+    }
+    for secret in [
+        "linker",
+        "exit code",
+        "konsole",
+        "build",
+        "Blue",
+        "secret_unknown_tool",
+        "secret_configuration_value",
+    ] {
         assert!(!log.contains(secret), "log leaked '{secret}': {log}");
     }
     return Ok(());

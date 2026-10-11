@@ -58,7 +58,7 @@ It is explicitly **not**:
   lock), since v0.0.4, verified on one machine. Text recognition uses Tesseract once it is installed
   (see the install page); until then moments are browsable but not searchable. Other Linux desktops can run the window, `search`, `import`
   and the rest, but not the recorder.
-- **macOS** — planned, not built.
+- **macOS 14+, Apple Silicon** — development client with native capture, on-device OCR and a menu bar. Cloud-built app artifacts and acceptance requirements: [macOS setup](docs/macos.md). Interactive recording and UI acceptance still require a real Mac.
 
 ## Build requirements
 

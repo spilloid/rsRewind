@@ -41,3 +41,8 @@ pub use linux_platform::run;
 pub use recorder::{RunOptions, run_with};
 #[cfg(windows)]
 pub use windows_platform::{WindowsInstance, run};
+
+#[cfg(target_os = "macos")]
+pub mod macos_platform;
+#[cfg(target_os = "macos")]
+pub use macos_platform::run;

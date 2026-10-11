@@ -287,12 +287,17 @@ impl QueryDb {
             .map(Timestamp))
     }
 
-    /// Number of observations with a picture, and the time they span.
-    pub(crate) fn summary(&self) -> Result<(u64, Option<Timestamp>, Option<Timestamp>)> {
+    /// Number of observations with a picture and the time they span, counting only those that end at
+    /// or after `since` (all when `None`), with the span clipped to start no earlier than it.
+    pub(crate) fn summary_since(
+        &self,
+        since: Option<Timestamp>,
+    ) -> Result<(u64, Option<Timestamp>, Option<Timestamp>)> {
         Ok(self.conn.query_row(
-            "SELECT COUNT(*), MIN(started_at), MAX(ended_at) FROM events
-             WHERE kind = 'observation' AND visual_state_id IS NOT NULL",
-            [],
+            "SELECT COUNT(*), MAX(MIN(started_at), COALESCE(?1, MIN(started_at))), MAX(ended_at) FROM events
+             WHERE kind = 'observation' AND visual_state_id IS NOT NULL
+               AND (?1 IS NULL OR ended_at >= ?1)",
+            [since.map(|s| s.0)],
             |row| {
                 Ok((
                     u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),

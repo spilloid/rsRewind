@@ -1664,11 +1664,11 @@ mod tests {
     #[test]
     fn find_shortcuts() {
         use keyboard::{Key, Modifiers};
-        assert!(is_find_key(Key::Character("f"), Modifiers::CTRL));
+        assert!(is_find_key(Key::Character("f"), Modifiers::COMMAND));
         assert!(!is_find_key(Key::Character("f"), Modifiers::empty()));
         assert!(is_find_key(Key::Character("/"), Modifiers::empty()));
-        assert!(!is_find_key(Key::Character("/"), Modifiers::CTRL));
-        assert!(!is_find_key(Key::Character("g"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("/"), Modifiers::COMMAND));
+        assert!(!is_find_key(Key::Character("g"), Modifiers::COMMAND));
     }
 
     #[test]

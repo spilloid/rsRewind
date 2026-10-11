@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **macOS Apple Silicon development client.** Native screen capture and on-device OCR, the shared rewind window, a menu bar with pause/resume and confirmed forget, and per-user login startup. ARM64 cloud CI builds an ad-hoc signed app artifact; interactive Mac acceptance and notarization remain release gates. Consecutive unchanged screens reuse existing observations and compressed storage.
+
 - **An MCP server for AI assistants.** `rsrewind mcp` lets Claude Code, Claude Desktop, Cursor, Codex or any MCP
   client search your screen history and read what was on screen (`search`, `recent`, `moment_at`, `get_moment`,
   `list_gaps`, `list_sources`, `get_status`, `pause_recording`, and `get_screenshot` if you allow pictures). It runs

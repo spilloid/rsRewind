@@ -194,10 +194,16 @@ impl History {
 
     /// Every usable source, this machine first, then replicas by id.
     pub fn sources(&self) -> Result<Vec<SourceInfo>> {
+        self.sources_since(None)
+    }
+
+    /// [`History::sources`] counting only history that ends at or after `since`, spans clipped to it.
+    /// Sources with nothing in that window still appear, with zero observations.
+    pub fn sources_since(&self, since: Option<Timestamp>) -> Result<Vec<SourceInfo>> {
         self.lanes
             .iter()
             .map(|lane| {
-                let (observations, first, last) = lane.db.summary()?;
+                let (observations, first, last) = lane.db.summary_since(since)?;
                 Ok(SourceInfo {
                     source: lane.source,
                     kind: lane.kind,

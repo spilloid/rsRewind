@@ -7,7 +7,7 @@ over stdio: your assistant starts it as a program. rsRewind opens no network por
 ## Before you turn it on
 
 **Assistants send what they read to their model, which usually runs on the provider's servers.** Turning this on is
-the one way rsRewind history can leave your computer. It is off until you run:
+a way selected rsRewind history can leave your computer through that assistant. It is off until you run:
 
 ```sh
 rsrewind mcp --enable      # prints what is shared; rsrewind mcp --disable turns it off
@@ -28,7 +28,9 @@ Linux tarball: wherever you installed it, for example `~/.local/bin/rsrewind`).
 | Cursor | `.cursor/mcp.json` (or global): the same `mcpServers` entry |
 | Codex CLI | `~/.codex/config.toml`: `[mcp_servers.rsrewind]` with `command = "rsrewind"` and `args = ["mcp"]` |
 
-After changing settings below, restart the assistant's connection so it reads the tool list again.
+Settings are re-read before every request. Disabling access, narrowing the time or machine scope, or revoking screenshots
+takes effect on an existing connection's next call; invalid or unreadable configuration also turns access off. Restart
+the assistant's connection after changing settings so its cached tool catalogue refreshes.
 
 ## What agents may access (`config.toml`, `[mcp]`)
 
@@ -56,9 +58,26 @@ These limits apply both to what tools are offered and to every call: a hidden to
 | `get_status` | Recorder state and what agents may access (always available, even when access is off) |
 | `pause_recording` | Pause for some minutes or until you resume |
 
+`pause_recording` only extends an existing pause. It cannot shorten an indefinite pause or resume recording. Repeating
+a timed pause may extend its deadline, so the tool is not advertised as idempotent.
+
 Times can be RFC 3339, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`, or a duration ago such as `30m`, `2h`, `7d`.
+Local times use the server computer's timezone. Use RFC 3339 with an explicit offset to avoid ambiguous times.
+Search returns at most 50 moments and recent at most 100. Gap requests span at most 366 days; gap and machine lists
+return at most 500 rows with a `truncated` marker. Moment text is limited to 20,000 characters, screenshots to 4 MiB;
+oversized text results are refused with a request to narrow the query. Screenshots return WebP image content; other
+successful tools also return JSON text and `structuredContent` matching their advertised `outputSchema`.
 
 ## What is logged
 
-Each call writes one line to rsRewind's log: tool name, request id, number of results, duration. Never the text,
-titles or pictures it returned.
+Calls log the static tool name, channel `mcp`, local process-owner boundary, process ID, server-generated call number,
+executed/refused decision, result count and duration. Client request IDs and arguments are not logged because they may
+contain screen content. The process ID and call number correlate calls without copying client strings into logs.
+Recognized text, window titles and pictures are never logged. These are operational logs, not a durable compliance
+ledger or a separately authenticated application identity: the server runs as the OS user who launched it and inherits
+that user's filesystem permissions. Do not configure an untrusted assistant to launch it.
+
+The supported protocol versions are `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`. Clients must send
+`initialize`, then `notifications/initialized`, before using tools. The server exits when standard input closes.
+JSON-RPC batches are accepted only when `2025-03-26` was negotiated. No remote HTTP endpoint, OAuth flow, resources,
+prompts, subscriptions or background tasks are advertised.

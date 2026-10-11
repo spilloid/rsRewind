@@ -1,6 +1,7 @@
 //! `rsrewind.exe`: one executable for the recorder, the UI and every command-line tool.
 
 mod doctor;
+mod macos_login;
 mod render;
 mod replicate;
 mod timespec;
@@ -48,6 +49,10 @@ enum Command {
     Pause {
         #[arg(long, value_name = "N")]
         minutes: Option<u32>,
+        /// Never shorten or end a pause already in force (what agents use: a pause from them can
+        /// only make recording stop sooner or longer, never start it again).
+        #[arg(long)]
+        extend_only: bool,
     },
     /// Resume recording.
     Resume,
@@ -180,6 +185,21 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Finder launches the app bundle without a subcommand. Open the front door;
+    // recording still requires the user's explicit action there.
+    #[cfg(target_os = "macos")]
+    let cli = if std::env::args_os().len() == 1 {
+        Cli {
+            data_dir: None,
+            command: Command::Ui {
+                foreground: true,
+                appearance: Appearance::System,
+            },
+        }
+    } else {
+        Cli::parse()
+    };
+    #[cfg(not(target_os = "macos"))]
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
@@ -200,7 +220,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Start => start(&data),
         Command::Stop => stop(&data),
         Command::Status { json } => status(&data, json),
-        Command::Pause { minutes } => pause(&data, minutes),
+        Command::Pause {
+            minutes,
+            extend_only,
+        } => pause(&data, minutes, extend_only),
         Command::Resume => resume(&data),
         Command::Search {
             text,
@@ -246,7 +269,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 fn load_config(data: &DataDir) -> Result<Config> {
     Config::write_default_if_missing(&data.config_file())?;
     Ok(Config::load_or_default(&data.config_file())?)
@@ -281,7 +304,7 @@ fn init_logging(
     Ok(guard)
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 fn daemon(data: &DataDir) -> Result<ExitCode> {
     data.ensure()?;
     let config = load_config(data)?;
@@ -295,7 +318,7 @@ fn daemon(data: &DataDir) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 fn start(data: &DataDir) -> Result<ExitCode> {
     if let Some(status) = live_status(data)? {
         println!("rsRewind is already recording (pid {}).", status.pid);
@@ -303,6 +326,14 @@ fn start(data: &DataDir) -> Result<ExitCode> {
     }
     data.ensure()?;
     load_config(data)?;
+    // The user's explicit Start action requests macOS authorization before detaching.
+    // A background recorder only checks an existing grant and never repeatedly prompts.
+    #[cfg(target_os = "macos")]
+    if !rsrewind_capture::macos::screen_recording_permission(true) {
+        bail!(
+            "Grant rsRewind Screen & System Audio Recording in System Settings → Privacy & Security, then restart the app and try Start again"
+        );
+    }
     let exe = std::env::current_exe().context("locate the rsrewind executable")?;
     let mut command = std::process::Command::new(exe);
     command
@@ -332,7 +363,7 @@ fn start(data: &DataDir) -> Result<ExitCode> {
     )
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 fn stop(data: &DataDir) -> Result<ExitCode> {
     if !signal_stop(data)? {
         println!("rsRewind is not recording in this session.");
@@ -355,7 +386,7 @@ fn signal_stop(_: &DataDir) -> Result<bool> {
 }
 
 /// SIGTERM to the pid in a live heartbeat. The recorder finishes its tick, flushes and exits.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn signal_stop(data: &DataDir) -> Result<bool> {
     let Some(status) = live_status(data)? else {
         return Ok(false);
@@ -529,10 +560,18 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn pause(data: &DataDir, minutes: Option<u32>) -> Result<ExitCode> {
+fn pause(data: &DataDir, minutes: Option<u32>, extend_only: bool) -> Result<ExitCode> {
     let store = Store::open(data)?;
-    let until = minutes.map(|m| Timestamp::now().saturating_add_millis(i64::from(m) * 60_000));
-    store.set_control(CaptureState::Paused { until })?;
+    let mut until = minutes.map(|m| Timestamp::now().saturating_add_millis(i64::from(m) * 60_000));
+    if extend_only {
+        // What is in force afterwards, which may be a longer pause than asked for.
+        until = match store.extend_pause(until)? {
+            CaptureState::Paused { until } => until,
+            other => bail!("recording is not pausable now (state: {other:?})"),
+        };
+    } else {
+        store.set_control(CaptureState::Paused { until })?;
+    }
     match until {
         Some(until) => println!(
             "○ Paused until {}. Resume early with `rsrewind resume`.",
@@ -826,6 +865,17 @@ fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Resul
     Ok(ExitCode::SUCCESS)
 }
 
+/// Per-user LaunchAgent for the menu bar and recorder on the next login.
+#[cfg(target_os = "macos")]
+fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Result<ExitCode> {
+    macos_login::set(exe, data.root(), toggle == Toggle::On)?;
+    println!(
+        "rsRewind login startup is {}.",
+        if toggle == Toggle::On { "on" } else { "off" }
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Login startup on Windows: a value under the per-user `Run` key, which starts the tray (and,
 /// through it, the recorder) when you sign in.
 #[cfg(windows)]
@@ -877,7 +927,7 @@ fn set_autostart(exe: &std::path::Path, data: &DataDir, toggle: Toggle) -> Resul
     Ok(ExitCode::SUCCESS)
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn set_autostart(_: &std::path::Path, _: &DataDir, _: Toggle) -> Result<ExitCode> {
     bail!("starting at login is set up on Linux and Windows so far")
 }
@@ -906,58 +956,66 @@ fn mcp(data: &DataDir, enable: bool, disable: bool) -> Result<ExitCode> {
     }
     let config = Config::load_or_default(&data.config_file())?;
     let _guard = init_logging(data, &config, false, "rsrewind-mcp")?;
-    let server = rsrewind_mcp::McpServer {
-        data: data.clone(),
-        config: config.mcp,
-        exe: std::env::current_exe().ok(),
-        version: env!("CARGO_PKG_VERSION"),
-    };
+    // Settings are re-read on every request, so `rsrewind mcp --disable` applies to open connections.
+    let server = rsrewind_mcp::McpServer::new(
+        data.clone(),
+        rsrewind_mcp::Settings::File(data.config_file()),
+        std::env::current_exe().ok(),
+        env!("CARGO_PKG_VERSION"),
+    );
     let stdin = std::io::stdin();
     rsrewind_mcp::serve(&server, stdin.lock(), std::io::stdout().lock())?;
     Ok(ExitCode::SUCCESS)
 }
 
-/// Sets `enabled` under `[mcp]` in config.toml, keeping the rest of the file (and its comments).
+/// Sets `enabled` under `[mcp]` in config.toml through a TOML syntax tree, so comments, layout and
+/// every other setting survive. A file that cannot be read or parsed is left untouched; the result is
+/// verified (it parses, `mcp.enabled` is what was asked, nothing else changed) and then replaces the
+/// file atomically.
 fn set_mcp_enabled(path: &std::path::Path, on: bool) -> Result<()> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let value = if on { "true" } else { "false" };
-    let mut out = Vec::new();
-    let (mut in_mcp, mut seen_section, mut done) = (false, false, false);
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            if in_mcp && !done {
-                out.push(format!("enabled = {value}"));
-                done = true;
-            }
-            in_mcp = trimmed == "[mcp]";
-            seen_section |= in_mcp;
-        } else if in_mcp
-            && trimmed.starts_with("enabled")
-            && trimmed[7..].trim_start().starts_with('=')
-        {
-            out.push(format!("enabled = {value}"));
-            done = true;
-            continue;
-        }
-        out.push(line.to_string());
+    let text = match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+            anyhow::anyhow!(
+                "{} is not valid UTF-8; fix it first (nothing was changed)",
+                path.display()
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    let before = Config::parse(&text).map_err(|e| {
+        anyhow::anyhow!(
+            "{} does not parse ({e}); fix it first (nothing was changed)",
+            path.display()
+        )
+    })?;
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| {
+        anyhow::anyhow!(
+            "{} does not parse ({e}); nothing was changed",
+            path.display()
+        )
+    })?;
+    if !doc.contains_key("mcp") {
+        doc["mcp"] = toml_edit::table();
     }
-    if in_mcp && !done {
-        out.push(format!("enabled = {value}"));
-        done = true;
+    let Some(mcp) = doc["mcp"].as_table_like_mut() else {
+        bail!(
+            "[mcp] in {} is not a table; nothing was changed",
+            path.display()
+        );
+    };
+    mcp.insert("enabled", toml_edit::value(on));
+    let new = doc.to_string();
+    let after = Config::parse(&new)
+        .map_err(|e| anyhow::anyhow!("the edit would not parse ({e}); nothing was changed"))?;
+    let mut expected = before;
+    expected.mcp.enabled = on;
+    if after != expected {
+        bail!("the edit would change more than [mcp] enabled; nothing was changed");
     }
-    if !seen_section {
-        out.push(String::new());
-        out.push("[mcp]".into());
-        out.push(format!("enabled = {value}"));
-        done = true;
-    }
-    debug_assert!(done);
-    let new = out.join("\n") + "\n";
-    // Refuse to write a file the recorder could not read back.
-    Config::parse(&new)
-        .map_err(|e| anyhow::anyhow!("config.toml would not parse after the change: {e}"))?;
-    std::fs::write(path, new).with_context(|| format!("write {}", path.display()))
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, &new).with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
 }
 
 /// `rsrewind ui --appearance`.
@@ -1018,15 +1076,15 @@ fn detach(command: &mut std::process::Command) {
     command.process_group(0);
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn daemon(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn start(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn stop(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }

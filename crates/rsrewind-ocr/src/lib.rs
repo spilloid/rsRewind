@@ -35,3 +35,8 @@ pub use gdi_render::render_text_to_frame;
 pub use geometry::{downscale_bgra, packed_pixels, scale_rect, union_rect};
 #[cfg(target_os = "linux")]
 pub use tesseract::{ENGINE_NAME, TesseractEngine, TesseractOutput, lines_from_tsv};
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{ENGINE_NAME, VisionEngine, VisionOutput};
