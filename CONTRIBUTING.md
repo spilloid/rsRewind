@@ -13,9 +13,7 @@ If `cargo`/`rustc` aren't on your shell's `PATH` (installed via `rustup` but not
 prefix with the toolchain's `bin` directory — see `CLAUDE.md` for the exact prefix used on the
 maintainer's development machine.
 
-Target is `x86_64-pc-windows-msvc` (pinned in `rust-toolchain.toml`, which also pins the stable
-channel and the `rustfmt`/`clippy` components). Building needs MSVC Build Tools and the Windows 11
-SDK; see `README.md`'s build requirements.
+Build for your host platform. Windows requires MSVC Build Tools and the Windows SDK; see [platform build requirements](docs/development.md) and [Mac setup and acceptance](docs/macos.md). The Rust toolchain and lint components are pinned in `rust-toolchain.toml`.
 
 ## The bar before a change ships
 

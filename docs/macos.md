@@ -6,13 +6,14 @@ This artifact is ad-hoc signed; it has no Developer ID signature or notarization
 Do not confuse it with a notarized public release. Interactive capture, permission,
 menu layout and sleep/wake acceptance require a real Mac and are not proven by CI.
 
+[Installation overview](https://spilloid.github.io/rsRewind/install.html#macos) · [Everyday guide](https://spilloid.github.io/rsRewind/guide.html)
+
 ## Install and open
 
-Download the `rsRewind-macos-arm64` artifact from the corresponding GitHub Actions
-run, unzip it, and copy `rsRewind.app` to Applications. Open it to see the existing
+Open a successful **main** run in the [Mac build workflow](https://github.com/spilloid/rsRewind/actions/workflows/macos.yml?query=branch%3Amain). Download the `rsRewind-macos-arm64` artifact (GitHub sign-in required; artifacts expire). Extract the outer ZIP, verify the included app ZIP with `shasum -a 256 -c rsRewind-0.0.6-macos-arm64.zip.sha256`, then extract that inner ZIP and copy `rsRewind.app` to Applications. The checksum checks integrity, not publisher identity. macOS may block this development app because it is not notarized. Open it to see the existing
 native rewind window. Recording starts only when you choose **Start recording**.
 macOS controls screen-recording access in System Settings → Privacy & Security →
-Screen & System Audio Recording. Grant access to the application you actually use
+Screen Recording (or Screen & System Audio Recording, depending on macOS version). Grant access to the application you actually use
 and restart it if macOS asks. The app cannot bypass a denied permission.
 
 For CLI and MCP connections use the binary inside the app:

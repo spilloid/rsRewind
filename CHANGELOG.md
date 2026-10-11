@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Documentation
+
+- Product-first website and README, platform-aware installation suggestions, everyday guide and separate CLI/development references. macOS is clearly labeled as a development preview; privacy and release-channel limits stay visible.
+
 ### Added
 
 - **macOS Apple Silicon development client.** Native screen capture and on-device OCR, the shared rewind window, a menu bar with pause/resume and confirmed forget, and per-user login startup. ARM64 cloud CI builds an ad-hoc signed app artifact; interactive Mac acceptance and notarization remain release gates. Consecutive unchanged screens reuse existing observations and compressed storage.

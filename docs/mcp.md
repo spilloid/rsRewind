@@ -1,5 +1,8 @@
 # Using rsRewind from an AI assistant (MCP)
 
+Use MCP when you want an assistant to find a moment you saw or query your timeline. Start with the desktop app and [first-run guide](https://spilloid.github.io/rsRewind/guide.html) before enabling access. **Available in development builds from main; not in the public v0.0.6 downloads.** It is off by default, and returned content may reach your assistant provider.
+
+
 `rsrewind mcp` lets an AI assistant search and read your screen history: "what was the error before lunch?",
 "find the price I saw on that page yesterday". It speaks the [Model Context Protocol](https://modelcontextprotocol.io)
 over stdio: your assistant starts it as a program. rsRewind opens no network port.

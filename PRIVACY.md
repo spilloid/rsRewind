@@ -9,12 +9,12 @@ document, treat that as a bug: `docs/standards.md` tracks this repository's comm
 docs and behavior in sync (STD-003), and a privacy-document mismatch is exactly the kind of drift
 that standard exists to catch.
 
-## Everything stays local
+## Local by default
 
 rsRewind has no network client code anywhere in the recording path. There is no cloud sync, no
-account, no analytics/telemetry call, and no listening socket. Your data never leaves the machine
-it was recorded on unless you move it yourself (copying the `%LOCALAPPDATA%\rsRewind` folder, for
-backup or migration to another machine you own).
+account, no analytics/telemetry call, and no listening socket. History stays in your local store unless you export or copy it, or enable optional MCP access for an assistant. Returned assistant content may reach its provider; see the MCP section below. Run `rsrewind data-dir` to locate your store on any platform.
+
+> **Early release:** known privacy enforcement gaps remain in [issue #12](https://github.com/spilloid/rsRewind/issues/12). The rules below describe intended behavior; use a session you are comfortable recording. Mac privacy, permission and lock/sleep acceptance still require a real Mac.
 
 ## What is captured
 
@@ -30,7 +30,7 @@ For each stored visual state:
 - **The foreground process's name and, where available, its full executable path** (reading an
   elevated process's path can fail; in that case the process name is still recorded, but the path
   is left empty — this never blocks capture).
-- **The foreground window's title and window class.**
+- **The foreground window's title and window class**, where available. The Mac development adapter currently reports no foreground application; its visible-window list is still used for exclusions.
 - **A timestamp** (UTC, millisecond precision) and which **monitor** (device name, resolution,
   position, DPI) the state came from.
 - **OCR text** recognized from the image, if OCR is enabled (`ocr.enabled`, on by default), stored
@@ -83,6 +83,8 @@ it. The recorder writes `~/.local/share/applications/rsrewind-recorder.desktop` 
 path) each time it starts. That file is a standing permission for that program path; delete it to
 withdraw it.
 
+Suggested patterns primarily cover Windows/Linux app names; verify actual app names on the Mac preview. Editing a process or title list replaces that list, so preserve any defaults you still want.
+
 These defaults are **suggestions, not a mandatory policy** — every rule can be edited or removed
 in `config.toml`, and you can add your own. `config.toml` rejects unknown keys (a typo like
 `excluded_proceses` fails to parse rather than silently doing nothing), specifically so a mistake
@@ -90,12 +92,12 @@ in a privacy rule is loud, not silent.
 
 ## Pausing and resuming
 
-`rsrewind pause` stops capture immediately, until you run `rsrewind resume`. `rsrewind pause
+`rsrewind pause` requests a pause until you run `rsrewind resume`. Check `rsrewind status` after requesting it; known acknowledgement/enforcement gaps are tracked in [issue #12](https://github.com/spilloid/rsRewind/issues/12). `rsrewind pause
 --minutes N` pauses for a fixed window that resumes itself automatically once it expires.
 
 **Recording state is always discoverable.** `rsrewind status` reports whether the recorder is
-currently recording or paused, and there is deliberately no hidden or stealth mode — pausing is
-the only way to stop capture, and it is always visible that you did it (or didn't).
+currently recording or paused, and there is deliberately no hidden or stealth mode — pause and stop controls are
+available, and it is always visible that you did it (or didn't).
 
 ## How deletion works
 
@@ -135,11 +137,10 @@ before more history is deleted.
 **rsRewind does not currently encrypt anything at rest.** `recall.db`, every WebP screenshot
 under `media\`, and `config.toml` (including your privacy rules) are stored as plain files.
 
-The only protection your data has today is whatever normal **Windows user-profile ACLs** already
-apply to `%LOCALAPPDATA%` — the same protection as any other file in your user profile. Concretely,
+Protection comes from normal OS account permissions and any disk encryption you configure. On Windows this includes user-profile ACLs; Linux and macOS stores are private to the user. rsRewind itself adds no encryption. Concretely,
 this means:
 
-- **Anyone who can log into your Windows account can read your entire recorded history.**
+- **Anyone who can use your OS account can read your recorded history.**
 - **A local administrator on the machine can read it too**, regardless of which account it was
   recorded under — this is true of essentially anything stored in a user profile on Windows, not
   specific to rsRewind, but worth stating plainly given what's being stored here.

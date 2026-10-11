@@ -28,21 +28,23 @@ for page in site/index.html site/install.html; do
 done
 
 # Every versioned asset link on the install page must point at the declared version.
-stale=$(grep -o 'releases/download/v[0-9][0-9.]*' site/install.html | grep -v "v$declared\$" || true)
+stale=$(grep -oh 'releases/download/v[0-9][0-9.]*' site/*.html site/*.js | grep -v "v$declared\$" || true)
 [ -z "$stale" ] || { say "site/install.html links a different version: $stale"; fail=1; }
 
 # The site must not load anything from other servers (it is a privacy tool's site).
 if grep -nE '(src|href)="https?://' site/*.html | grep -vE 'href="https://github\.com/spilloid/rsRewind' ; then
   say "site pages must not reference other hosts (see above)"; fail=1
 fi
-if grep -nE '<script|@import|url\(https?:' site/*.html site/style.css; then
-  say "site must not include scripts or remote CSS (see above)"; fail=1
+if grep -nE '<script|@import|url\(https?:' site/*.html site/style.css | grep -vE '^site/(index|install)\.html:[0-9]+:<script src="platform\.js" defer></script>$'; then
+  say "site permits only the local platform selector and no remote CSS (see above)"; fail=1
 fi
 
 # Every image the pages reference must exist.
 for ref in $(grep -oh 'src="img/[^"]*"' site/*.html | sed 's/src="//;s/"$//' | sort -u); do
   [ -f "site/$ref" ] || { say "site references missing file site/$ref"; fail=1; }
 done
+
+python3 scripts/check-site.py || fail=1
 
 if [ "$fail" -eq 0 ]; then echo "docs check ok: v$declared"; fi
 exit "$fail"

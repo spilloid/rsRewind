@@ -3,96 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>rsRewind</title>
-<meta name="description" content="A local-first, searchable record of what happened on your Windows desktop. Rewind anything you did.">
+<title>rsRewind — find something you saw</title>
+<meta name="description" content="Search your own screen history. Local recording for Windows and KDE Plasma, with an Apple Silicon development preview.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230e0d0c%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%278%27 fill=%27none%27 stroke=%27%23d4a64a%27 stroke-width=%273%27/%3E%3Cpath d=%27M16 8v8l-5 3%27 stroke=%27%23d4a64a%27 stroke-width=%273%27 fill=%27none%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<header class="top">
-  <a class="brand" href="index.html">rs<span>Rewind</span></a>
-  <nav aria-label="Site">
-    <a href="index.html" aria-current="page">Overview</a>
-    <a href="install.html">Install</a>
-    <a href="probes.html">Many machines</a>
-    <a href="privacy.html">Privacy</a>
-    <a href="https://github.com/spilloid/rsRewind">Source</a>
-  </nav>
-</header>
-<section class="hero">
-  <div class="kicker">Local. Searchable. Yours.</div>
-  <h1>Rewind anything you did.</h1>
-  <p class="lede">rsRewind keeps a searchable visual record of your screen, on your own machine. Type a few words you remember, jump to the moment they were on screen, and scrub through the day around it.</p>
-  <div class="cta">
-    <a class="btn primary" href="install.html">Install v0.0.6</a>
-    <a class="btn" href="https://github.com/spilloid/rsRewind/releases/tag/v0.0.6">Release notes and downloads</a>
-    <span class="note">Windows 11 (signed) · KDE Plasma on Wayland · early release</span>
-  </div>
-</section>
-
-<figure class="shot wide">
-  <picture><source srcset="img/room-dark.webp" type="image/webp"><img src="img/room-dark.png" width="3200" height="1800" alt="The rsRewind rewind room: screenshots hang in a 3D space with one lane per machine, time running into the distance."></picture>
-  <figcaption>The rewind room, showing three machines as lanes. Screenshots on this site are of the real app running on made-up history for a fictional company.</figcaption>
-</figure>
-
-<section>
-  <div class="kicker">See it</div>
-  <h2>Search, jump, look closer</h2>
-  <div class="shots">
-    <figure class="shot">
-      <picture><source srcset="img/search-cue.webp" type="image/webp"><img src="img/search-cue.png" width="3200" height="1800" alt="Searching for "toner low": the room has moved to the matching moment and the detail pane shows the screenshot and its recognized text." loading="lazy"></picture>
-      <figcaption><strong>Search cues the room.</strong> Pick a result and the room moves to the moment the words were on screen. The detail pane shows the picture and the text it recognized.</figcaption>
-    </figure>
-    <figure class="shot">
-      <picture><source srcset="img/viewer-fullscreen.webp" type="image/webp"><img src="img/viewer-fullscreen.png" width="3200" height="1800" alt="The full-window viewer on a printer settings page, with every matching word outlined in gold." loading="lazy"></picture>
-      <figcaption><strong>Double-click for the full picture.</strong> Zoom toward the pointer, pan, step to the previous or next moment on the same machine. Words that match your search are outlined in gold.</figcaption>
-    </figure>
-    <figure class="shot">
-      <picture><source srcset="img/lane-filter.webp" type="image/webp"><img src="img/lane-filter.png" width="3200" height="1800" alt="The room filtered to a single machine, FRONT-DESK-PC." loading="lazy"></picture>
-      <figcaption><strong>One machine at a time.</strong> Pick a source and the room and search narrow to it.</figcaption>
-    </figure>
-    <figure class="shot">
-      <picture><source srcset="img/depth-wide.webp" type="image/webp"><img src="img/depth-wide.png" width="3200" height="1800" alt="The room zoomed out to reach back 32 hours across all machines." loading="lazy"></picture>
-      <figcaption><strong>Zoom out in time.</strong> Depth is logarithmic: the last minute gets as much room as the last day.</figcaption>
-    </figure>
-    <figure class="shot wide">
-      <picture><source srcset="img/room-light.webp" type="image/webp"><img src="img/room-light.png" width="3200" height="1800" alt="The rewind room in light mode." loading="lazy"></picture>
-      <figcaption><strong>Light or dark.</strong> It follows your system setting; <code>rsrewind ui --appearance light</code> forces one.</figcaption>
-    </figure>
-  </div>
-</section>
-
-<section>
-  <div class="kicker">What it does</div>
-  <h2>Search is the way into your timeline</h2>
-  <div class="grid">
-    <div class="card"><h3>Remembers what changed</h3><p>Captures each monitor and keeps only the moments that look different. A screen that sits still for an hour costs one entry, not thousands of screenshots.</p></div>
-    <div class="card"><h3>Reads the screen back</h3><p>Windows text recognition indexes everything it can read. Search with words, phrases and prefixes, narrowed by application, window title or time.</p></div>
-    <div class="card"><h3>A room you can walk through</h3><p>Screenshots hang in a 3D room, time running into the distance, one lane per machine. Drag or scroll to scrub; pick a search result and the room moves to that moment.</p></div>
-    <div class="card"><h3>Many machines, one view</h3><p>Small recorders on other machines seal their history into files you carry to your main PC. It shows up as extra lanes, safely, with no duplicates. <a href="probes.html">How it works</a>.</p></div>
-    <div class="card"><h3>No cloud, no network</h3><p>No accounts, no telemetry, no server. Recording, search and the window run as plain programs on your machine. <a href="privacy.html">The privacy rules</a>.</p></div>
-    <div class="card"><h3>Small and native</h3><p>One Rust program, about 16 MB. It is built to idle quietly with bounded memory, and the viewer is a separate program, so it can never get in the way of the recorder.</p></div>
-  </div>
-</section>
-
-<section>
-  <div class="kicker">Try it</div>
-  <h2>Five commands</h2>
-<pre><code>rsrewind start                 # begin recording in the background
-rsrewind status                # always shows whether it is recording
-rsrewind search konica toner   # find the moment
-rsrewind ui                    # open the rewind room
-rsrewind pause --minutes 30    # stop recording for a while</code></pre>
-  <p class="note">Recording stops on its own after five minutes without keyboard or mouse input, and resumes when you come back.</p>
-</section>
-
-<section>
-  <div class="kicker">Where it stands</div>
-  <h2>Early, and honest about it</h2>
-  <div class="callout warn"><p><strong>Not ready for sensitive desktops yet.</strong> An independent review of the recorder found privacy gaps that are not fixed in this release, and there is no encryption at rest. Use it on a machine and a session you are comfortable recording. Every known issue, with what you can do meanwhile, is in <a href="https://github.com/spilloid/rsRewind/issues/12">issue #12</a>.</p></div>
-  <p>The viewer has been checked on Windows with made-up history, and multi-machine import has had careful testing but no outside security review yet. The Linux recorder (KDE Plasma on Wayland) is new in 0.0.4 and has run on one machine; since 0.0.6 it reads the screen with Tesseract, which you install from your distribution. A macOS recorder is planned, not built.</p>
-</section>
+<header class="top"><a class="brand" href="index.html">rs<span>Rewind</span></a><nav aria-label="Site"><a href="index.html" aria-current="page">Overview</a><a href="install.html">Get rsRewind</a><a href="guide.html">Guide</a><a href="probes.html">Multiple computers</a><a href="privacy.html">Privacy</a></nav></header>
+<main id="main">
+<section class="hero"><div class="kicker">Your screen history. On your computer.</div><h1>Find something you saw.</h1><p class="lede">A page, a message, a detail you forgot to save. Search a few words you remember and return to the moment they were on your screen.</p><div class="cta"><a class="btn primary" data-platform-download href="install.html">Get rsRewind</a><a class="btn" href="guide.html">Your first few minutes</a></div><p class="note" data-platform-note>Windows and Linux v0.0.6 · Apple Silicon development preview · <a href="install.html">All platforms</a></p></section>
+<figure class="shot wide"><picture><source srcset="img/room-dark.webp" type="image/webp"><img src="img/room-dark.png" width="3200" height="1800" alt="The Windows viewer showing a timeline of screenshots from three computers."></picture><figcaption>Real Windows app, made-up history. Development builds have an updated viewer; Mac desktop acceptance is pending.</figcaption></figure>
+<section><div class="kicker">From “where was that?” to “here it is”</div><h2>Remember less. Find more.</h2><div class="grid"><div class="card"><h3>Record what changed</h3><p>Build a visual history while you work. Unchanged screens extend a moment instead of filling your history with identical screenshots.</p></div><div class="card"><h3>Search what you remember</h3><p>On-device text recognition makes words on your screen searchable. Pick a result to see the context around it.</p></div><div class="card"><h3>Look closer</h3><p>Open a screenshot, zoom into the details, and step through nearby moments. Your history lives on your computer.</p></div></div></section>
+<section><h2>Choose your platform</h2><div class="grid"><div class="card"><h3>Windows</h3><p>Windows 11, x64. Signed installer; no administrator rights needed.</p><a href="install.html#windows">Get v0.0.6 for Windows →</a></div><div class="card"><h3>Linux</h3><p>KDE Plasma 6 on Wayland, x86-64. Install Tesseract for text search.</p><a href="install.html#linux">Get v0.0.6 for Linux →</a></div><div class="card"><h3>Mac preview</h3><p>macOS 14+, Apple Silicon. Cloud-built ARM64 app; ad-hoc signed and awaiting real-Mac acceptance.</p><a href="install.html#macos">Try the development build →</a></div></div><div class="callout warn"><p><strong>Start with a harmless test session.</strong> This is an early release with unencrypted history and <a href="https://github.com/spilloid/rsRewind/issues/12">known privacy gaps</a>. Read <a href="privacy.html">what gets recorded</a> before using it on your everyday desktop.</p></div></section>
+<section><h2>Room to go deeper</h2><div class="grid"><div class="card"><h3>Several computers</h3><p>Bring exported history into one view, without setting up a server.</p><a href="probes.html">Transfer history →</a></div><div class="card"><h3>Your controls</h3><p>Pause, stop, set exclusions and decide how long to keep history.</p><a href="privacy.html">Understand your data →</a></div><div class="card"><h3>Assistants and automation</h3><p>Optional MCP in development builds, plus command-line tools for search and diagnostics.</p><a href="https://github.com/spilloid/rsRewind/blob/main/docs/README.md">Explore the reference →</a></div></div><details><summary>See search and the screenshot viewer</summary><div class="shots"><figure class="shot"><img src="img/search-cue.webp" width="3200" height="1800" loading="lazy" alt="A search result selecting its matching screenshot."><figcaption>Search takes you back to the matching moment.</figcaption></figure><figure class="shot"><img src="img/viewer-fullscreen.webp" width="3200" height="1800" loading="lazy" alt="A full-window screenshot with matching words highlighted."><figcaption>Look closer, then step through adjacent moments.</figcaption></figure></div></details></section>
+</main>
 <footer>
   <span>rsRewind is MIT licensed. A Spillers Technology project.</span>
   <a href="https://github.com/spilloid/rsRewind/blob/main/CHANGELOG.md">Changelog</a>
@@ -100,6 +26,8 @@ rsrewind pause --minutes 30    # stop recording for a while</code></pre>
   <a href="https://github.com/spilloid/rsRewind/issues">Issues</a>
   <span>This site loads nothing from other servers.</span>
 </footer>
+
 </div>
+<script src="platform.js" defer></script>
 </body>
 </html>
