@@ -19,11 +19,18 @@ pub struct Migration {
 }
 
 /// Every migration this build knows, in order. Released entries are immutable.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial",
-    sql: include_str!("sql/0001_initial.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial",
+        sql: include_str!("sql/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "marks",
+        sql: include_str!("sql/0002_marks.sql"),
+    },
+];
 
 /// The schema version this build writes and expects. Defined in `rsrewind-core` so the read side
 /// can check it without depending on this crate; the assertion below keeps the two in lockstep.

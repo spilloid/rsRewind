@@ -6,12 +6,14 @@
 //! OCR threads (and a short-lived CLI) can each hold their own.
 
 mod error;
+mod marks;
 pub mod media;
 pub mod migrations;
 mod segment;
 mod store;
 
 pub use error::{Result, StorageError};
+pub use marks::{MAX_MARK_LABEL_CHARS, MarkId, normalize_mark_label};
 pub use migrations::{MIGRATIONS, Migration, SCHEMA_VERSION};
 pub use segment::{
     DEFAULT_MAX_EVENTS, DEFAULT_SETTLE_MS, ExportOptions, ExportReport, ExportStatus,

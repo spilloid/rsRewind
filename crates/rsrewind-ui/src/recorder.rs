@@ -107,16 +107,40 @@ impl Control {
         &self,
         args: &'static [&'static str],
     ) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        self.run_args(args.iter().map(|a| (*a).to_owned()).collect(), None)
+    }
+
+    /// [`Control::run`] with arguments built at run time (mark ids and times), and `input` written
+    /// to the child's standard input. Each argument is one argv element (no shell). Labels go as
+    /// `input` (`--label-stdin`), never as arguments: arguments are visible in the process list.
+    pub fn run_args(
+        &self,
+        args: Vec<String>,
+        input: Option<String>,
+    ) -> impl Future<Output = Result<(), String>> + Send + 'static {
         let this = self.clone();
         off_thread(Err("could not run rsrewind".to_string()), move || {
-            let Some(mut command) = this.command(args) else {
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let Some(mut command) = this.command(&refs) else {
                 return Err("could not find the rsrewind executable".into());
             };
             // `start` and `tray` leave a background process behind; it must not hold our pipes.
-            let output = command
-                .stdout(Stdio::null())
-                .output()
-                .map_err(|e| e.to_string())?;
+            command.stdout(Stdio::null());
+            let output = match input {
+                None => command.output().map_err(|e| e.to_string())?,
+                Some(input) => {
+                    use std::io::Write;
+                    let mut child = command
+                        .stdin(Stdio::piped())
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
+                    if let Some(mut stdin) = child.stdin.take() {
+                        // A write error shows up as the child's own error below.
+                        let _ = stdin.write_all(input.as_bytes());
+                    }
+                    child.wait_with_output().map_err(|e| e.to_string())?
+                }
+            };
             if output.status.success() {
                 Ok(())
             } else {
@@ -126,6 +150,7 @@ impl Control {
                     .last()
                     .unwrap_or("it did not work")
                     .trim()
+                    .trim_start_matches("rsrewind: ")
                     .to_string())
             }
         })
@@ -134,7 +159,7 @@ impl Control {
 
 /// Runs blocking work on its own thread and awaits the result without blocking the UI; `fallback`
 /// if the thread cannot start or vanishes.
-fn off_thread<T: Send + 'static>(
+pub(crate) fn off_thread<T: Send + 'static>(
     fallback: T,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> impl Future<Output = T> + Send + 'static {

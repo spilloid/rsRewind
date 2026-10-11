@@ -15,6 +15,7 @@ serde_json.workspace = true
 rsrewind-core.workspace = true
 rsrewind-query.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 tracing.workspace = true
 iced = { workspace = true, features = [
     "wgpu",
@@ -23,6 +24,9 @@ iced = { workspace = true, features = [
     "crisp",
     "web-colors",
 ] }
+png = "0.18"
+gif = "0.14"
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 # Nothing in this crate is Windows-specific; Linux needs a windowing backend selected explicitly.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -30,3 +34,6 @@ iced = { workspace = true, features = ["x11", "wayland", "linux-theme-detection"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

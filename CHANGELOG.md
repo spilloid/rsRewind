@@ -6,6 +6,56 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-11
+
+**Navigate and take clips out.** Marks, keyframes, a real navigator in the window, multi-select and
+exports. The 8-hour acceptance run for this version has **not** been run; see the ROADMAP.
+
+### Added
+
+- **Marks.** Mark the moment on stage (M, or "+ Mark"), with an optional label; step between marks
+  ([ ]); list, rename and delete them in the marks panel; `rsrewind mark add/list/rename/remove`.
+  Marks stay in this data folder and are never exported to other machines.
+- **Keyframes.** Automatic stops derived when reading history (recording resumed, application or
+  window switched on a monitor, a different screen); step with `,` `.` or PageUp/PageDown. No
+  recorder change.
+- **The navigator.** The top-right pill now steps keyframes and marks, opens the marks panel, and has
+  "Go to" (`14:30`, `yesterday 9:00`, `15m`, ...). The camera glides to nearby targets and cues to
+  far ones.
+- **Selection and exports.** Click, Shift-click and Ctrl/Cmd-click cards (Shift with any navigation
+  key extends to it); copy a picture, save a PNG, export a silent GIF, or a WebM when `ffmpeg` is
+  installed. Exports go to `<data folder>/exports/` and are copies outside rsRewind's history.
+
+### Changed
+
+- **Database schema v2** (adds `marks`). The first run of this version backs the database up to
+  `backups/recall-v1-*.db` and migrates it; older versions then refuse it. Readers (the window,
+  `search`, `recent`) also accept a v1 store, so imported sources stay visible until the next import
+  migrates them. `forget` reports the marks it deleted.
+  **Any** command of this version that opens the database for writing migrates it, including
+  `rsrewind mark add` (pressing M in the window) and `status`. If an older recorder is still running
+  at that moment, it keeps writing to the migrated database (v2 only adds a table), but older
+  binaries started afterwards refuse it; restart the recorder from this version. The window says
+  "Updating the history format…" if a mark takes over a second while the store is still v1.
+
+### Known issues
+
+- **The 8-hour acceptance run for v0.1.0 has not been run** (ROADMAP). Treat this as an early release.
+- **Recorder privacy gaps are still open**: every known case, with workarounds, is in [#12](https://github.com/spilloid/rsRewind/issues/12).
+- The window was run on synthetic history under a virtual display with software rendering, once on real
+  Linux history before this release, and never on Windows or Mac with these features. The clipboard, the
+  `ffmpeg` lookup and keyboard shortcuts are unverified there. Keyframe thresholds are untuned guesses.
+- Exports are copies outside rsRewind's history; `forget` does not delete them.
+- Marks are local to this data folder and are not part of `.rsseg` segments.
+- Reviewed read-only by a second model on 2026-10-11 and the findings fixed; there has been no review by a person.
+
+### Upgrade notes
+
+- The first command of this version that opens the database for writing backs it up to
+  `backups/recall-v1-*.db` and migrates it to schema v2. Older versions then refuse the database, so restart the
+  recorder from this version.
+- Install `ffmpeg` if you want WebM export; GIF and PNG need nothing extra.
+
 ## [0.0.10] - 2026-10-11
 
 **Tenth release: closing the icon stops recording.** Quit on the tray (Windows, Linux) or menu-bar item

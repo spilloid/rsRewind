@@ -7,7 +7,10 @@
 
 mod viewer;
 
+use crate::export::{self, ClipFormat, Progress};
 use crate::gaps;
+use crate::nav::{self, JumpTarget, Motion, Shortcut};
+use crate::pick::Picks;
 use crate::recorder::{self, Control, Recorder};
 use crate::style::{MONO, Tokens, UI_FONT};
 use crate::thumb::Bgra;
@@ -26,7 +29,7 @@ use iced::{
 use rsrewind_core::{
     DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineEntry, Timestamp, VisualDetail,
 };
-use rsrewind_query::{SourceFilter, SourceInfo, SourceKind, SourceProblem};
+use rsrewind_query::{Keyframe, Mark, SourceFilter, SourceInfo, SourceKind, SourceProblem};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -43,13 +46,16 @@ const DETAIL_H: u32 = 1600;
 const WINDOW_LIMIT: u32 = 200;
 /// Layout size used to decide which pictures to load before the real size is known.
 const NOMINAL: (f32, f32) = (1280.0, 640.0);
-/// The short settle when cueing to a moment (the brief: ~100-180 ms, no fake scrubbing).
-const CUE_MS: f32 = 180.0;
 const SEARCH_LIMIT: u32 = 100;
 /// How far back gaps are looked up (from now). Older gaps are not shown yet.
 const GAP_HORIZON_MS: i64 = 30 * 86_400_000;
 /// The search box, for focusing it from the keyboard (Ctrl+F or `/`).
 const SEARCH_ID: &str = "search";
+/// The navigator panel's "Go to" and mark-label fields (`g`, Shift+M).
+const GOTO_ID: &str = "goto";
+const LABEL_ID: &str = "mark-label";
+/// Mark labels drawn in the room at once (the nearest).
+const ROOM_MARK_LABELS: usize = 6;
 
 pub fn run(data: DataDir, appearance: crate::Appearance) -> iced::Result {
     iced::application(
@@ -94,6 +100,41 @@ pub enum Message {
     DetailPicture(u64, FrameKey, FrameAnswer),
     Step(bool),
     Latest,
+    Oldest,
+    /// The user's marks, re-read after every change.
+    Marks(u64, Answer),
+    /// Keyframes of the loaded window (for drawing).
+    Keyframes(u64, Answer),
+    /// The answer to a keyframe step; `true` extends the selection to it.
+    SteppedKeyframe(u64, bool, Answer),
+    /// The moments of a selection range.
+    Ranged(u64, Answer),
+    /// Previous/next keyframe or mark; `true` second: extend the selection to it.
+    GoKeyframe(bool, bool),
+    GoMark(bool, bool),
+    JumpMark(i64),
+    /// Mark the moment on stage with the label in the panel (empty: none).
+    MarkNow,
+    MarkLabel(String),
+    /// A `rsrewind mark ...` command finished.
+    MarkDone(&'static str, Result<(), String>),
+    TogglePanel,
+    GotoText(String),
+    GotoSubmit,
+    EditMark(Option<i64>),
+    EditText(String),
+    SaveEdit,
+    AskDelete(Option<i64>),
+    DeleteMark(i64),
+    ClearPicks,
+    /// Ask before an export (`Some`), or drop the question (`None`).
+    AskExport(Option<ExportKind>),
+    RunExport(ExportKind),
+    ExportDone(u64, Result<Exported, String>),
+    CancelExport,
+    ClipSize(u32),
+    /// About ten times a second while an export or a mark command runs (progress, "working").
+    Tick,
     Zoom(f64),
     Frame(Instant),
     Key(keyboard::Event),
@@ -107,11 +148,48 @@ pub enum Message {
     ScaleFactor(f32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Cue {
-    from: f64,
-    to: f64,
-    started: Instant,
+/// What an export makes. Every kind leaves rsRewind's history (a file, or the clipboard).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportKind {
+    CopyImage,
+    Png,
+    Clip(ClipFormat),
+}
+
+impl ExportKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CopyImage => "Copying the picture",
+            Self::Png => "Saving a PNG",
+            Self::Clip(ClipFormat::Gif) => "Encoding a GIF",
+            Self::Clip(ClipFormat::Webm) => "Encoding a WebM (ffmpeg)",
+        }
+    }
+}
+
+/// A finished export.
+#[derive(Clone)]
+pub enum Exported {
+    Saved(std::path::PathBuf),
+    /// Full-size RGBA for the clipboard.
+    Image(Arc<(u32, u32, Vec<u8>)>),
+}
+
+impl std::fmt::Debug for Exported {
+    // Never the pixels: they are screen content.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Saved(path) => f.debug_tuple("Saved").field(path).finish(),
+            Self::Image(image) => write!(f, "Image({}x{})", image.0, image.1),
+        }
+    }
+}
+
+/// An export in progress.
+struct Running {
+    kind: ExportKind,
+    seq: u64,
+    progress: Arc<Progress>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,7 +224,8 @@ pub struct App {
     camera: Camera,
     first: f64,
     last: f64,
-    cue: Option<Cue>,
+    /// The camera moving to a target (glide or cue; see `nav::Motion`).
+    cue: Option<Motion>,
     window_seq: u64,
     window_center: Option<f64>,
     moments: Vec<Moment>,
@@ -176,6 +255,47 @@ pub struct App {
     detail_picture: Option<(FrameKey, image::Handle)>,
     cue_seq: u64,
 
+    /// The user's marks, oldest first, and the panel that lists them.
+    marks: Vec<Mark>,
+    /// Their moments (Unix ms), for the room.
+    mark_times: Vec<f64>,
+    marks_seq: u64,
+    panel_open: bool,
+    mark_label: String,
+    goto_text: String,
+    editing: Option<(i64, String)>,
+    confirm_delete: Option<i64>,
+    /// When the running `rsrewind mark` command started, if one is running.
+    marking: Option<Instant>,
+    /// This folder's own store is older than this build: the next mark command migrates it.
+    store_behind: bool,
+    /// The Tick chain is running.
+    ticking: bool,
+    /// Keyframes of the loaded window, and their pictures (for the cards' tabs).
+    keyframes: Vec<Keyframe>,
+    keyed: HashSet<FrameKey>,
+    keyframes_seq: u64,
+    step_seq: u64,
+    /// One line about the last navigation or mark action.
+    nav_note: Option<String>,
+    /// The multi-frame selection, and its pictures (for drawing).
+    picks: Picks,
+    picked: HashSet<FrameKey>,
+    range_seq: u64,
+    /// The range and filter of the last range asked for (applied with its answer).
+    range_ask: (Timestamp, Timestamp, SourceFilter),
+    /// The data folder (exports go to its `exports/`).
+    data_root: std::path::PathBuf,
+    /// An `ffmpeg` executable on PATH, for WebM (looked up once, at start).
+    ffmpeg: Option<std::path::PathBuf>,
+    clip_size: u32,
+    confirm_export: Option<ExportKind>,
+    exporting: Option<Running>,
+    export_seq: u64,
+    export_note: Option<String>,
+    /// Created on first copy and kept: on X11 the copied picture lives as long as its owner.
+    clipboard: Option<arboard::Clipboard>,
+
     /// The full-window image viewer, when open.
     viewer: Option<viewer::ViewerState>,
     viewer_seq: u64,
@@ -186,6 +306,14 @@ pub struct App {
 impl App {
     fn boot(data: DataDir, appearance: crate::Appearance) -> (Self, Task<Message>) {
         let control = Control::new(data.root().to_path_buf());
+        let data_root = data.root().to_path_buf();
+        // What an export that died with a previous window left (scratch frames, part files).
+        {
+            let exports = export::exports_dir(&data_root);
+            let _ = std::thread::Builder::new()
+                .name("rsrewind-ui-sweep".into())
+                .spawn(move || export::sweep(&exports));
+        }
         let (worker, frames, fatal) = match HistoryWorker::start(data) {
             Ok((worker, frames)) => (Some(worker), Some(frames), None),
             Err(error) => (None, None, Some(format!("could not start: {error}"))),
@@ -236,6 +364,34 @@ impl App {
             detail: None,
             detail_picture: None,
             cue_seq: 0,
+            marks: Vec::new(),
+            mark_times: Vec::new(),
+            marks_seq: 0,
+            panel_open: false,
+            mark_label: String::new(),
+            goto_text: String::new(),
+            editing: None,
+            confirm_delete: None,
+            marking: None,
+            store_behind: false,
+            ticking: false,
+            keyframes: Vec::new(),
+            keyed: HashSet::new(),
+            keyframes_seq: 0,
+            step_seq: 0,
+            nav_note: None,
+            picks: Picks::default(),
+            picked: HashSet::new(),
+            range_seq: 0,
+            range_ask: (Timestamp(0), Timestamp(0), SourceFilter::All),
+            data_root,
+            ffmpeg: export::find_ffmpeg(),
+            clip_size: export::DEFAULT_CLIP_SIZE,
+            confirm_export: None,
+            exporting: None,
+            export_seq: 0,
+            export_note: None,
+            clipboard: None,
             viewer: None,
             viewer_seq: 0,
             scale_factor: 1.0,
@@ -243,6 +399,7 @@ impl App {
         let sources = app.ask(Ask::Sources, Message::Sources);
         let sources = Task::batch([
             sources,
+            app.ask(Ask::Marks, |a| Message::Marks(0, a)),
             Task::perform(
                 app.control.status(std::time::Duration::ZERO),
                 Message::Recorder,
@@ -269,6 +426,7 @@ impl App {
         if self.appearance == crate::Appearance::System {
             subs.push(iced::system::theme_changes().map(Message::Appearance));
         }
+        // Frames drive the camera's motion (an export's progress redraws on the slower Tick).
         if self.cue.is_some() {
             subs.push(window::frames().map(Message::Frame));
         }
@@ -290,7 +448,12 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Sources(Answer::Sources { sources, problems }) => {
+            Message::Sources(Answer::Sources {
+                sources,
+                problems,
+                own_schema,
+            }) => {
+                self.store_behind = own_schema.is_some_and(|v| v < rsrewind_core::SCHEMA_VERSION);
                 self.sources = sources;
                 self.problems = problems;
                 self.sources_loaded = true;
@@ -348,8 +511,10 @@ impl App {
                 if seq != self.window_seq {
                     return Task::none();
                 }
+                let mut keyframes = Task::none();
                 if let Answer::Window(entries) = answer {
                     self.set_moments(entries);
+                    keyframes = self.load_keyframes();
                 }
                 // The first load (or a new filter) puts the moment at the cursor on the stage.
                 let follow = if self.selection.is_none() {
@@ -357,7 +522,7 @@ impl App {
                 } else {
                     Task::none()
                 };
-                Task::batch([self.load_thumbs(), follow])
+                Task::batch([self.load_thumbs(), follow, keyframes])
             }
             Message::Gaps(seq, answer) => {
                 if seq == self.gaps_seq
@@ -370,8 +535,12 @@ impl App {
             Message::Recorder(state) => {
                 let was = self.recorder;
                 self.recorder = state;
-                let mut next =
-                    Task::perform(self.control.status(recorder::POLL), Message::Recorder);
+                // Marks may change from elsewhere (the command line, another window): re-read them
+                // as often as the recorder's state.
+                let mut next = Task::batch([
+                    Task::perform(self.control.status(recorder::POLL), Message::Recorder),
+                    self.load_marks(),
+                ]);
                 // A recorder that is running without its tray icon (started from the command line, or
                 // at login before the icon was part of that) gets one when the window opens. `rsrewind
                 // tray` exits at once if an icon is already up, so this is safe to ask once.
@@ -493,11 +662,26 @@ impl App {
                 self.scale_factor = factor;
                 Task::none()
             }
-            Message::Timeline(timeline::Event::Select(index)) => {
+            Message::Timeline(timeline::Event::Select {
+                index,
+                extend,
+                toggle,
+            }) => {
                 let Some(moment) = self.moments.get(index) else {
                     return Task::none();
                 };
                 let entry = moment.entry.clone();
+                if toggle {
+                    self.picks.toggle(&entry);
+                    self.picked = self.picks.frames();
+                    return Task::none();
+                }
+                // Shift with nothing to extend from (no anchor, nothing on stage) is a plain click.
+                if extend && (self.picks.has_anchor() || self.selection.is_some()) {
+                    return self.extend_to(entry.started_at);
+                }
+                self.picks.single(&entry);
+                self.picked = self.picks.frames();
                 self.selected_hit = None;
                 self.select(&entry)
             }
@@ -566,28 +750,268 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Step(forward) => {
-                let starts: Vec<i64> = self.moments.iter().map(|m| m.entry.started_at.0).collect();
-                let Some(target) = model::step(&starts, self.camera.cursor, forward) else {
+            Message::Step(forward) => self.step(forward, false),
+            Message::Oldest => {
+                self.cue_to(self.first);
+                self.refresh_window(true)
+            }
+            Message::Marks(seq, answer) => {
+                if seq == self.marks_seq {
+                    match answer {
+                        Answer::Marks(marks) => {
+                            self.mark_times = marks.iter().map(|m| m.at.0 as f64).collect();
+                            self.marks = marks;
+                        }
+                        Answer::Failed(error) => self.nav_note = Some(error),
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
+            Message::Keyframes(seq, answer) => {
+                if seq == self.keyframes_seq
+                    && let Answer::Keyframes(keyframes) = answer
+                {
+                    self.keyed = keyframes
+                        .iter()
+                        .map(|k| (k.source, k.visual_state_id))
+                        .collect();
+                    self.keyframes = keyframes;
+                }
+                Task::none()
+            }
+            Message::GoKeyframe(forward, extend) => {
+                self.step_seq += 1;
+                let seq = self.step_seq;
+                let from = Timestamp(self.target_cursor().round() as i64);
+                self.ask(
+                    Ask::StepKeyframe {
+                        filter: self.filter,
+                        from,
+                        forward,
+                    },
+                    move |a| Message::SteppedKeyframe(seq, extend, a),
+                )
+            }
+            Message::SteppedKeyframe(seq, extend, answer) => {
+                if seq != self.step_seq {
+                    return Task::none();
+                }
+                match answer {
+                    Answer::StepKeyframe(Some(k)) => {
+                        self.nav_note = Some(format!(
+                            "Keyframe · {} · {}",
+                            k.kind.describe(),
+                            format_time(k.at.0)
+                        ));
+                        self.jump(k.at.0 as f64, extend)
+                    }
+                    Answer::StepKeyframe(None) => {
+                        self.nav_note = Some("No more keyframes that way.".into());
+                        Task::none()
+                    }
+                    Answer::Failed(error) => {
+                        self.nav_note = Some(error);
+                        Task::none()
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Message::GoMark(forward, extend) => {
+                let times = self.marks.iter().map(|m| m.at.0);
+                match nav::neighbour(times, self.target_cursor(), forward) {
+                    Some(at) => {
+                        self.nav_note = self.marks.iter().find(|m| m.at.0 == at).map(mark_title);
+                        self.jump(at as f64, extend)
+                    }
+                    None => {
+                        self.nav_note = Some(if self.marks.is_empty() {
+                            "No marks yet: press M to mark the moment on stage.".into()
+                        } else {
+                            "No more marks that way.".into()
+                        });
+                        Task::none()
+                    }
+                }
+            }
+            Message::JumpMark(id) => {
+                let Some(mark) = self.marks.iter().find(|m| m.id == id) else {
                     return Task::none();
                 };
-                let entry = self
-                    .moments
-                    .iter()
-                    .filter(|m| m.entry.started_at.0 == target)
-                    .max_by_key(|m| m.entry.cursor())
-                    .map(|m| m.entry.clone());
-                let jumped: Vec<Gap> =
-                    gaps::crossed(&self.gaps, self.filter, self.camera.cursor as i64, target)
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                self.skipped = (!jumped.is_empty()).then_some((jumped, target as f64));
-                self.cue_to(target as f64);
-                match entry {
-                    Some(entry) => Task::batch([self.select(&entry), self.refresh_window(false)]),
-                    None => self.refresh_window(false),
+                let at = mark.at.0 as f64;
+                self.nav_note = Some(mark_title(mark));
+                // In case it changed elsewhere since the list was read.
+                Task::batch([self.jump(at, false), self.load_marks()])
+            }
+            Message::MarkNow => self.mark_now(),
+            Message::MarkLabel(label) => {
+                self.mark_label = label;
+                Task::none()
+            }
+            Message::MarkDone(what, result) => {
+                self.marking = None;
+                match result {
+                    Ok(()) => {
+                        if what == "add" {
+                            self.mark_label.clear();
+                        }
+                        self.editing = None;
+                        self.confirm_delete = None;
+                    }
+                    Err(error) if nav::mark_gone(&error) => {
+                        self.editing = None;
+                        self.confirm_delete = None;
+                        self.nav_note = Some(
+                            "That mark was changed or removed elsewhere; the list is reloaded."
+                                .into(),
+                        );
+                    }
+                    Err(error) => {
+                        self.nav_note = Some(format!("Could not {what} the mark: {error}"))
+                    }
                 }
+                if what == "add" {
+                    // The command migrated the store if it was behind.
+                    self.store_behind = false;
+                }
+                self.load_marks()
+            }
+            Message::TogglePanel => {
+                self.panel_open = !self.panel_open;
+                self.editing = None;
+                self.confirm_delete = None;
+                Task::none()
+            }
+            Message::GotoText(text) => {
+                self.goto_text = text;
+                Task::none()
+            }
+            Message::GotoSubmit => match nav::parse_jump(&self.goto_text, chrono::Local::now()) {
+                Ok(JumpTarget::Latest) => self.update(Message::Latest),
+                Ok(JumpTarget::Oldest) => self.update(Message::Oldest),
+                Ok(JumpTarget::At(ms)) => {
+                    let target = ms as f64;
+                    self.nav_note = Some(if target < self.first || target > self.last {
+                        format!(
+                            "{} is outside the history shown; went to the nearest end.",
+                            format_time(ms)
+                        )
+                    } else {
+                        format!("Went to {}", format_time(ms))
+                    });
+                    self.jump(target, false)
+                }
+                Err(error) => {
+                    self.nav_note = Some(error);
+                    Task::none()
+                }
+            },
+            Message::EditMark(id) => {
+                self.confirm_delete = None;
+                self.editing = id.and_then(|id| {
+                    self.marks
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| (id, m.label.clone()))
+                });
+                Task::none()
+            }
+            Message::EditText(text) => {
+                if let Some((_, label)) = self.editing.as_mut() {
+                    *label = text;
+                }
+                Task::none()
+            }
+            Message::SaveEdit => {
+                let Some((id, label)) = self.editing.clone() else {
+                    return Task::none();
+                };
+                self.run_mark(
+                    "rename",
+                    vec![
+                        "mark".into(),
+                        "rename".into(),
+                        id.to_string(),
+                        "--label-stdin".into(),
+                    ],
+                    Some(label),
+                )
+            }
+            Message::AskDelete(id) => {
+                self.editing = None;
+                self.confirm_delete = id;
+                Task::none()
+            }
+            Message::DeleteMark(id) => self.run_mark(
+                "remove",
+                vec!["mark".into(), "remove".into(), id.to_string()],
+                None,
+            ),
+            Message::Ranged(seq, answer) => {
+                if seq != self.range_seq {
+                    return Task::none();
+                }
+                match answer {
+                    Answer::Between { entries, truncated } => {
+                        let (from, to, filter) = self.range_ask;
+                        self.picks
+                            .apply_range(entries, truncated, (from, to), |s| filter.admits(s));
+                        self.picked = self.picks.frames();
+                        if truncated {
+                            self.nav_note = Some(format!(
+                                "Selected the first {} moments of that range (the most at once).",
+                                crate::worker::MAX_RANGE
+                            ));
+                        }
+                    }
+                    Answer::Failed(error) => self.nav_note = Some(error),
+                    _ => {}
+                }
+                Task::none()
+            }
+            Message::ClearPicks => {
+                self.picks.clear();
+                self.picked.clear();
+                Task::none()
+            }
+            Message::AskExport(kind) => {
+                self.confirm_export = kind;
+                if kind.is_some() {
+                    self.panel_open = true;
+                }
+                Task::none()
+            }
+            Message::RunExport(kind) => self.run_export(kind),
+            Message::ExportDone(seq, result) => {
+                if self.exporting.as_ref().is_none_or(|r| r.seq != seq) {
+                    return Task::none();
+                }
+                self.exporting = None;
+                self.export_note = Some(match result {
+                    Ok(Exported::Saved(path)) => format!("Saved {}", path.display()),
+                    Ok(Exported::Image(image)) => self.put_on_clipboard(&image),
+                    Err(error) if error == export::CANCELLED => "Export cancelled.".into(),
+                    Err(error) => format!("Export failed: {error}"),
+                });
+                Task::none()
+            }
+            Message::CancelExport => {
+                if let Some(running) = &self.exporting {
+                    running.progress.cancel();
+                }
+                Task::none()
+            }
+            Message::Tick => {
+                if self.exporting.is_some() || self.marking.is_some() {
+                    tick()
+                } else {
+                    self.ticking = false;
+                    Task::none()
+                }
+            }
+            Message::ClipSize(size) => {
+                self.clip_size = size;
+                Task::none()
             }
             Message::Latest => {
                 self.cue_to(self.last);
@@ -598,14 +1022,10 @@ impl App {
                 Task::batch([self.refresh_window(true), self.load_thumbs()])
             }
             Message::Frame(now) => {
-                if let Some(cue) = self.cue {
-                    let t = (now.saturating_duration_since(cue.started).as_secs_f32() * 1000.0
-                        / CUE_MS)
-                        .clamp(0.0, 1.0);
-                    let eased = 1.0 - (1.0 - t).powi(3);
-                    self.camera.cursor = cue.from + (cue.to - cue.from) * f64::from(eased);
-                    if t >= 1.0 {
-                        self.camera.cursor = cue.to;
+                if let Some(motion) = self.cue {
+                    let (cursor, done) = motion.at(now);
+                    self.camera.cursor = cursor;
+                    if done {
                         self.cue = None;
                         return Task::batch([self.load_thumbs(), self.follow_cursor()]);
                     }
@@ -621,18 +1041,12 @@ impl App {
             {
                 iced::widget::operation::focus(SEARCH_ID)
             }
-            Message::Key(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
-                keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
-                | keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                    self.update(Message::Step(false))
+            Message::Key(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                match nav::shortcut(key.as_ref(), modifiers) {
+                    Some(shortcut) => self.shortcut(shortcut),
+                    None => Task::none(),
                 }
-                keyboard::Key::Named(keyboard::key::Named::ArrowRight)
-                | keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                    self.update(Message::Step(true))
-                }
-                keyboard::Key::Named(keyboard::key::Named::End) => self.update(Message::Latest),
-                _ => Task::none(),
-            },
+            }
             Message::Key(_) => Task::none(),
         }
     }
@@ -711,17 +1125,357 @@ impl App {
             .collect()
     }
 
-    /// Jumps to `target` with a short settle: the camera starts a little after the moment and
-    /// glides back onto it, instead of flying through everything in between.
+    /// Moves the camera to `target`: a glide from where it is when the target is within the
+    /// room's depth, otherwise a cue that starts a little after the moment and settles onto it,
+    /// instead of flying through everything in between (`nav::Motion::plan`).
     fn cue_to(&mut self, target: f64) {
         let target = target.clamp(self.first, self.last);
-        let from = (target + self.camera.age_at(0.12)).min(self.last.max(target));
-        self.camera.cursor = from;
-        self.cue = Some(Cue {
-            from,
-            to: target,
-            started: Instant::now(),
+        let motion = Motion::plan(
+            self.camera.cursor,
+            target,
+            self.camera.depth_ms,
+            self.camera.knee_ms,
+            self.last,
+            Instant::now(),
+        );
+        self.camera.cursor = motion.from;
+        self.cue = Some(motion);
+    }
+
+    /// Where the camera is going (or is): repeated steps chain from the target, not the
+    /// animation's current frame.
+    fn target_cursor(&self) -> f64 {
+        self.cue.map_or(self.camera.cursor, |c| c.to)
+    }
+
+    /// One moment back or forward; `extend` grows the selection to it.
+    fn step(&mut self, forward: bool, extend: bool) -> Task<Message> {
+        let starts: Vec<i64> = self.moments.iter().map(|m| m.entry.started_at.0).collect();
+        let Some(target) = model::step(&starts, self.target_cursor(), forward) else {
+            return Task::none();
+        };
+        let entry = self
+            .moments
+            .iter()
+            .filter(|m| m.entry.started_at.0 == target)
+            .max_by_key(|m| m.entry.cursor())
+            .map(|m| m.entry.clone());
+        let jumped: Vec<Gap> =
+            gaps::crossed(&self.gaps, self.filter, self.target_cursor() as i64, target)
+                .into_iter()
+                .cloned()
+                .collect();
+        self.skipped = (!jumped.is_empty()).then_some((jumped, target as f64));
+        self.cue_to(target as f64);
+        let moved = match entry {
+            Some(entry) => Task::batch([self.select(&entry), self.refresh_window(false)]),
+            None => self.refresh_window(false),
+        };
+        if extend {
+            return Task::batch([moved, self.extend_to(Timestamp(target))]);
+        }
+        moved
+    }
+
+    /// Goes to a time (a mark, a keyframe, "Go to"); `extend` grows the selection to it.
+    fn jump(&mut self, target: f64, extend: bool) -> Task<Message> {
+        self.skipped = None;
+        self.cue_to(target);
+        let moved = self.refresh_window(false);
+        if extend {
+            return Task::batch([moved, self.extend_to(Timestamp(target as i64))]);
+        }
+        moved
+    }
+
+    /// Selects every moment from the anchor (or the moment on stage) to `target`.
+    fn extend_to(&mut self, target: Timestamp) -> Task<Message> {
+        if let Some(stage) = self.stage_entry() {
+            self.picks.anchor_at(&stage);
+        }
+        let fallback = self.selection.as_ref().map(|s| s.at);
+        let Some((from, to)) = self.picks.range_to(target, fallback) else {
+            return Task::none();
+        };
+        self.range_ask = (from, to, self.filter);
+        self.range_seq += 1;
+        let seq = self.range_seq;
+        self.ask(
+            Ask::Between {
+                filter: self.filter,
+                from,
+                to,
+            },
+            move |a| Message::Ranged(seq, a),
+        )
+    }
+
+    /// The loaded moment the stage shows, if it is loaded.
+    fn stage_entry(&self) -> Option<TimelineEntry> {
+        let frame = self.selection.as_ref()?.frame;
+        self.moments
+            .iter()
+            .find(|m| m.frame() == frame)
+            .map(|m| m.entry.clone())
+    }
+
+    fn shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
+        match shortcut {
+            Shortcut::Moment { forward, extend } => self.step(forward, extend),
+            Shortcut::Keyframe { forward, extend } => {
+                self.update(Message::GoKeyframe(forward, extend))
+            }
+            Shortcut::Mark { forward, extend } => self.update(Message::GoMark(forward, extend)),
+            Shortcut::Oldest => self.update(Message::Oldest),
+            Shortcut::Latest => self.update(Message::Latest),
+            Shortcut::MarkNow => {
+                self.mark_label.clear();
+                self.mark_now()
+            }
+            Shortcut::MarkWithLabel => {
+                self.panel_open = true;
+                iced::widget::operation::focus(LABEL_ID)
+            }
+            Shortcut::GoTo => {
+                self.panel_open = true;
+                iced::widget::operation::focus(GOTO_ID)
+            }
+            Shortcut::Escape => {
+                if self.panel_open {
+                    self.panel_open = false;
+                    self.confirm_export = None;
+                } else if !self.picks.is_empty() {
+                    self.picks.clear();
+                    self.picked.clear();
+                }
+                Task::none()
+            }
+            Shortcut::SelectAll => {
+                let entries: Vec<TimelineEntry> =
+                    self.moments.iter().map(|m| m.entry.clone()).collect();
+                self.picks.all(&entries);
+                self.picked = self.picks.frames();
+                Task::none()
+            }
+            Shortcut::CopyImage => self.copy_image(),
+        }
+    }
+
+    /// Copies the picked picture (or the one on stage) to the clipboard.
+    fn copy_image(&mut self) -> Task<Message> {
+        self.run_export(ExportKind::CopyImage)
+    }
+
+    /// The one picture single-frame actions use: the only picked moment, else the one on stage.
+    fn single_frame(&self) -> Option<export::Frame> {
+        if self.picks.len() == 1
+            && let Some(entry) = self.picks.entries().next()
+        {
+            return Some(export::Frame {
+                source: entry.source,
+                media_path: entry.media_path.clone(),
+                at: entry.started_at,
+            });
+        }
+        let selection = self.selection.as_ref()?;
+        if let Some(entry) = self.stage_entry() {
+            return Some(export::Frame {
+                source: entry.source,
+                media_path: entry.media_path,
+                at: selection.at,
+            });
+        }
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|d| (d.source, d.visual_state_id) == selection.frame)?;
+        Some(export::Frame {
+            source: detail.source,
+            media_path: detail.media_path.clone(),
+            at: selection.at,
+        })
+    }
+
+    /// Starts an export on its own thread (never the UI thread; the recorder is another process).
+    fn run_export(&mut self, kind: ExportKind) -> Task<Message> {
+        self.confirm_export = None;
+        if self.exporting.is_some() {
+            self.export_note = Some("An export is already running.".into());
+            return Task::none();
+        }
+        let Some(media) = self.frames.as_ref().and_then(|f| f.media()) else {
+            self.export_note = Some("History is not open yet.".into());
+            return Task::none();
+        };
+        let dir = export::exports_dir(&self.data_root);
+        let progress = Arc::new(Progress::default());
+        let job_progress = progress.clone();
+        let work: Box<dyn FnOnce() -> Result<Exported, String> + Send> = match kind {
+            ExportKind::CopyImage | ExportKind::Png => {
+                let Some(frame) = self.single_frame() else {
+                    self.export_note = Some("Put a moment on stage or pick one first.".into());
+                    return Task::none();
+                };
+                if kind == ExportKind::Png {
+                    Box::new(move || export::save_png(&media, &frame, &dir).map(Exported::Saved))
+                } else {
+                    Box::new(move || {
+                        export::picture_rgba(&media, &frame)
+                            .map(|image| Exported::Image(Arc::new(image)))
+                    })
+                }
+            }
+            ExportKind::Clip(format) => {
+                let frames: Vec<export::Frame> = self
+                    .picks
+                    .entries()
+                    .map(|e| export::Frame {
+                        source: e.source,
+                        media_path: e.media_path.clone(),
+                        at: e.started_at,
+                    })
+                    .collect();
+                let ffmpeg = self.ffmpeg.clone();
+                let size = self.clip_size;
+                Box::new(move || {
+                    export::clip(
+                        &media,
+                        &frames,
+                        format,
+                        size,
+                        &dir,
+                        ffmpeg.as_deref(),
+                        &job_progress,
+                    )
+                    .map(Exported::Saved)
+                })
+            }
+        };
+        self.export_seq += 1;
+        let seq = self.export_seq;
+        self.export_note = None;
+        self.exporting = Some(Running {
+            kind,
+            seq,
+            progress,
         });
+        Task::batch([
+            Task::perform(
+                recorder::off_thread(Err("the export could not start".to_string()), work),
+                move |r| Message::ExportDone(seq, r),
+            ),
+            self.start_ticking(),
+        ])
+    }
+
+    /// Hands a decoded picture to the system clipboard; the sentence says how it went.
+    fn put_on_clipboard(&mut self, image: &(u32, u32, Vec<u8>)) -> String {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(clipboard) => self.clipboard = Some(clipboard),
+                Err(error) => return format!("Could not reach the clipboard: {error}"),
+            }
+        }
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return "Could not reach the clipboard.".into();
+        };
+        let data = arboard::ImageData {
+            width: image.0 as usize,
+            height: image.1 as usize,
+            bytes: std::borrow::Cow::Borrowed(&image.2),
+        };
+        match clipboard.set_image(data) {
+            Ok(()) => format!(
+                "Copied a {}x{} picture. It is now outside rsRewind's history.",
+                image.0, image.1
+            ),
+            Err(error) => format!("Could not copy the picture: {error}"),
+        }
+    }
+
+    fn load_marks(&mut self) -> Task<Message> {
+        self.marks_seq += 1;
+        let seq = self.marks_seq;
+        self.ask(Ask::Marks, move |a| Message::Marks(seq, a))
+    }
+
+    /// Keyframes over the loaded moments, for the strip and the cards' tabs.
+    fn load_keyframes(&mut self) -> Task<Message> {
+        let (Some(first), Some(last)) = (self.moments.first(), self.moments.last()) else {
+            self.keyframes.clear();
+            self.keyed.clear();
+            return Task::none();
+        };
+        self.keyframes_seq += 1;
+        let seq = self.keyframes_seq;
+        self.ask(
+            Ask::Keyframes {
+                filter: self.filter,
+                from: first.entry.started_at,
+                to: last.entry.started_at,
+            },
+            move |a| Message::Keyframes(seq, a),
+        )
+    }
+
+    /// Marks the moment on stage (or, with nothing on stage, the cursor) with the panel's label,
+    /// through `rsrewind mark add` (the window may not write history itself).
+    fn mark_now(&mut self) -> Task<Message> {
+        if self.marking.is_some() {
+            return Task::none();
+        }
+        let at = self
+            .selection
+            .as_ref()
+            .map_or(self.target_cursor().round() as i64, |s| s.at.0);
+        self.nav_note = Some(format!("Marked {}", format_time(at)));
+        let label = self.mark_label.trim().to_owned();
+        self.run_mark(
+            "add",
+            vec![
+                "mark".into(),
+                "add".into(),
+                "--at-ms".into(),
+                at.to_string(),
+                "--label-stdin".into(),
+            ],
+            Some(label),
+        )
+    }
+
+    /// Runs `rsrewind mark ...`; a label travels on stdin, never in the (visible) arguments.
+    fn run_mark(
+        &mut self,
+        what: &'static str,
+        args: Vec<String>,
+        label: Option<String>,
+    ) -> Task<Message> {
+        self.marking = Some(Instant::now());
+        Task::batch([
+            Task::perform(self.control.run_args(args, label), move |r| {
+                Message::MarkDone(what, r)
+            }),
+            self.start_ticking(),
+        ])
+    }
+
+    /// Starts the ~10 Hz Tick chain unless it runs already; it stops when nothing needs it.
+    fn start_ticking(&mut self) -> Task<Message> {
+        if self.ticking {
+            return Task::none();
+        }
+        self.ticking = true;
+        tick()
+    }
+
+    /// What a slow mark command is doing, after a second without an answer.
+    fn marking_note(&self) -> Option<&'static str> {
+        let started = self.marking?;
+        (started.elapsed() >= std::time::Duration::from_secs(1)).then_some(if self.store_behind {
+            "Updating the history format (first change after an upgrade)…"
+        } else {
+            "Working…"
+        })
     }
 
     fn search(&mut self) -> Task<Message> {
@@ -764,14 +1518,17 @@ impl App {
         let seq = self.window_seq;
         // A little ahead of the cursor, so moments drifting past the camera are loaded too.
         let at = Timestamp((target + 120_000.0) as i64);
-        self.ask(
-            Ask::Window {
-                filter: self.filter,
-                at: Some(at),
-                limit: WINDOW_LIMIT,
-            },
-            move |a| Message::Window(seq, a),
-        )
+        Task::batch([
+            self.ask(
+                Ask::Window {
+                    filter: self.filter,
+                    at: Some(at),
+                    limit: WINDOW_LIMIT,
+                },
+                move |a| Message::Window(seq, a),
+            ),
+            self.load_marks(),
+        ])
     }
 
     fn set_moments(&mut self, entries: Vec<TimelineEntry>) {
@@ -956,6 +1713,18 @@ impl App {
             .height(Fill)
             .into()
         };
+        let body: Element<'_, Message> = if self.panel_open {
+            stack![
+                body,
+                container(self.panel())
+                    .align_right(Fill)
+                    .padding([0, 18])
+                    .height(Fill)
+            ]
+            .into()
+        } else {
+            body
+        };
         container(column![self.top_bar(), body].spacing(10).padding([10, 0]))
             .style(move |_| t.bar())
             .width(Fill)
@@ -976,19 +1745,7 @@ impl App {
             .size(15)
             .style(move |_, status| t.search(status))
             .width(Fill);
-        let moments: u64 = self.sources.iter().map(|s| s.observations).sum();
-        let status = container(
-            text(format!(
-                "{} source{} · {} moments",
-                self.sources.len(),
-                if self.sources.len() == 1 { "" } else { "s" },
-                moments
-            ))
-            .size(12)
-            .font(MONO),
-        )
-        .padding([4, 10])
-        .style(move |_| t.pill(t.mint));
+        let status = self.navigator();
         let recording = self.recorder;
         let chip_color = match recording {
             Recorder::Recording => t.rose,
@@ -1019,6 +1776,376 @@ impl App {
             .padding([0, 18])
             .align_y(Alignment::Center)
             .into()
+    }
+
+    /// The top-right navigator: keyframe and mark stepping around the marks list, "+ Mark", and the
+    /// selection's size when there is one.
+    fn navigator(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let ready = self.sources_loaded && !self.sources.is_empty();
+        let nav = |label: String, message: Message| {
+            let b = button(
+                text(label)
+                    .size(12)
+                    .font(MONO)
+                    .wrapping(text::Wrapping::None),
+            )
+            .padding([4, 8])
+            .style(move |_, status| t.transport(status));
+            if ready { b.on_press(message) } else { b }
+        };
+        let marks = button(
+            text(format!(
+                "Marks · {}{}",
+                self.marks.len(),
+                if self.panel_open { " ▴" } else { "" }
+            ))
+            .size(12)
+            .font(MONO)
+            .wrapping(text::Wrapping::None),
+        )
+        .padding([4, 10])
+        .style(move |_, status| t.row(self.panel_open, status, t.gold))
+        .on_press(Message::TogglePanel);
+        let mut group = row![
+            nav("« key".into(), Message::GoKeyframe(false, false)),
+            nav("‹ mark".into(), Message::GoMark(false, false)),
+            marks,
+            nav("mark ›".into(), Message::GoMark(true, false)),
+            nav("key »".into(), Message::GoKeyframe(true, false)),
+            nav(
+                if self.marking.is_some() {
+                    "…".into()
+                } else {
+                    "+ Mark".into()
+                },
+                Message::MarkNow
+            ),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+        if let Some((from, to)) = self.picks.span() {
+            group = group
+                .push(
+                    button(
+                        text(format!(
+                            "{} picked · {}",
+                            self.picks.len(),
+                            gaps::duration(to.0 - from.0)
+                        ))
+                        .size(12)
+                        .font(MONO)
+                        .wrapping(text::Wrapping::None),
+                    )
+                    .padding([4, 10])
+                    .style(move |_, status| t.row(true, status, t.mint))
+                    .on_press(Message::TogglePanel),
+                )
+                .push(nav("✕".into(), Message::ClearPicks));
+        }
+        if let Some(note) = self.marking_note() {
+            group = group.push(
+                text(note)
+                    .size(12)
+                    .font(MONO)
+                    .color(t.text_2)
+                    .wrapping(text::Wrapping::None),
+            );
+        }
+        if let Some(running) = &self.exporting {
+            let (done, total) = running.progress.get();
+            group = group.push(
+                text(format!("{} {done}/{total}", running.kind.label()))
+                    .size(12)
+                    .font(MONO)
+                    .color(t.text_2)
+                    .wrapping(text::Wrapping::None),
+            );
+        }
+        container(group)
+            .padding([2, 4])
+            .style(move |_| t.pill(t.gold))
+            .into()
+    }
+
+    /// The marks panel: what history holds, "Go to", a labelled mark, and every mark (jump, rename,
+    /// delete). Opened from the navigator, `g` or Shift+M; Esc closes it.
+    fn panel(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let moments: u64 = self.sources.iter().map(|s| s.observations).sum();
+        let small = |label: &'static str, message: Message| {
+            button(text(label).size(12))
+                .padding([3, 8])
+                .style(move |_, status| t.transport(status))
+                .on_press(message)
+        };
+        let mut col = column![
+            row![
+                text(format!(
+                    "{} source{} · {} moments",
+                    self.sources.len(),
+                    if self.sources.len() == 1 { "" } else { "s" },
+                    moments
+                ))
+                .size(12)
+                .font(MONO)
+                .color(t.text_3),
+                space::horizontal(),
+                small("Close", Message::TogglePanel),
+            ]
+            .align_y(Alignment::Center),
+            heading(t, "Go to"),
+            row![
+                text_input(
+                    "14:30, yesterday 9:00, 2026-10-08 14:00, 15m…",
+                    &self.goto_text
+                )
+                .id(GOTO_ID)
+                .on_input(Message::GotoText)
+                .on_submit(Message::GotoSubmit)
+                .padding([6, 10])
+                .size(13)
+                .style(move |_, status| t.search(status)),
+                small("Go", Message::GotoSubmit),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            heading(t, "Mark the moment on stage"),
+            row![
+                text_input("Label (optional)", &self.mark_label)
+                    .id(LABEL_ID)
+                    .on_input(Message::MarkLabel)
+                    .on_submit(Message::MarkNow)
+                    .padding([6, 10])
+                    .size(13)
+                    .style(move |_, status| t.search(status)),
+                small("Mark", Message::MarkNow),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8);
+        if let Some(note) = &self.nav_note {
+            col = col.push(text(note.clone()).size(12).color(t.text_2));
+        }
+        col = col.push(self.export_section());
+        col = col.push(heading(t, &format!("Marks · {}", self.marks.len())));
+        let mut list = column![].spacing(2);
+        if self.marks.is_empty() {
+            list = list.push(
+                text("No marks yet. Press M to mark the moment on stage; [ and ] step between marks.")
+                    .size(12)
+                    .color(t.text_3),
+            );
+        }
+        // Newest first: the marks made today are the ones looked for.
+        for mark in self.marks.iter().rev() {
+            let id = mark.id;
+            let line: Element<'_, Message> = match (&self.editing, self.confirm_delete) {
+                (Some((editing, label)), _) if *editing == id => row![
+                    text_input("Label", label)
+                        .on_input(Message::EditText)
+                        .on_submit(Message::SaveEdit)
+                        .padding([4, 8])
+                        .size(12)
+                        .style(move |_, status| t.search(status)),
+                    small("Save", Message::SaveEdit),
+                    small("Cancel", Message::EditMark(None)),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+                (_, Some(confirm)) if confirm == id => row![
+                    text("Delete this mark?").size(12).color(t.rose),
+                    space::horizontal(),
+                    small("Delete", Message::DeleteMark(id)),
+                    small("Keep", Message::AskDelete(None)),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+                _ => row![
+                    button(
+                        column![
+                            text(format_time(mark.at.0))
+                                .size(11)
+                                .font(MONO)
+                                .color(t.text_2),
+                            text(if mark.label.is_empty() {
+                                "(no label)".to_owned()
+                            } else {
+                                mark.label.clone()
+                            })
+                            .size(13)
+                            .color(if mark.label.is_empty() {
+                                t.text_3
+                            } else {
+                                t.text
+                            }),
+                        ]
+                        .spacing(1),
+                    )
+                    .width(Fill)
+                    .padding([5, 8])
+                    .style(move |_, status| t.row(false, status, t.gold))
+                    .on_press(Message::JumpMark(id)),
+                    small("Rename", Message::EditMark(Some(id))),
+                    small("Delete", Message::AskDelete(Some(id))),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into(),
+            };
+            list = list.push(line);
+        }
+        col = col.push(scrollable(list).height(Fill)).push(
+            text(
+                "M mark · [ ] marks · , . keyframes · ← → moments
+Shift+any of these extends the selection · G go to · Esc close",
+            )
+            .size(11)
+            .color(t.text_3),
+        );
+        container(col)
+            .padding(12)
+            .width(Length::Fixed(380.0))
+            .max_height(560.0)
+            .style(move |_| t.panel())
+            .into()
+    }
+
+    /// Exports: the single picture (copy, PNG) and, with two or more picked, a silent clip.
+    fn export_section(&self) -> Element<'_, Message> {
+        let t = self.tokens;
+        let idle = self.exporting.is_none();
+        let action = |label: &'static str, message: Option<Message>| {
+            let b = button(text(label).size(12))
+                .padding([3, 8])
+                .style(move |_, status| t.transport(status));
+            match message {
+                Some(m) if idle => b.on_press(m),
+                _ => b,
+            }
+        };
+        let single = self.single_frame().is_some();
+        let clip = self.picks.len() >= 2;
+        let title = match self.picks.span() {
+            Some((from, to)) if self.picks.len() > 1 => format!(
+                "Export · {} picked · {} to {}",
+                self.picks.len(),
+                format_clock(from.0),
+                format_clock(to.0)
+            ),
+            _ => "Export · the moment on stage".to_owned(),
+        };
+        let webm = action(
+            "WebM",
+            (clip && self.ffmpeg.is_some())
+                .then_some(Message::AskExport(Some(ExportKind::Clip(ClipFormat::Webm)))),
+        );
+        let webm: Element<'_, Message> = if self.ffmpeg.is_some() {
+            webm.into()
+        } else {
+            iced::widget::tooltip(
+                webm,
+                container(
+                    text("WebM needs ffmpeg on PATH; rsRewind does not bundle a video encoder.")
+                        .size(12),
+                )
+                .padding(6)
+                .style(move |_| t.panel()),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .into()
+        };
+        let mut sizes = row![text("Clip size").size(11).color(t.text_3)]
+            .spacing(4)
+            .align_y(Alignment::Center);
+        for size in export::CLIP_SIZES {
+            let selected = self.clip_size == size;
+            sizes = sizes.push(
+                button(text(size.to_string()).size(11).font(MONO))
+                    .padding([2, 6])
+                    .style(move |_, status| t.row(selected, status, t.mint))
+                    .on_press(Message::ClipSize(size)),
+            );
+        }
+        let mut col = column![
+            heading(t, &title),
+            row![
+                action(
+                    "Copy image",
+                    single.then_some(Message::RunExport(ExportKind::CopyImage))
+                ),
+                action(
+                    "Save PNG",
+                    single.then_some(Message::AskExport(Some(ExportKind::Png)))
+                ),
+                action(
+                    "GIF",
+                    clip.then_some(Message::AskExport(Some(ExportKind::Clip(ClipFormat::Gif))))
+                ),
+                webm,
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+            sizes,
+        ]
+        .spacing(6);
+        if self.picks.len() > 1 && single {
+            col = col.push(
+                text("Copy image and Save PNG use the moment on stage.")
+                    .size(11)
+                    .color(t.text_3),
+            );
+        }
+        if !clip {
+            col = col.push(
+                text("Click a card, then Shift-click (or Shift+[ ] , .) to pick a stretch for a clip.")
+                    .size(11)
+                    .color(t.text_3),
+            );
+        }
+        if let Some(kind) = self.confirm_export {
+            col = col.push(
+                column![
+                    text(format!(
+                        "This writes a new file to {}. Exported files are copies outside \
+                         rsRewind's history: forget and retention will not delete them. Clips are \
+                         silent (rsRewind records no audio).",
+                        export::exports_dir(&self.data_root).display()
+                    ))
+                    .size(12)
+                    .color(t.gold),
+                    row![
+                        action("Export", Some(Message::RunExport(kind))),
+                        action("Cancel", Some(Message::AskExport(None))),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(4),
+            );
+        }
+        if let Some(running) = &self.exporting {
+            let (done, total) = running.progress.get();
+            col = col.push(
+                row![
+                    text(format!("{} · {done} of {total}", running.kind.label()))
+                        .size(12)
+                        .color(t.text_2),
+                    space::horizontal(),
+                    button(text("Cancel").size(12))
+                        .padding([3, 8])
+                        .style(move |_, status| t.transport(status))
+                        .on_press(Message::CancelExport),
+                ]
+                .align_y(Alignment::Center),
+            );
+        }
+        if let Some(note) = &self.export_note {
+            col = col.push(text(note.clone()).size(12).color(t.text_2));
+        }
+        col.into()
     }
 
     /// The empty window: what is happening, and the buttons that get recording going.
@@ -1169,6 +2296,9 @@ impl App {
                 thumbs: &self.thumbs,
                 selected: self.selection.as_ref().map(|s| s.frame),
                 matched: &self.matched,
+                picked: &self.picked,
+                keyframes: &self.keyed,
+                marks: &self.mark_times,
                 tokens: t,
                 on_event: Message::Timeline,
             })
@@ -1227,6 +2357,43 @@ impl App {
                 .x(16.0)
                 .y(12.0),
             );
+            // The nearest marks' labels, at the right end of their floor line.
+            let mut labelled: Vec<(f32, &Mark)> = self
+                .marks
+                .iter()
+                .filter_map(|m| {
+                    let z = camera.depth(m.at.0, m.at.0).filter(|z| *z >= 0.0)?;
+                    Some((z, m))
+                })
+                .collect();
+            labelled.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // Nearest first; a label that would overlap one already placed is left out.
+            let mut taken: Vec<f32> = Vec::new();
+            for (z, mark) in labelled {
+                if taken.len() >= ROOM_MARK_LABELS {
+                    break;
+                }
+                let y = camera.floor_y(lanes, size.width, size.height, z) - 17.0;
+                if taken.iter().any(|t| (t - y).abs() < 14.0) {
+                    continue;
+                }
+                taken.push(y);
+                let label = if mark.label.is_empty() {
+                    format!("◆ {}", format_clock(mark.at.0))
+                } else {
+                    format!("◆ {}", mark.label)
+                };
+                layers = layers.push(
+                    pin(text(label)
+                        .size(11)
+                        .color(t.gold)
+                        .width(220.0)
+                        .wrapping(text::Wrapping::None)
+                        .align_x(alignment::Horizontal::Right))
+                    .x((size.width - 236.0).max(0.0))
+                    .y(y),
+                );
+            }
             let notes = self.gap_notes();
             if !notes.is_empty() {
                 let lines = notes.into_iter().map(|(line, warning)| {
@@ -1313,6 +2480,9 @@ impl App {
             filament,
             gaps,
             marks,
+            stops: self.keyframes.iter().map(|k| k.at.0 as f64).collect(),
+            flags: self.marks.iter().map(|m| m.at.0 as f64).collect(),
+            picked: self.picks.span().map(|(a, b)| (a.0 as f64, b.0 as f64)),
             cursor: self.camera.cursor,
             tokens: t,
             on_event: Message::Timeline,
@@ -1613,6 +2783,29 @@ fn app_and_window(app: Option<&str>, window: Option<&str>) -> String {
         (Some(a), _) => a.to_owned(),
         (None, Some(w)) => w.to_owned(),
         (None, None) => "Unknown application".into(),
+    }
+}
+
+/// One Tick, a tenth of a second from now (iced's thread-pool executor has no timer of its own).
+fn tick() -> Task<Message> {
+    Task::perform(
+        recorder::off_thread((), || {
+            std::thread::sleep(std::time::Duration::from_millis(100))
+        }),
+        |()| Message::Tick,
+    )
+}
+
+fn format_clock(ms: i64) -> String {
+    Timestamp(ms).to_local().format("%H:%M:%S").to_string()
+}
+
+/// "Mark · standup · Sat Oct 11 · 09:30:00".
+fn mark_title(mark: &Mark) -> String {
+    if mark.label.is_empty() {
+        format!("Mark · {}", format_time(mark.at.0))
+    } else {
+        format!("Mark · {} · {}", mark.label, format_time(mark.at.0))
     }
 }
 

@@ -14,7 +14,8 @@
 //! replica of exactly the id its directory is named after. Anything else is skipped and reported
 //! in [`History::problems`], never guessed at.
 
-use crate::{QueryDb, QueryError, Result, clamp_limit};
+use crate::keyframes::{KEYFRAME_SPACING_MS, Keyframe, thin};
+use crate::{Mark, QueryDb, QueryError, Result, clamp_limit};
 use rsrewind_core::{
     BgraFrame, DataDir, Gap, MediaPathError, SearchHit, SearchQuery, SourceId, TimelineCursor,
     TimelineEntry, Timestamp, VisualDetail, VisualStateId,
@@ -100,6 +101,8 @@ struct Lane {
     kind: SourceKind,
     label: Option<String>,
     db: QueryDb,
+    /// The data folder's own `recall.db` (not a `sources/<id>/` replica): where marks live.
+    own: bool,
 }
 
 /// Read-only view over every store under one data folder. See the module docs.
@@ -327,6 +330,103 @@ impl History {
         Ok(gaps)
     }
 
+    /// The user's marks, oldest moment first. Marks live in the data folder's own store only (they
+    /// are never replicated; `docs/design/marks-keyframes.md`), so this is empty on a folder that
+    /// holds only replicas, and on a store from before schema v2.
+    pub fn marks(&self) -> Result<Vec<Mark>> {
+        match self.lanes.iter().find(|l| l.own) {
+            Some(lane) => lane.db.marks(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The schema version of the data folder's own store when it was opened (`None` without one).
+    /// Below [`rsrewind_core::SCHEMA_VERSION`], the first `rsrewind mark` will migrate it.
+    pub fn own_schema(&self) -> Option<u32> {
+        self.lanes.iter().find(|l| l.own).map(|l| l.db.schema())
+    }
+
+    /// Keyframes (automatic stops) of the selected sources whose moment starts in `[from, to]`,
+    /// merged and thinned, oldest first. See [`crate::keyframes`].
+    pub fn keyframes(
+        &self,
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    ) -> Result<Vec<Keyframe>> {
+        self.keyframes_toward(filter, from, to, false)
+    }
+
+    /// [`History::keyframes`]; a range denser than [`crate::keyframes::MAX_KEYFRAME_ROWS`] is read
+    /// from its newest end when `newest_first` (backward steps), else from its oldest.
+    fn keyframes_toward(
+        &self,
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+        newest_first: bool,
+    ) -> Result<Vec<Keyframe>> {
+        let mut candidates = Vec::new();
+        for lane in self.lanes(filter) {
+            candidates.extend(lane.db.keyframe_candidates(from, to, newest_first)?);
+        }
+        Ok(thin(candidates, KEYFRAME_SPACING_MS))
+    }
+
+    /// The nearest keyframe strictly after `from` (`forward`) or strictly before it, looking in
+    /// widening windows (30 minutes, doubling) until one is found or history ends.
+    pub fn step_keyframe(
+        &self,
+        filter: SourceFilter,
+        from: Timestamp,
+        forward: bool,
+    ) -> Result<Option<Keyframe>> {
+        const FIRST_SPAN_MS: i64 = 30 * 60_000;
+        let mut bounds: Option<(i64, i64)> = None;
+        for lane in self.lanes(filter) {
+            if let Some((a, b)) = lane.db.observation_bounds()? {
+                bounds = Some(bounds.map_or((a, b), |(x, y)| (x.min(a), y.max(b))));
+            }
+        }
+        let Some((first, last)) = bounds else {
+            return Ok(None);
+        };
+        // Windows start at history's edge when `from` lies beyond it, so stepping back from far
+        // in the future (or forward from before the first moment) does not search empty time.
+        let anchor = if forward {
+            from.0.max(first.saturating_sub(1))
+        } else {
+            from.0.min(last.saturating_add(1))
+        };
+        let mut span = FIRST_SPAN_MS;
+        // 40 doublings of 30 minutes is far beyond any history; the bounds end the loop first.
+        for _ in 0..40 {
+            let (a, b) = if forward {
+                (anchor.saturating_add(1), anchor.saturating_add(span))
+            } else {
+                (anchor.saturating_sub(span), anchor.saturating_sub(1))
+            };
+            let (a, b) = (a.max(first), b.min(last));
+            if a > b {
+                return Ok(None);
+            }
+            let found = self.keyframes_toward(filter, Timestamp(a), Timestamp(b), !forward)?;
+            let pick = if forward {
+                found.into_iter().find(|k| k.at > from)
+            } else {
+                found.into_iter().rev().find(|k| k.at < from)
+            };
+            if pick.is_some() {
+                return Ok(pick);
+            }
+            if (forward && b >= last) || (!forward && a <= first) {
+                return Ok(None);
+            }
+            span = span.saturating_mul(2);
+        }
+        Ok(None)
+    }
+
     /// Everything about one visual state of one source, as a single consistent snapshot.
     pub fn visual_detail(
         &self,
@@ -388,6 +488,7 @@ fn local_lane(mut db: QueryDb) -> Result<Lane> {
                 kind: SourceKind::Replica,
                 label,
                 db,
+                own: true,
             }
         }
         None => Lane {
@@ -395,6 +496,7 @@ fn local_lane(mut db: QueryDb) -> Result<Lane> {
             kind: SourceKind::Local,
             label: None,
             db,
+            own: true,
         },
     })
 }
@@ -415,6 +517,7 @@ fn replica_lane(id: SourceId, mut db: QueryDb) -> Result<Lane> {
         kind: SourceKind::Replica,
         label,
         db,
+        own: false,
     })
 }
 

@@ -115,6 +115,9 @@ pub struct DeleteReport {
     /// Pre-migration database backups still on disk. They hold history as it was when they were
     /// taken and are never rewritten; only `forget` (an explicit user action) reports them.
     pub backups_surviving: Vec<String>,
+    /// Marks deleted with the history they pointed at (`forget`, age retention; never size).
+    #[serde(default)]
+    pub marks_deleted: u64,
 }
 
 impl DeleteReport {
@@ -128,6 +131,7 @@ impl DeleteReport {
         self.orphan_files_deleted += other.orphan_files_deleted;
         self.wal_truncated = other.wal_truncated;
         self.backups_surviving.extend(other.backups_surviving);
+        self.marks_deleted += other.marks_deleted;
     }
 }
 
@@ -187,6 +191,18 @@ impl Selection {
             Self::Overlapping { since, until } => ts >= since && ts < until,
             Self::EndedBefore(cutoff) => ts < cutoff,
             Self::StartedAtOrBefore(cutoff) => ts <= cutoff,
+        }
+    }
+
+    /// Which marks go with this pass. Size retention (`StartedAtOrBefore`) keeps every mark: it trims
+    /// pictures to save bytes, and a mark costs a few bytes (docs/design/marks-keyframes.md).
+    fn mark_clause(self) -> Option<(&'static str, Vec<i64>)> {
+        match self {
+            Self::Overlapping { since, until } => {
+                Some(("at >= ?1 AND at < ?2", vec![since, until]))
+            }
+            Self::EndedBefore(cutoff) => Some(("at < ?1", vec![cutoff])),
+            Self::StartedAtOrBefore(_) => None,
         }
     }
 
@@ -917,6 +933,13 @@ impl Store {
                 doomed_files.push(path);
             }
             drop((still_used, details, delete_fts, delete_state));
+            if let Some((mark_where, mark_params)) = selection.mark_clause() {
+                let deleted = tx.execute(
+                    &format!("DELETE FROM marks WHERE {mark_where}"),
+                    rusqlite::params_from_iter(&mark_params),
+                )?;
+                report.marks_deleted = deleted as u64;
+            }
             // Titles and process names of history that no longer exists are history too.
             tx.execute(
                 "DELETE FROM windows
@@ -1355,7 +1378,7 @@ pub(crate) fn upsert_window_row(
     Ok(id)
 }
 
-fn refuse_if_fenced(tx: &Transaction<'_>, at: i64) -> Result<()> {
+pub(crate) fn refuse_if_fenced(tx: &Transaction<'_>, at: i64) -> Result<()> {
     let fence: Option<(i64, i64)> = tx
         .query_row(
             "SELECT since, until FROM deletion_fences WHERE since <= ?1 AND ?1 < until LIMIT 1",

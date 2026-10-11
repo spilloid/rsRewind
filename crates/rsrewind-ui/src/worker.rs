@@ -17,11 +17,16 @@ use rsrewind_core::{
     DataDir, Gap, SearchHit, SearchQuery, SourceId, TimelineCursor, TimelineEntry, Timestamp,
     VisualDetail, VisualStateId,
 };
-use rsrewind_query::{History, MediaReader, SourceFilter, SourceInfo, SourceProblem};
+use rsrewind_query::{
+    History, Keyframe, Mark, MediaReader, SourceFilter, SourceInfo, SourceProblem,
+};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+
+/// Most moments one selection (a range between two moments) may hold.
+pub const MAX_RANGE: usize = 2_000;
 
 /// Decoded pictures waiting at most; older requests are dropped first.
 const MAX_QUEUED_FRAMES: usize = 192;
@@ -63,6 +68,26 @@ pub enum Ask {
         from: Timestamp,
         to: Timestamp,
     },
+    /// The user's marks (this data folder's own).
+    Marks,
+    /// Keyframes whose moment starts in `[from, to]`.
+    Keyframes {
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    },
+    /// The nearest keyframe strictly after (`forward`) or before `from`.
+    StepKeyframe {
+        filter: SourceFilter,
+        from: Timestamp,
+        forward: bool,
+    },
+    /// Every moment starting in `[from, to]`, oldest first, at most [`MAX_RANGE`].
+    Between {
+        filter: SourceFilter,
+        from: Timestamp,
+        to: Timestamp,
+    },
 }
 
 impl Ask {
@@ -76,6 +101,10 @@ impl Ask {
             Self::Detail { .. } => 4,
             Self::Step { .. } => 5,
             Self::Gaps { .. } => 6,
+            Self::Marks => 7,
+            Self::Keyframes { .. } => 8,
+            Self::StepKeyframe { .. } => 9,
+            Self::Between { .. } => 10,
         }
     }
 }
@@ -85,6 +114,8 @@ pub enum Answer {
     Sources {
         sources: Vec<SourceInfo>,
         problems: Vec<SourceProblem>,
+        /// Schema version of the folder's own store (see `History::own_schema`).
+        own_schema: Option<u32>,
     },
     Window(Vec<TimelineEntry>),
     Search(Vec<SearchHit>),
@@ -92,6 +123,14 @@ pub enum Answer {
     Detail(Option<VisualDetail>),
     Step(Vec<TimelineEntry>),
     Gaps(Vec<Gap>),
+    Marks(Vec<Mark>),
+    Keyframes(Vec<Keyframe>),
+    StepKeyframe(Option<Keyframe>),
+    /// Moments of a range, and whether it held more than [`MAX_RANGE`].
+    Between {
+        entries: Vec<TimelineEntry>,
+        truncated: bool,
+    },
     /// A newer question of the same kind arrived first.
     Superseded,
     /// The query failed; the message is for display (no screen content in it).
@@ -197,6 +236,7 @@ fn answer(history: &History, ask: Ask) -> Answer {
             Ok(sources) => Answer::Sources {
                 sources,
                 problems: history.problems().to_vec(),
+                own_schema: history.own_schema(),
             },
             Err(e) => failed(e),
         },
@@ -224,6 +264,73 @@ fn answer(history: &History, ask: Ask) -> Answer {
         Ask::Detail { source, id } => history
             .visual_detail(source, id)
             .map_or_else(failed, Answer::Detail),
+        Ask::Marks => history.marks().map_or_else(failed, Answer::Marks),
+        Ask::Keyframes { filter, from, to } => history
+            .keyframes(filter, from, to)
+            .map_or_else(failed, Answer::Keyframes),
+        Ask::StepKeyframe {
+            filter,
+            from,
+            forward,
+        } => history
+            .step_keyframe(filter, from, forward)
+            .map_or_else(failed, Answer::StepKeyframe),
+        Ask::Between { filter, from, to } => {
+            between(history, filter, from, to).map_or_else(failed, |(entries, truncated)| {
+                Answer::Between { entries, truncated }
+            })
+        }
+    }
+}
+
+/// Pages forward from `from` until past `to` or [`MAX_RANGE`] moments.
+fn between(
+    history: &History,
+    filter: SourceFilter,
+    from: Timestamp,
+    to: Timestamp,
+) -> rsrewind_query::Result<(Vec<TimelineEntry>, bool)> {
+    let page = rsrewind_query::MAX_LIMIT;
+    between_pages(
+        |after| history.later(filter, page, after),
+        from,
+        to,
+        page as usize,
+        MAX_RANGE,
+    )
+}
+
+/// The paging loop of [`between`] over any source of oldest-first pages that start strictly after
+/// a cursor and hold at most `page` entries: every moment starting in `[from, to]`, at most `cap`,
+/// and whether more were left out.
+fn between_pages<E>(
+    mut later: impl FnMut(TimelineCursor) -> Result<Vec<TimelineEntry>, E>,
+    from: Timestamp,
+    to: Timestamp,
+    page: usize,
+    cap: usize,
+) -> Result<(Vec<TimelineEntry>, bool), E> {
+    let mut out: Vec<TimelineEntry> = Vec::new();
+    let mut after = TimelineCursor::at_or_before(Timestamp(from.0.saturating_sub(1)));
+    loop {
+        let entries = later(after)?;
+        let Some(last) = entries.last() else {
+            return Ok((out, false));
+        };
+        after = last.cursor();
+        let full = entries.len() >= page;
+        for entry in entries {
+            if entry.started_at > to {
+                return Ok((out, false));
+            }
+            if out.len() >= cap {
+                return Ok((out, true));
+            }
+            out.push(entry);
+        }
+        if !full {
+            return Ok((out, false));
+        }
     }
 }
 
@@ -253,6 +360,8 @@ struct Queue {
 #[derive(Clone)]
 pub struct FramePool {
     shared: Arc<(Mutex<Queue>, Condvar)>,
+    /// The picture reader, once the history thread has opened the data folder (for exports).
+    media: Arc<OnceLock<MediaReader>>,
 }
 
 impl std::fmt::Debug for FramePool {
@@ -273,10 +382,17 @@ impl FramePool {
     fn new() -> Self {
         Self {
             shared: Arc::new((Mutex::new(Queue::default()), Condvar::new())),
+            media: Arc::new(OnceLock::new()),
         }
     }
 
+    /// The reader the decoders use, once history is open.
+    pub fn media(&self) -> Option<MediaReader> {
+        self.media.get().cloned()
+    }
+
     fn spawn_decoders(&self, media: MediaReader) {
+        let _ = self.media.set(media.clone());
         for n in 0..DECODERS {
             let pool = self.clone();
             let media = media.clone();
@@ -407,5 +523,80 @@ mod tests {
         let newest = pool.next();
         assert_eq!(newest.key.1, VisualStateId((MAX_QUEUED_FRAMES + 4) as i64));
         drop(answers);
+    }
+
+    /// Pages of `n` moments one second apart from 1 s, oldest first after the cursor, `page` at a
+    /// time (what `History::later` returns), and how many pages were asked for.
+    type Counter = std::rc::Rc<std::cell::Cell<usize>>;
+
+    fn pages(
+        n: i64,
+        page: usize,
+    ) -> (
+        impl FnMut(TimelineCursor) -> Result<Vec<TimelineEntry>, ()>,
+        Counter,
+    ) {
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = asked.clone();
+        let all: Vec<TimelineEntry> = (1..=n)
+            .map(|i| TimelineEntry {
+                event_id: rsrewind_core::EventId(i),
+                visual_state_id: VisualStateId(i),
+                started_at: Timestamp(i * 1_000),
+                ended_at: Timestamp(i * 1_000 + 500),
+                application: None,
+                window_title: None,
+                monitor: None,
+                media_path: String::new(),
+                ocr_status: "done".into(),
+                source: None,
+            })
+            .collect();
+        let fetch = move |after: TimelineCursor| {
+            count.set(count.get() + 1);
+            Ok(all
+                .iter()
+                .filter(|e| e.cursor() > after)
+                .take(page)
+                .cloned()
+                .collect())
+        };
+        (fetch, asked)
+    }
+
+    #[test]
+    fn a_range_is_paged_to_its_end_inclusive() -> Result<(), ()> {
+        let (fetch, asked) = pages(50, 7);
+        let (got, truncated) =
+            between_pages(fetch, Timestamp(3_000), Timestamp(40_000), 7, MAX_RANGE)?;
+        let starts: Vec<i64> = got.iter().map(|e| e.started_at.0 / 1_000).collect();
+        assert_eq!(starts, (3..=40).collect::<Vec<_>>(), "both ends included");
+        assert!(!truncated);
+        assert!(asked.get() >= 6, "{} pages", asked.get());
+        // A range that ends exactly with the last page and history.
+        let (fetch, _) = pages(14, 7);
+        let (got, truncated) = between_pages(fetch, Timestamp(0), Timestamp(99_000), 7, MAX_RANGE)?;
+        assert_eq!((got.len(), truncated), (14, false));
+        Ok(())
+    }
+
+    #[test]
+    fn a_range_over_the_cap_stops_there_and_says_so() -> Result<(), ()> {
+        let (fetch, _) = pages(2_500, 200);
+        let (got, truncated) =
+            between_pages(fetch, Timestamp(0), Timestamp(10_000_000), 200, MAX_RANGE)?;
+        assert_eq!(got.len(), MAX_RANGE);
+        assert!(truncated);
+        assert_eq!(
+            got.last().map(|e| e.started_at.0),
+            Some(2_000_000),
+            "the oldest 2,000"
+        );
+        // Exactly the cap is not truncated.
+        let (fetch, _) = pages(2_000, 200);
+        let (got, truncated) =
+            between_pages(fetch, Timestamp(0), Timestamp(10_000_000), 200, MAX_RANGE)?;
+        assert_eq!((got.len(), truncated), (MAX_RANGE, false));
+        Ok(())
     }
 }

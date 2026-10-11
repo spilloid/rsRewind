@@ -177,11 +177,20 @@ fn fts_matches(store: &Store, expr: &str) -> rusqlite::Result<Vec<i64>> {
     stmt.query_map([expr], |row| row.get(0))?.collect()
 }
 
-const TEST_V2: Migration = Migration {
-    version: 2,
+/// A migration one past the current schema, to exercise backup-before-migrate on a store that is
+/// already at `SCHEMA_VERSION`.
+const TEST_NEXT: Migration = Migration {
+    version: SCHEMA_VERSION + 1,
     name: "test_extra_table",
     sql: "CREATE TABLE test_extra (x INTEGER);",
 };
+
+/// Every real migration plus [`TEST_NEXT`].
+fn with_next() -> Vec<Migration> {
+    let mut all = MIGRATIONS.to_vec();
+    all.push(TEST_NEXT);
+    all
+}
 
 // ----- migrations --------------------------------------------------------------------------------
 
@@ -201,6 +210,7 @@ fn migrates_from_empty_with_required_pragmas() -> TestResult {
         "control",
         "recorder_status",
         "settings",
+        "marks",
         "schema_migrations",
     ] {
         let n = f.store.conn().query_row(
@@ -293,10 +303,13 @@ fn backs_up_before_migrating_a_database_with_data() -> TestResult {
     let data = f.data.clone();
     drop(f.store);
 
-    let migrations = [MIGRATIONS[0], TEST_V2];
+    let migrations = with_next();
     let (store, outcome) = Store::open_with_migrations(&data, &migrations, false)?;
-    assert_eq!((outcome.from, outcome.to), (1, 2));
-    assert_eq!(store.schema_version()?, 2);
+    assert_eq!(
+        (outcome.from, outcome.to),
+        (SCHEMA_VERSION, SCHEMA_VERSION + 1)
+    );
+    assert_eq!(store.schema_version()?, SCHEMA_VERSION + 1);
     store
         .conn()
         .execute("INSERT INTO test_extra (x) VALUES (1)", [])?;
@@ -305,7 +318,7 @@ fn backs_up_before_migrating_a_database_with_data() -> TestResult {
     assert!(backup.starts_with(data.backups()));
     let name = backup.file_name().and_then(|n| n.to_str()).unwrap_or("");
     assert!(
-        name.starts_with("recall-v1-") && name.ends_with(".db"),
+        name.starts_with(&format!("recall-v{SCHEMA_VERSION}-")) && name.ends_with(".db"),
         "{name}"
     );
 
@@ -314,7 +327,7 @@ fn backs_up_before_migrating_a_database_with_data() -> TestResult {
     let version: i64 = copy.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
         r.get(0)
     })?;
-    assert_eq!(version, 1);
+    assert_eq!(version, i64::from(SCHEMA_VERSION));
     let sessions: i64 = copy.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
     assert_eq!(sessions, 1);
     let has_extra: i64 = copy.query_row(
@@ -326,7 +339,7 @@ fn backs_up_before_migrating_a_database_with_data() -> TestResult {
     let check: String = copy.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
     assert_eq!(check, "ok");
 
-    // Re-opening at v2 migrates nothing and makes no second backup.
+    // Re-opening at the new version migrates nothing and makes no second backup.
     drop(copy);
     drop(store);
     let (_, again) = Store::open_with_migrations(&data, &migrations, false)?;
@@ -339,10 +352,10 @@ fn backs_up_before_migrating_a_database_with_data() -> TestResult {
         .filter(|p| p.extension().is_some_and(|e| e == "db"))
         .count();
     assert_eq!(db_files, 1, "{backups:?}");
-    // And the v1 binary now refuses the v2 database.
+    // And this binary now refuses the newer database.
     assert!(matches!(
         Store::open(&data),
-        Err(StorageError::SchemaTooNew { found: 2, .. })
+        Err(StorageError::SchemaTooNew { found, .. }) if found == SCHEMA_VERSION + 1
     ));
     Ok(())
 }
@@ -356,7 +369,7 @@ fn failed_backup_leaves_the_database_unmigrated() -> TestResult {
     std::fs::remove_dir_all(data.backups())?;
     std::fs::write(data.backups(), b"not a directory")?;
 
-    let result = Store::open_with_migrations(&data, &[MIGRATIONS[0], TEST_V2], false);
+    let result = Store::open_with_migrations(&data, &with_next(), false);
     assert!(
         matches!(result, Err(StorageError::BackupFailed(_))),
         "{result:?}"
@@ -366,7 +379,7 @@ fn failed_backup_leaves_the_database_unmigrated() -> TestResult {
     let version: i64 = conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
         r.get(0)
     })?;
-    assert_eq!(version, 1);
+    assert_eq!(version, i64::from(SCHEMA_VERSION));
     let has_extra: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE name = 'test_extra'",
         [],
@@ -381,7 +394,7 @@ fn rejects_out_of_order_migration_lists() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let data = DataDir::new(tmp.path());
     data.ensure()?;
-    let result = Store::open_with_migrations(&data, &[TEST_V2], true);
+    let result = Store::open_with_migrations(&data, &[TEST_NEXT], true);
     assert!(matches!(result, Err(StorageError::InvalidArgument(_))));
     Ok(())
 }
@@ -1265,7 +1278,7 @@ fn concurrent_migrations_keep_one_correct_backup() -> TestResult {
         let store = Store::open(&data)?;
         store.begin_session(Timestamp(T0), "host", "0.1.0")?;
     }
-    let both = [MIGRATIONS[0], TEST_V2];
+    let both = with_next();
     let results: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..4)
             .map(|_| {
@@ -1467,7 +1480,7 @@ fn forget_names_surviving_backups_and_truncates_the_wal() -> TestResult {
         let s = Store::open(&data)?;
         s.begin_session(Timestamp(T0), "h", "v")?;
     }
-    let both = [MIGRATIONS[0], TEST_V2];
+    let both = with_next();
     let (store, outcome) = Store::open_with_migrations(&data, &both, false)?;
     let backup = outcome.backup.ok_or("no backup")?;
     let report = store.delete_range(Timestamp(T0), Timestamp(T0 + 1))?;
@@ -1476,4 +1489,5 @@ fn forget_names_surviving_backups_and_truncates_the_wal() -> TestResult {
     Ok(())
 }
 
+mod marks;
 mod replication;

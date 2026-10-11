@@ -164,6 +164,33 @@ DPAPI-based (or equivalent) encryption at rest is planned future work (see
 will be updated the moment it is, per this repo's documentation-freshness commitment
 (`docs/standards.md`, STD-003).
 
+## Marks
+
+A mark (`rsrewind mark`, or M in the window) is a moment you chose plus an optional label you typed.
+It is stored in `recall.db` with the rest of your history, unencrypted like it. Marks are never put
+into segment files, so they never reach another machine through `rsrewind export`. `forget` deletes
+the marks inside the forgotten range, age retention deletes marks older than the retention horizon,
+and a mark cannot be added inside forgotten time. Size retention keeps marks (they are a few bytes
+each). Labels are never logged. The window hands a label to `rsrewind mark` on standard input
+(`--label-stdin`), not as a command-line argument, so it does not appear in the process list (`ps`,
+Task Manager) while the command runs; `rsrewind mark add --label TEXT` typed by hand does put it there,
+like any argument.
+
+## Saving pictures and clips from the window
+
+The window can copy a moment's picture to the clipboard and save pictures and silent clips (PNG,
+GIF, and WebM when an `ffmpeg` executable is installed) to `<data folder>/exports/`. **An export is a
+copy that leaves rsRewind's history**: `forget`, retention and uninstall do not delete exported files
+or clipboard contents, and other programs can read them. The window says so before writing a file.
+Exports happen only when you ask, in the window's own process; the recorder is not involved, nothing
+is sent anywhere, and clips contain no audio (rsRewind records none). A moment that was forgotten
+after you picked it is not exported: the export stops and says the picture is gone. While an export
+runs, its unfinished file (`.rsrewind-….part`) and, for WebM, a scratch folder of full-size frames
+(`.rsrewind-….frames`) sit hidden in `exports/`; they are removed when the export finishes, fails or
+is cancelled. **If the window crashes or is killed mid-export, they stay on disk** until the window is
+opened again (or another export starts), which removes any whose export is no longer running. Only
+names of exactly that shape are removed; nothing else in `exports/` is touched.
+
 ## Exporting history to another machine
 
 `rsrewind export` writes segment files containing screenshots, window titles, process names and

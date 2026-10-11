@@ -57,7 +57,7 @@ connection to `recall.db` or constructs SQL — not the CLI, not the UI, not the
 "the UI crashing cannot stop recording" true by construction rather than by convention.
 
 **Single exe:** one executable, `rsrewind.exe`, with subcommands (`daemon`, `start`, `stop`,
-`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `forget`, `export`, `import`, `sources`,
+`status`, `pause`, `resume`, `search`, `recent`, `gaps`, `mark`, `forget`, `export`, `import`, `sources`,
 `doctor`, `ui`, `tray`, `mcp`, `data-dir`) — not separate
 binaries per concern. See `ARCHITECTURE.md`'s process model for why.
 
@@ -185,5 +185,23 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-08:** The Plasma recorder has run only on one machine (Plasma 6.7.5, one 2496x1664 screen
   at 135 %, Bazzite). Multiple screens, other scales, KWin restarts mid-run, and other compositors are
   untested. On excluded ticks KWin still takes the frame and the recorder drops it from memory.
+- **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
+  `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
+  integration tests on Linux only. A read-only adversarial review by a different model ran on
+  2026-10-11; its findings were fixed the same day (export leftovers after a crash and their sweep,
+  marks refresh, keyframe reads past the row cap, Shift-click without an anchor, the anchor joining a
+  filtered range, labels kept out of argv, a timer instead of per-frame redraws during exports, docs on
+  migration by `mark add`), and it graded tests that were then added. The window was never looked at
+  with these features on real recorded history. It was run once on synthetic history (360 moments,
+  three sources) under Xvfb with Mesa lavapipe (X11, 1280x800, dark): navigator, marks panel,
+  mark/keyframe stepping, labelled mark (written through `rsrewind mark`), delete confirmation,
+  Shift-click range, GIF and WebM export and Copy image (X11 clipboard, read back with `xclip`) all
+  worked as screenshots showed; keys work only once the window has focus (no window manager there).
+  Not seen: Wayland, a real GPU, light mode, scaling, multiple monitors, long histories.
+  Keyframe thresholds (60 s gap, 24 dHash bits, 15 s spacing) are untuned guesses. Copy image
+  (arboard), the WebM path and every Windows/macOS behaviour (clipboard, ffmpeg lookup, child
+  process without a console) are unverified; the WebM encode ran only under `cargo test` on Linux
+  with ffmpeg 6.1.1 (Ubuntu) and its libvpx-vp9. Schema v2 migration was tested on fixtures, not on a real
+  installed v0.0.10 database.
 - **2026-10-07:** The recorder-side privacy findings in `docs/remediation-status.md` (Unit B) are
   open; every statement about privacy guarantees applies to the design, not to a reviewed build.
