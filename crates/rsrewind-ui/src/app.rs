@@ -1664,18 +1664,14 @@ mod tests {
     #[test]
     fn find_shortcuts() {
         use keyboard::{Key, Modifiers};
-        assert!(is_find_key(Key::Character("f"), Modifiers::CTRL));
+        assert!(is_find_key(Key::Character("f"), Modifiers::COMMAND));
         assert!(!is_find_key(Key::Character("f"), Modifiers::empty()));
         assert!(is_find_key(Key::Character("/"), Modifiers::empty()));
-        assert!(!is_find_key(Key::Character("/"), Modifiers::CTRL));
-        assert!(!is_find_key(Key::Character("g"), Modifiers::CTRL));
+        assert!(!is_find_key(Key::Character("/"), Modifiers::COMMAND));
+        assert!(!is_find_key(Key::Character("g"), Modifiers::COMMAND));
     }
 
     #[test]
     fn ages_read_naturally() {
         assert_eq!(age_label(12_000.0), "12 s");
-        assert_eq!(age_label(300_000.0), "5.0 min");
-        assert_eq!(age_label(3_600_000.0 * 5.0), "5.0 h");
-        assert_eq!(age_label(86_400_000.0 * 30.0), "30 d");
-    }
-}
+        assert_eq!(age_label(300_000
