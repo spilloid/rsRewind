@@ -271,7 +271,7 @@ fn output_schema(name: &str) -> Option<Value> {
             ("machine", json!({"type":"string"})),
             ("app", json!({"type":["string","null"]})),
             ("window", json!({"type":["string","null"]})),
-            ("monitor", json!({"type":"integer"})),
+            ("monitor", json!({"type":"string"})),
             ("width", json!({"type":"integer"})),
             ("height", json!({"type":"integer"})),
             ("text_status", json!({"type":"string"})),
