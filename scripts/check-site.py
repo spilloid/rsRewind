@@ -15,7 +15,7 @@ class Page(HTMLParser):
         self.refs = []
         self.headings = 0
         self.mains = 0
-        self.feed(path.read_text())
+        self.feed(path.read_text(encoding='utf-8'))
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)

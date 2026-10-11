@@ -81,6 +81,8 @@ jobs:
       - name: Tag matches declared version and docs
         if: github.event_name == 'push'
         shell: bash
+        env:
+          PYTHONUTF8: '1'
         run: |
           declared=$(sed -n 's/^version = "\([0-9][0-9.]*\)".*/\1/p' Cargo.toml | head -1)
           [ "$declared" = "${GITHUB_REF_NAME#v}" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml $declared" >&2; exit 1; }
