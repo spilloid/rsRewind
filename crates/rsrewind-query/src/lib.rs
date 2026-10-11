@@ -6,9 +6,13 @@
 
 mod gaps;
 pub mod history;
+pub mod keyframes;
+mod marks;
 mod parse;
 
 pub use history::{History, MediaReader, SourceFilter, SourceInfo, SourceKind, SourceProblem};
+pub use keyframes::{Keyframe, KeyframeKind};
+pub use marks::{MAX_MARKS, Mark};
 pub use parse::{FtsExpr, parse_query};
 
 use rsrewind_core::{
@@ -21,6 +25,11 @@ use rusqlite::{
 };
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// Oldest schema this reader understands. Every version since only added tables (v2: `marks`), so
+/// a v1 store reads unchanged and simply has no marks; a read-only reader cannot migrate, and
+/// refusing would hide every imported replica after an upgrade until the next import migrated it.
+pub const MIN_READ_SCHEMA: u32 = 1;
 
 pub const DEFAULT_LIMIT: u32 = 20;
 pub const MAX_LIMIT: u32 = 200;
@@ -36,8 +45,8 @@ pub enum QueryError {
     DatabaseMissing(PathBuf),
 
     #[error(
-        "database schema version {found} does not match this build ({expected}); \
-         run the recorder from the same rsRewind version to migrate it"
+        "database schema version {found} is not one this build reads ({MIN_READ_SCHEMA} to \
+         {expected}); use the rsRewind version that wrote it, or run this one's recorder to migrate it"
     )]
     SchemaMismatch { found: u32, expected: u32 },
 
@@ -74,6 +83,8 @@ pub struct QueryDb {
     /// Stamped on every result. `None` for a store opened directly (this machine's history, or
     /// any store the caller pointed at); the history facade sets it for replicas.
     source: Option<SourceId>,
+    /// Schema version found at open (`MIN_READ_SCHEMA..=SCHEMA_VERSION`).
+    schema: u32,
 }
 
 impl std::fmt::Debug for QueryDb {
@@ -148,7 +159,7 @@ impl QueryDb {
         register_functions(&conn)?;
 
         let found = schema_version(&conn)?;
-        if found != SCHEMA_VERSION {
+        if !(MIN_READ_SCHEMA..=SCHEMA_VERSION).contains(&found) {
             return Err(QueryError::SchemaMismatch {
                 found,
                 expected: SCHEMA_VERSION,
@@ -158,6 +169,7 @@ impl QueryDb {
             conn,
             data: data.clone(),
             source: None,
+            schema: found,
         })
     }
 
