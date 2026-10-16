@@ -91,3 +91,48 @@ fn status_and_doctor_say_when_nothing_is_saved() -> TestResult {
     assert!(!status.contains("⚠ Nothing"), "{status}");
     Ok(())
 }
+
+#[test]
+fn status_and_doctor_say_when_title_rules_could_not_be_checked() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("data");
+    let store = Store::open(&DataDir::new(&root))?;
+    let write = |ticks: u64| -> TestResult {
+        let mut counters = BTreeMap::new();
+        counters.insert("health".to_string(), 0);
+        counters.insert("untitled_app_window_ticks".to_string(), ticks);
+        store.write_status(&RecorderStatus {
+            pid: std::process::id(),
+            started_at: Timestamp::now(),
+            heartbeat_at: Timestamp::now(),
+            state: CaptureState::Recording,
+            counters,
+        })?;
+        Ok(())
+    };
+
+    write(0)?;
+    let status = stdout(&rsrewind(&root, &["status"])?);
+    assert!(!status.contains("Title rules"), "{status}");
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&rsrewind(&root, &["status", "--json"])?))?;
+    assert!(json.get("untitled_app_window_ticks").is_none(), "{json}");
+
+    write(7)?;
+    let status = stdout(&rsrewind(&root, &["status"])?);
+    assert!(
+        status.contains("Title rules could not be checked on 7 tick(s)"),
+        "{status}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&rsrewind(&root, &["status", "--json"])?))?;
+    assert_eq!(json["untitled_app_window_ticks"], 7);
+    let doctor = stdout(&rsrewind(&root, &["doctor"])?);
+    let line = doctor
+        .lines()
+        .find(|l| l.contains("title rules"))
+        .ok_or("doctor has no title rules line")?;
+    assert!(line.starts_with("[warn]"), "{doctor}");
+    assert!(line.contains("still claims window titles"), "{line}");
+    Ok(())
+}

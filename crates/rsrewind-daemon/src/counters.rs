@@ -42,6 +42,7 @@ counters!(
     retention_runs,
     window_list_unknown_ticks,
     idle_unknown_ticks,
+    untitled_app_window_ticks,
     health,
     health_since_ms,
 );
@@ -67,7 +68,7 @@ mod tests {
         assert_eq!(snap.get("persisted_states"), Some(&1));
         assert_eq!(snap.get("ocr_ms_total"), Some(&40));
         assert_eq!(snap.get("ticks"), Some(&0));
-        assert_eq!(snap.len(), 21);
+        assert_eq!(snap.len(), 22);
         assert_eq!(snap.get(crate::health::HEALTH_KEY), Some(&0));
         assert_eq!(snap.get(crate::health::HEALTH_SINCE_KEY), Some(&0));
     }

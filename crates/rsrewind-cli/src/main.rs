@@ -516,6 +516,19 @@ struct StatusReport {
     /// unchanged. The window and the tray show it next to "Recording".
     #[serde(skip_serializing_if = "Option::is_none")]
     not_saving: Option<NotSaving>,
+    /// Present only when the running recorder recorded ticks on which application windows
+    /// reported no title while title rules exist (macOS): window-title exclusion rules could not
+    /// match those windows. The number of such ticks. An open owner decision (docs/macos.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    untitled_app_window_ticks: Option<u64>,
+}
+
+/// Ticks on which title rules could not match some visible application window, if any.
+fn title_rule_gap(counters: &std::collections::BTreeMap<String, u64>) -> Option<u64> {
+    counters
+        .get("untitled_app_window_ticks")
+        .copied()
+        .filter(|ticks| *ticks > 0)
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -599,6 +612,7 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
             ("recording", Some(s)) => not_saving(&s.counters),
             _ => None,
         },
+        untitled_app_window_ticks: live.and_then(|s| title_rule_gap(&s.counters)),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -636,6 +650,13 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
         } else {
             println!("  Not saving right now{since}: {}.", n.detail);
         }
+    }
+    if let Some(ticks) = report.untitled_app_window_ticks {
+        println!(
+            "⚠ Title rules could not be checked on {ticks} tick(s): application windows on screen \
+             reported no title, so window-title exclusion rules cannot match them (application \
+             rules still do). See `rsrewind doctor` and docs/macos.md."
+        );
     }
     let s = &report.stats;
     println!("Data      {}", report.data_dir);

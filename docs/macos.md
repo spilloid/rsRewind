@@ -92,10 +92,13 @@ bridges compiled into static archives by each crate's build script and linked in
 
 - **Capture** (`rsrewind-capture/src/macos.rs`, `macos.swift`): displays and frames come from
   ScreenCaptureKit; the visible-window list (process name, title, geometry) from
-  `CGWindowListCopyWindowInfo`, so the any-visible-window exclusion rule is enforced per monitor
-  before anything is stored. Capture is attempted only while the user's session is on the console
-  and logged in; otherwise, and whenever a frame or the window list cannot be obtained, the tick is
-  unknown and nothing is stored. The Swift bridge only reports raw facts as JSON; which windows
+  `CGWindowListCopyWindowInfo`. The any-visible-window rule is checked per monitor before anything
+  is stored: application rules against every on-screen window, title rules only against windows
+  macOS reports a title for (see [what that relaxes](#window-list-rules-and-what-they-relax)).
+  Capture is attempted only while the session is on the console and logged in. Nothing is stored
+  on a tick whose window list is unknown (by the rules below), whose session is unknown, or whose
+  frame fails; an *individual* untitled window or unresolvable owner no longer makes the list
+  unknown. The Swift bridge only reports raw facts as JSON; which windows
   count and when something is unknown is decided in portable Rust
   (`rsrewind-capture/src/macos_facts.rs`, unit-tested on every platform). See
   [window list rules](#window-list-rules-and-what-they-relax) below.
@@ -105,9 +108,15 @@ bridges compiled into static archives by each crate's build script and linked in
   window list.
 - **Idle:** `CGEventSource` seconds since the last input, combined with the session check. The
   session is unknown (nothing is recorded, and no frame is taken) when it is not on the console,
-  login has not finished, `CGSSessionScreenIsLocked` is set, the window list cannot be read, or any
-  window owned by `loginwindow` is on screen. A window owner that `NSRunningApplication` cannot
-  resolve no longer makes it unknown. The session is checked before and after every frame, in Rust.
+  login has not finished, `CGSSessionScreenIsLocked` is set, the window list cannot be read, any
+  window owned by `loginwindow` is on screen, or a window that nothing identifies (no executable, no
+  owner name) covers at least 90 % of a display or has unreadable bounds. A window owner that
+  `NSRunningApplication` cannot resolve no longer makes it unknown by itself. The session is checked
+  before and after every frame, in Rust. **Lock detection rests on heuristics:** macOS offers no
+  documented "screen is locked" call to this kind of process, so it relies on the console/login
+  keys, the *undocumented* `CGSSessionScreenIsLocked` key, and the lock UI's windows being owned by
+  `loginwindow` (or being unidentified and display-covering). A macOS release that changes those
+  could let a lock screen through; the real-Mac checklist below includes locking.
 - **OCR** (`rsrewind-ocr/src/macos.rs`, `macos.swift`): Apple Vision text recognition, in memory,
   on the OCR thread. Recognised content never appears in errors or logs.
 - **Menu bar** (`rsrewind-tray/src/macos.rs`, `native/Tray.swift`): AppKit owns the main thread;
@@ -115,8 +124,9 @@ bridges compiled into static archives by each crate's build script and linked in
 - **Login** (`rsrewind-cli/src/macos_login.rs`): LaunchAgent plist generation with XML escaping.
 - **Diagnostics:** `rsrewind doctor` checks screen-recording authorization, takes **one real test
   frame** of the first display (discarded at once, nothing stored: permission can read "granted"
-  while capture still fails), reports the window list (counts of untitled windows, owners named by
-  fallback, windows skipped without bounds) or the exact reason it is unknown, and the session
+  while capture still fails; a 15 s ScreenCaptureKit timeout shows as "ScreenCaptureKit timed out",
+  worth watching for on a real Mac), reports the window list (counts of untitled windows, owners
+  named by fallback, zero-size windows skipped) or the exact reason it is unknown, and the session
   state or the exact reason it is unknown (with the shape of any `loginwindow` windows). It asks
   for the permission only when you run `rsrewind start` interactively. Run from Terminal, macOS
   judges *Terminal's* Screen Recording grant, not rsRewind.app's.
@@ -138,7 +148,8 @@ monitor was skipped on every tick while the menu bar said "Recording". The rules
 | Owner resolvable, display name differs from the executable name | Kept, and rules are checked against **both** names (an Electron app named "Code" whose executable is "Electron" matches either rule). |
 | No owner name at all | Kept as `unknown`; if any application rule exists, the **whole list is unknown** (nothing recorded). |
 | Layer missing or not an integer | Kept. |
-| No usable bounds | Skipped and counted (it cannot be placed on a display). |
+| Bounds missing, unparseable, not finite or negative | The **whole list is unknown** (`bounds-unknown`): the window could be on any display. |
+| Valid bounds of zero width or height | Skipped and counted (nothing of it is visible). |
 
 **What this relaxes, plainly:** a window-title exclusion rule (`excluded_title_patterns`) cannot
 match a window whose title macOS does not report. Before, such a window made the recorder store
@@ -148,15 +159,30 @@ window's title excludes it. Application rules are unaffected (and match more tha
 **The safeguard:** when title rules exist and regular applications (Dock apps) have windows on
 screen but **not one** of them reports a title, titles are evidently being withheld (a permission or
 TCC identity problem), so the list is treated as unknown and nothing is recorded (doctor and status
-say `titles-unavailable`). This process's own windows do not count as evidence. A Mac showing only
-one untitled application window (some full-screen apps) therefore records nothing while title rules
-exist; that is the deliberate, visible, fail-closed cost. `doctor` warns whenever title rules exist
-and application windows report no title, with how many.
+say `titles-unavailable`). rsRewind's own windows never count as evidence: neither this process nor
+any process running the rsRewind executable (the separate `rsrewind ui` window), and neither do
+owners `NSRunningApplication` could not resolve. A Mac showing only one untitled application window
+(some full-screen apps) therefore records nothing while title rules exist; that is the deliberate,
+visible, fail-closed cost.
 
-**Owner decision pending (2026-10-15):** whether this per-window relaxation is acceptable, or the
-stricter alternative (fail closed whenever *any* regular application window is untitled while title
-rules exist) is preferred. The stricter option may re-create #33 on Macs whose apps keep untitled
-helper windows on screen; the doctor counts on a real Mac are the evidence to decide on.
+**Visible, not silent:** whenever title rules exist and application windows report no title, the
+recorder counts those ticks (`untitled_app_window_ticks`); `rsrewind status` then prints "⚠ Title
+rules could not be checked on N tick(s)…", `status --json` carries `untitled_app_window_ticks`, and
+`doctor` has a `title rules` warning (and, on the Mac itself, counts in its window-context line).
+
+**Open owner decisions (2026-10-16):**
+
+- Whether this per-window relaxation is acceptable, or the stricter alternative (fail closed
+  whenever *any* regular application window is untitled while title rules exist) is preferred. The
+  stricter option may re-create #33 on Macs whose apps keep untitled helper windows on screen; the
+  doctor counts and `untitled_app_window_ticks` on a real Mac are the evidence to decide on.
+- The macOS backend still declares the `window_titles` capability, so the recorder does not refuse
+  to start with title rules, sessions record titles as enforced, and **exported segments carry the
+  `window_titles` tag**, although title rules cannot match untitled windows. Flipping the capability
+  would make the recorder refuse to start with title rules unless `privacy.unenforced_ok` is set;
+  that is the owner's call, not made here.
+- Follow-up, not done: judge title availability **per owner** (an application that reports titles
+  for some windows but not others) instead of one screen-wide "any titled window" test.
 
 ## When it says "Recording" but nothing is saved
 
@@ -204,7 +230,9 @@ about.hbs -o THIRD-PARTY-NOTICES.html`).
 
 - `doctor` on a normal desktop: capture `[ ok ]` with a test frame, window context `[ ok ]` or
   `[warn]` with counts (not `[FAIL]`), idle/session `[ ok ]`; `status` shows moments growing and no
-  "Nothing is being saved" line.
+  "Nothing is being saved" line. Watch for `ScreenCaptureKit timed out` (the 15 s wait), for
+  `bounds-unknown` or `unidentified-covering-window` (they would block recording on every tick), and
+  note whether a `Title rules could not be checked` line appears and how fast its count grows.
 - Deny screen recording: actionable error from `doctor` and `start`, no stored screenshots.
 - Grant permission, reopen, record a synthetic desktop and search its recognised text.
 - Place an excluded app or title on each display: the entire affected monitor is skipped.

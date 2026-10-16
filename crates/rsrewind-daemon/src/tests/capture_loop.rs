@@ -361,6 +361,29 @@ fn a_window_fault_message_never_reaches_a_log_line() -> TestResult {
 }
 
 #[test]
+fn ticks_with_app_windows_title_rules_cannot_match_are_counted() -> TestResult {
+    let mut h = harness(1, Capabilities::WINDOWS);
+    h.desktop().show(display(0), frame(1));
+    h.tick(REC);
+    h.desktop().untitled_app_windows = 2;
+    h.tick(REC);
+    h.tick(REC);
+    // Asked only after a successful list: an unknown list records nothing anyway.
+    h.desktop().windows = None;
+    h.tick(REC);
+    assert_eq!(
+        h.counters.untitled_app_window_ticks.load(Ordering::Relaxed),
+        2
+    );
+    // Recording itself is unaffected: the relaxation is made visible, not enforced here.
+    assert_eq!(
+        h.drain(),
+        ["state DISPLAY1 #1", "extend DISPLAY1", "extend DISPLAY1"]
+    );
+    Ok(())
+}
+
+#[test]
 fn unknown_idle_and_failing_capture_are_reported_as_such() -> TestResult {
     let mut h = harness(1, Capabilities::WINDOWS);
     h.desktop().idle_ms = None;

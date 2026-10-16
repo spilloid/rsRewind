@@ -354,6 +354,11 @@ impl Recorder {
             // Counted once per tick (privacy_skips counts it once per monitor). The fault's text
             // is not kept or logged (see `observe_health`).
             counters::bump(&self.counters.window_list_unknown_ticks);
+        } else if self.capabilities.list_windows && self.backends.context.untitled_app_windows() > 0
+        {
+            // Recorded as usual, but title rules could not have matched those windows: counted
+            // so `status` and `doctor` say so (docs/macos.md, an open owner decision).
+            counters::bump(&self.counters.untitled_app_window_ticks);
         }
         let focus = self.backends.context.foreground();
         let devices: Vec<String> = self.monitors.keys().cloned().collect();

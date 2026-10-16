@@ -115,6 +115,8 @@ pub struct Desktop {
     /// The message a failed `visible_windows` carries (default: a fixed sentence). Tests put
     /// title-like text here to prove fault text never reaches a log line.
     pub window_fault: Option<String>,
+    /// What `untitled_app_windows` reports (macOS: app windows title rules cannot match).
+    pub untitled_app_windows: usize,
 }
 
 pub type SharedDesktop = Arc<Mutex<Desktop>>;
@@ -166,6 +168,10 @@ impl ScreenContext for FakeContext {
             .windows
             .clone()
             .ok_or_else(|| PlatformFault::new(message, false))
+    }
+
+    fn untitled_app_windows(&self) -> usize {
+        lock(&self.desktop).untitled_app_windows
     }
 }
 

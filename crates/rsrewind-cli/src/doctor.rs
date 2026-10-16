@@ -353,6 +353,22 @@ fn collect(data: &DataDir) -> Vec<Check> {
                 ));
                 if running {
                     checks.extend(saving_check(&status.counters));
+                    if let Some(ticks) = status
+                        .counters
+                        .get("untitled_app_window_ticks")
+                        .filter(|t| **t > 0)
+                    {
+                        checks.push(check(
+                            "title rules",
+                            Level::Warn,
+                            format!(
+                                "on {ticks} recorded tick(s) application windows reported no \
+                                 title, so window-title exclusion rules could not match them \
+                                 (application rules still did). Exported history still claims \
+                                 window titles. An open decision: see docs/macos.md"
+                            ),
+                        ));
+                    }
                 }
             }
             Ok(None) => checks.push(check("recorder", Level::Warn, "has never run")),

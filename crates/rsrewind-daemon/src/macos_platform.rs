@@ -37,7 +37,10 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
     run_with(
         options,
         Platform {
-            context: Box::new(MacContext { needs }),
+            context: Box::new(MacContext {
+                needs,
+                untitled_app_windows: 0,
+            }),
             capture: Box::new(MacCapture),
             idle: Box::new(MacIdle),
             clock: Arc::new(SystemClock::new()),
@@ -54,6 +57,8 @@ struct MacContext {
     /// Which rule kinds are configured: some odd windows are tolerated only when no rule they
     /// could defeat exists (`macos_facts::classify_windows`).
     needs: RuleNeeds,
+    /// Untitled windows of other applications in the last list, while title rules exist.
+    untitled_app_windows: usize,
 }
 fn fault(message: String) -> PlatformFault {
     PlatformFault::new(message, true)
@@ -76,8 +81,17 @@ impl ScreenContext for MacContext {
         None
     }
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault> {
-        // The error's text is a fixed sentence or a count (never a title or name): safe to log.
-        macos::visible_windows(self.needs).map_err(|error| fault(error.to_string()))
+        // The error's text is a fixed sentence or a count (never a title or name).
+        let list = macos::window_list(self.needs).map_err(|error| fault(error.to_string()))?;
+        self.untitled_app_windows = if self.needs.title_rules {
+            list.stats.untitled_regular
+        } else {
+            0
+        };
+        Ok(list.windows)
+    }
+    fn untitled_app_windows(&self) -> usize {
+        self.untitled_app_windows
     }
 }
 struct MacCapture;
