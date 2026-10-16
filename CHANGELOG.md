@@ -6,11 +6,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-16
+
 ### Fixed
 
 - **macOS: captured frames were upside down.** The capture code flipped the drawing context before
   drawing, but a bitmap context already stores its top row first, so every frame came out inverted.
   Frames are now top-down, as the rest of the pipeline expects. Found on the first run of 0.1.1 on a Mac.
+
+### Known issues
+
+- **Mac orientation fix is unverified on a real Mac.** Swift cannot be compiled on the machine it was written on; CI compiles it, and the first real capture confirms the orientation.
+- Everything under 0.1.1 Known issues still applies, except that the Mac was confirmed to record on a real Mac with 0.1.1.
+
+### Upgrade notes
+
+- No schema change. Frames already captured by 0.1.1 on a Mac stay upside down; new captures are the right way up.
 
 ## [0.1.1] - 2026-10-16
 
