@@ -206,6 +206,11 @@ date is not allowed; re-verify it or delete it.
   only; `macos.swift` and all `cfg(target_os = "macos")` code it touches were not even compiled in
   that session. The relaxed window-list rules (untitled windows kept, owner-name fallback) and their
   safeguard are an open owner decision (`docs/macos.md`, "Window list rules and what they relax").
+- **2026-10-16:** Review round 2 on the same fix (bounds-unknown fails closed, rsRewind's own windows
+  excluded from title evidence, unidentified display-covering windows block the session, sanitized
+  KWin parse errors) is likewise unverified: the macOS code and the Linux-only `kwin.rs` change were
+  not compiled; only the portable logic and Windows build/tests ran. Mac exports still carry the
+  `window_titles` tag although title rules cannot match untitled windows (owner decision).
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only. A read-only adversarial review by a different model ran on

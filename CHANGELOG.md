@@ -13,11 +13,17 @@ All notable changes to this project are documented in this file. The format foll
   has, so every monitor was skipped on every tick; an unresolvable window owner also made idle time
   unknown. Odd windows are now kept (untitled: empty title; unresolvable owner: the owner name macOS
   reports; application rules are checked against both names). The list still counts as unknown,
-  and nothing is stored, when title rules exist and no application window reports a title, or a
-  window has no owner name while application rules exist. Locked, switched-away and login-window
-  sessions still record nothing. **Privacy note:** a title rule cannot match a Mac window whose
-  title macOS does not report; see PRIVACY.md. **Unverified on a real Mac**: written and tested on
-  Windows; the Swift and macOS-only code was not compiled before this entry was written.
+  and nothing is stored, when title rules exist and no application window (other than rsRewind's
+  own) reports a title, a window has no owner name while application rules exist, or a window's
+  position cannot be read. Locked, switched-away and login-window sessions still record nothing, and
+  so does a session where an unidentifiable window covers most of a display. **Privacy note:** a
+  title rule cannot match a Mac window whose title macOS does not report, and Mac exports still
+  carry the `window_titles` tag (an open maintainer decision); `status` and `doctor` say when this
+  happened. See PRIVACY.md. **Unverified on a real Mac**: written and tested on Windows; the Swift
+  and macOS-only code was not compiled before this entry was written.
+- **Logs never carry a window title from a parse error.** The KWin snapshot parser no longer passes
+  serde_json's message (which quotes rejected values) into its error, and the "nothing is being
+  saved" warning logs only the condition's name and counts.
 
 ### Added
 
@@ -26,7 +32,8 @@ All notable changes to this project are documented in this file. The format foll
   optional `not_saving` object (absent while saving), `doctor` adds a "saving" line with per-reason
   tick counts, and the window's chip and the tray headline say "Recording · nothing saved: …". The
   log gets one warning when it starts and one line when saving resumes. New heartbeat counters:
-  `window_list_unknown_ticks`, `idle_unknown_ticks`, `health`, `health_since_ms`. No schema change.
+  `window_list_unknown_ticks`, `idle_unknown_ticks`, `untitled_app_window_ticks`, `health`,
+  `health_since_ms`. No schema change.
 - **macOS doctor** names the exact failing condition for the window list and the session, takes one
   real test frame (discarded) so a granted-but-failing capture shows, and warns when title rules
   exist and application windows report no title.
