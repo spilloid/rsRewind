@@ -17,6 +17,9 @@ pub const POLL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recorder {
     Recording,
+    /// Running and not paused, but storing nothing (status `not_saving`): the chip must not just
+    /// say "Recording" then (issue #33).
+    NotSaving(NotSaving),
     Paused,
     NotRunning,
     Error,
@@ -24,26 +27,104 @@ pub enum Recorder {
     Unknown,
 }
 
+/// Why a recording recorder stores nothing, from `not_saving.reason` in `rsrewind status --json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotSaving {
+    WindowContext,
+    Session,
+    Capture,
+    NoDisplays,
+    Idle,
+    Excluded,
+    /// A reason this window does not know (a newer recorder).
+    Other,
+}
+
+impl NotSaving {
+    fn parse(reason: &str) -> Self {
+        match reason {
+            "window_context_unavailable" => Self::WindowContext,
+            "session_state_unknown" => Self::Session,
+            "capture_failing" => Self::Capture,
+            "no_displays" => Self::NoDisplays,
+            "idle" => Self::Idle,
+            "privacy_excluded" => Self::Excluded,
+            _ => Self::Other,
+        }
+    }
+
+    /// A problem to fix, not an expected pause in saving.
+    pub fn is_fault(self) -> bool {
+        !matches!(self, Self::Idle | Self::Excluded)
+    }
+
+    /// Why nothing is saved, one sentence for the empty window.
+    pub fn explain(self) -> &'static str {
+        match self {
+            Self::WindowContext => {
+                "The recorder cannot tell which windows are on screen, so it stores nothing (an unknown window list could hide an excluded app). Run `rsrewind doctor` for the exact cause."
+            }
+            Self::Session => {
+                "The recorder cannot confirm an unlocked session on this screen, so it stores nothing. Run `rsrewind doctor` for the exact cause."
+            }
+            Self::Capture => {
+                "Screen capture is failing on every display. Run `rsrewind doctor` for the exact cause."
+            }
+            Self::NoDisplays => "No displays were found. Run `rsrewind doctor`.",
+            Self::Idle => "Nothing is stored while you are away; it resumes when you are back.",
+            Self::Excluded => {
+                "An excluded window is visible on every screen, so nothing is stored."
+            }
+            Self::Other => "The recorder reports that it stores nothing. Run `rsrewind doctor`.",
+        }
+    }
+}
+
 impl Recorder {
     /// Parses `rsrewind status --json`; anything unreadable is [`Recorder::Unknown`].
     pub fn parse(json: &str) -> Self {
         #[derive(Deserialize)]
+        struct Reason {
+            reason: String,
+        }
+        #[derive(Deserialize)]
         struct Raw {
             state: String,
+            #[serde(default)]
+            not_saving: Option<Reason>,
         }
-        match serde_json::from_str::<Raw>(json).map(|r| r.state) {
-            Ok(s) if s == "recording" => Self::Recording,
-            Ok(s) if s == "paused" => Self::Paused,
-            Ok(s) if s == "not_running" => Self::NotRunning,
-            Ok(s) if s == "error" => Self::Error,
+        match serde_json::from_str::<Raw>(json) {
+            Ok(r) if r.state == "recording" => match r.not_saving {
+                Some(n) => Self::NotSaving(NotSaving::parse(&n.reason)),
+                None => Self::Recording,
+            },
+            Ok(r) if r.state == "paused" => Self::Paused,
+            Ok(r) if r.state == "not_running" => Self::NotRunning,
+            Ok(r) if r.state == "error" => Self::Error,
             _ => Self::Unknown,
         }
+    }
+
+    /// Running and not paused, whether or not anything is being saved.
+    pub fn is_recording(self) -> bool {
+        matches!(self, Self::Recording | Self::NotSaving(_))
     }
 
     /// Short label for the top bar.
     pub fn label(self) -> &'static str {
         match self {
             Self::Recording => "● Recording",
+            Self::NotSaving(why) => match why {
+                NotSaving::WindowContext => {
+                    "● Recording · nothing saved: window context unavailable"
+                }
+                NotSaving::Session => "● Recording · nothing saved: session state unknown",
+                NotSaving::Capture => "● Recording · nothing saved: capture failing",
+                NotSaving::NoDisplays => "● Recording · nothing saved: no displays",
+                NotSaving::Idle => "● Recording · idle",
+                NotSaving::Excluded => "● Recording · excluded window on screen",
+                NotSaving::Other => "● Recording · nothing saved",
+            },
             Self::Paused => "Paused",
             Self::NotRunning => "Not recording",
             Self::Error => "Recorder error",
@@ -199,5 +280,27 @@ mod tests {
         assert!(Recorder::NotRunning.can_start());
         assert!(!Recorder::Recording.can_start());
         assert!(!Recorder::Unknown.can_start());
+    }
+
+    #[test]
+    fn recording_but_not_saving_is_never_shown_as_plain_recording() {
+        let r = Recorder::parse(
+            r#"{"state":"recording","not_saving":{"reason":"window_context_unavailable","detail":"x","fault":true,"since":1}}"#,
+        );
+        assert_eq!(r, Recorder::NotSaving(NotSaving::WindowContext));
+        assert!(r.label().contains("nothing saved"));
+        assert!(r.is_recording());
+        assert!(!r.can_start());
+        // A reason from a newer recorder still says nothing is saved.
+        let r = Recorder::parse(r#"{"state":"recording","not_saving":{"reason":"later"}}"#);
+        assert_eq!(r, Recorder::NotSaving(NotSaving::Other));
+        assert!(r.label().contains("nothing saved"));
+        assert!(NotSaving::Other.is_fault());
+        assert!(!NotSaving::Idle.is_fault());
+        // Absent: plain recording, as before.
+        assert_eq!(
+            Recorder::parse(r#"{"state":"recording","not_saving":null}"#),
+            Recorder::Recording
+        );
     }
 }

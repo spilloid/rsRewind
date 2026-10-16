@@ -511,6 +511,31 @@ struct StatusReport {
     /// output where the rules are enforced is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     privacy_unenforced: Option<String>,
+    /// Present only while the recorder is recording but not saving anything (issue #33): why, as a
+    /// stable `reason` and a short `detail` phrase. Absent when saving, so normal output is
+    /// unchanged. The window and the tray show it next to "Recording".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_saving: Option<NotSaving>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct NotSaving {
+    reason: &'static str,
+    detail: &'static str,
+    /// The condition is a problem to fix (`rsrewind doctor`), not an expected pause such as idle.
+    fault: bool,
+    since: Option<Timestamp>,
+}
+
+/// What a live heartbeat says about saving, for a recorder that is recording.
+fn not_saving(counters: &std::collections::BTreeMap<String, u64>) -> Option<NotSaving> {
+    let (health, since) = rsrewind_daemon::health::from_counters(counters)?;
+    (health != rsrewind_daemon::health::Health::Saving).then(|| NotSaving {
+        reason: health.name(),
+        detail: health.phrase(),
+        fault: health.is_fault(),
+        since,
+    })
 }
 
 /// Why the newest recording session did not enforce the privacy rules, or `None` if it did (or
@@ -570,6 +595,10 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
         counters: live.map(|s| s.counters.clone()).unwrap_or_default(),
         stats: store.stats()?,
         privacy_unenforced: privacy_unenforced(&store),
+        not_saving: match (state, live) {
+            ("recording", Some(s)) => not_saving(&s.counters),
+            _ => None,
+        },
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -593,6 +622,20 @@ fn status(data: &DataDir, json: bool) -> Result<ExitCode> {
     );
     if let Some(why) = &report.privacy_unenforced {
         println!("⚠ Privacy rules NOT enforced: {why} (privacy.unenforced_ok = true).");
+    }
+    if let Some(n) = &report.not_saving {
+        let since = n
+            .since
+            .map(|t| format!(" since {}", t.to_local().format("%H:%M:%S")))
+            .unwrap_or_default();
+        if n.fault {
+            println!(
+                "⚠ Nothing is being saved{since}: {}. Run `rsrewind doctor` for the cause.",
+                n.detail
+            );
+        } else {
+            println!("  Not saving right now{since}: {}.", n.detail);
+        }
     }
     let s = &report.stats;
     println!("Data      {}", report.data_dir);

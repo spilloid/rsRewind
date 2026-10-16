@@ -78,6 +78,7 @@ fn snapshot(
             symbol,
             recording: matches!(status.recorder, Recorder::Recording),
             warning: status.privacy_unenforced
+                || status.not_saving.as_ref().is_some_and(|n| n.fault)
                 || matches!(status.recorder, Recorder::Unknown | Recorder::Error),
             rows,
         },
@@ -209,6 +210,7 @@ mod tests {
         let status = Status {
             recorder: Recorder::NotRunning,
             privacy_unenforced: true,
+            not_saving: None,
         };
         let (wire, actions) = snapshot(
             &status,
@@ -251,6 +253,7 @@ mod tests {
             status: Status {
                 recorder: Recorder::Recording,
                 privacy_unenforced: false,
+                not_saving: None,
             },
             statuses,
             received_at: Instant::now() - POLL * 4,
@@ -286,6 +289,7 @@ mod tests {
                     &Status {
                         recorder,
                         privacy_unenforced: false,
+                        not_saving: None,
                     },
                     None,
                     Instant::now(),

@@ -544,7 +544,7 @@ impl App {
                 // A recorder that is running without its tray icon (started from the command line, or
                 // at login before the icon was part of that) gets one when the window opens. `rsrewind
                 // tray` exits at once if an icon is already up, so this is safe to ask once.
-                if !self.tray_ensured && matches!(state, Recorder::Recording | Recorder::Paused) {
+                if !self.tray_ensured && (state.is_recording() || state == Recorder::Paused) {
                     self.tray_ensured = true;
                     next = Task::batch([
                         next,
@@ -554,7 +554,7 @@ impl App {
                     ]);
                 }
                 // Waiting for the first moments: look for history again, so it appears on its own.
-                if self.sources.is_empty() && state == Recorder::Recording
+                if self.sources.is_empty() && state.is_recording()
                     || (was != state && self.sources.is_empty())
                 {
                     return Task::batch([next, self.ask(Ask::Sources, Message::Sources)]);
@@ -1749,6 +1749,8 @@ impl App {
         let recording = self.recorder;
         let chip_color = match recording {
             Recorder::Recording => t.rose,
+            Recorder::NotSaving(why) if why.is_fault() => t.gold,
+            Recorder::NotSaving(_) => t.rose,
             Recorder::Error => t.gold,
             _ => t.text_3,
         };
@@ -2156,6 +2158,10 @@ Shift+any of these extends the selection · G go to · Esc close",
                 "Recording.",
                 "Your first moments appear here within a minute. Everything stays on this computer.",
             ),
+            Recorder::NotSaving(why) if why.is_fault() => {
+                ("Recording, but nothing is being saved.", why.explain())
+            }
+            Recorder::NotSaving(why) => ("Recording.", why.explain()),
             Recorder::Paused => (
                 "Recording is paused.",
                 "Resume from the tray icon, and your history starts here.",

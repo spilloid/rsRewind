@@ -29,12 +29,24 @@ pub struct Status {
     pub recorder: Recorder,
     /// Set when the newest session ran without its privacy rules enforced.
     pub privacy_unenforced: bool,
+    /// Set while the recorder records but stores nothing (`not_saving` in the status JSON).
+    pub not_saving: Option<NotSaving>,
+}
+
+/// Why a recording recorder stores nothing, as `rsrewind status --json` phrases it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotSaving {
+    /// A short phrase ("window context unavailable"); a fixed sentence, never captured content.
+    pub detail: String,
+    /// A problem to fix (as opposed to idle or an excluded window).
+    pub fault: bool,
 }
 
 impl Status {
     pub const UNKNOWN: Self = Self {
         recorder: Recorder::Unknown,
         privacy_unenforced: false,
+        not_saving: None,
     };
 
     /// Parses `rsrewind status --json`. `local_time` formats a Unix-ms instant as `HH:MM`.
@@ -45,6 +57,18 @@ impl Status {
             paused_until: Option<i64>,
             #[serde(default)]
             privacy_unenforced: Option<String>,
+            #[serde(default)]
+            not_saving: Option<RawNotSaving>,
+        }
+        #[derive(Deserialize)]
+        struct RawNotSaving {
+            #[serde(default)]
+            detail: Option<String>,
+            #[serde(default = "yes")]
+            fault: bool,
+        }
+        fn yes() -> bool {
+            true
         }
         let Ok(raw) = serde_json::from_str::<Raw>(json) else {
             return Self::UNKNOWN;
@@ -58,16 +82,30 @@ impl Status {
             "error" => Recorder::Error,
             _ => Recorder::Unknown,
         };
+        let not_saving = match recorder {
+            Recorder::Recording => raw.not_saving.map(|n| NotSaving {
+                detail: n
+                    .detail
+                    .unwrap_or_else(|| "see `rsrewind doctor`".to_string()),
+                fault: n.fault,
+            }),
+            _ => None,
+        };
         Self {
             recorder,
             privacy_unenforced: raw.privacy_unenforced.is_some(),
+            not_saving,
         }
     }
 
     /// One line for the tooltip and the top of the menu.
     pub fn headline(&self) -> String {
         let state = match &self.recorder {
-            Recorder::Recording => "Recording".to_string(),
+            Recorder::Recording => match &self.not_saving {
+                Some(n) if n.fault => format!("Recording · nothing saved: {}", n.detail),
+                Some(n) => format!("Recording · not saving: {}", n.detail),
+                None => "Recording".to_string(),
+            },
             Recorder::Paused { until: Some(t) } => format!("Paused until {t}"),
             Recorder::Paused { until: None } => "Paused".to_string(),
             Recorder::NotRunning => "Not recording (recorder stopped)".to_string(),
@@ -262,6 +300,9 @@ pub enum Badge {
 pub fn look(status: &Status) -> (Base, Badge) {
     match status.recorder {
         Recorder::Recording if status.privacy_unenforced => (Base::Red, Badge::Warning),
+        Recorder::Recording if status.not_saving.as_ref().is_some_and(|n| n.fault) => {
+            (Base::Red, Badge::Warning)
+        }
         Recorder::Recording => (Base::Red, Badge::None),
         Recorder::Paused { .. } => (Base::Green, Badge::Pause),
         Recorder::NotRunning => (Base::Green, Badge::Stop),
@@ -356,6 +397,32 @@ mod tests {
     }
 
     #[test]
+    fn recording_without_saving_says_so_and_badges_the_icon() {
+        let s = Status::parse(
+            r#"{"state":"recording","paused_until":null,"not_saving":{"reason":"window_context_unavailable","detail":"window context unavailable","fault":true,"since":5}}"#,
+            hhmm,
+        );
+        assert_eq!(s.recorder, Recorder::Recording);
+        assert_eq!(
+            s.headline(),
+            "Recording · nothing saved: window context unavailable"
+        );
+        assert_eq!(look(&s), (Base::Red, Badge::Warning));
+        let idle = Status::parse(
+            r#"{"state":"recording","not_saving":{"reason":"idle","detail":"you are idle","fault":false}}"#,
+            hhmm,
+        );
+        assert_eq!(idle.headline(), "Recording · not saving: you are idle");
+        assert_eq!(look(&idle), (Base::Red, Badge::None));
+        // Ignored outside recording.
+        let p = Status::parse(
+            r#"{"state":"paused","not_saving":{"reason":"idle","detail":"x","fault":true}}"#,
+            hhmm,
+        );
+        assert_eq!(p.not_saving, None);
+    }
+
+    #[test]
     fn forget_needs_a_second_click_on_the_same_choice_within_the_window() {
         let t0 = Instant::now();
         let first = click(Action::Forget(10), None, t0);
@@ -393,6 +460,7 @@ mod tests {
         let recording = Status {
             recorder: Recorder::Recording,
             privacy_unenforced: false,
+            not_saving: None,
         };
         let labels = |items: &[Item]| -> Vec<String> {
             items
@@ -424,6 +492,7 @@ mod tests {
         let stopped = Status {
             recorder: Recorder::NotRunning,
             privacy_unenforced: false,
+            not_saving: None,
         };
         let items = menu(&stopped, None, t0);
         assert!(labels(&items).contains(&"Start the recorder".to_string()));
@@ -439,6 +508,7 @@ mod tests {
         let paused = Status {
             recorder: Recorder::Paused { until: None },
             privacy_unenforced: false,
+            not_saving: None,
         };
         assert!(labels(&menu(&paused, None, t0)).contains(&"Resume recording".to_string()));
     }
@@ -462,6 +532,7 @@ mod tests {
         let st = |recorder, privacy_unenforced| Status {
             recorder,
             privacy_unenforced,
+            not_saving: None,
         };
         assert_eq!(
             look(&st(Recorder::Recording, false)),
