@@ -4,6 +4,7 @@
 
 use super::fakes::*;
 use crate::counters::Counters;
+use crate::health::Health;
 use crate::persist::Job;
 use crate::platform::Clock;
 use crate::recorder::{Backends, PERSIST_QUEUE, RULE_WINDOWS_UNKNOWN, Recorder};
@@ -233,6 +234,128 @@ fn without_a_window_list_the_list_is_never_asked_for_and_an_excluded_focus_skips
     jobs.sort();
     assert_eq!(jobs, ["state DISPLAY1 #3", "state DISPLAY2 #4"]);
     assert_eq!(h.desktop().window_queries, 0);
+    Ok(())
+}
+
+// ----- saving health (issue #33) -------------------------------------------------------------
+
+fn gauge(h: &Harness) -> u64 {
+    h.counters.health.load(Ordering::Relaxed)
+}
+
+#[test]
+fn an_unknown_window_list_stores_nothing_says_why_and_recovers() -> TestResult {
+    let mut h = harness(2, Capabilities::WINDOWS);
+    h.desktop().windows = None;
+    for seed in 1..=4u8 {
+        h.desktop().show(display(0), frame(seed));
+        h.desktop().show(display(1), frame(seed + 8));
+        h.tick(REC);
+        // Fail closed on every tick, from the first one on.
+        assert_eq!(h.drain(), Vec::<String>::new(), "tick {seed}");
+    }
+    // Visible: the heartbeat's health gauge names the condition (after the debounce), and the
+    // per-tick counter says how often.
+    assert_eq!(h.recorder.health(), Health::WindowListUnknown);
+    assert_eq!(gauge(&h), Health::WindowListUnknown.code());
+    assert_eq!(
+        h.counters.health_since_ms.load(Ordering::Relaxed),
+        FakeClock::wall_at(Duration::ZERO).0 as u64,
+        "since the first unknown tick"
+    );
+    assert_eq!(
+        h.counters.window_list_unknown_ticks.load(Ordering::Relaxed),
+        4
+    );
+    assert_eq!(h.counters.privacy_skips.load(Ordering::Relaxed), 8);
+
+    // The list comes back: the next fresh frames are stored, the picture taken while the list was
+    // unknown is not, and health says saving at once.
+    h.desktop().windows = Some(Vec::new());
+    h.tick(REC);
+    assert_eq!(
+        h.drain(),
+        Vec::<String>::new(),
+        "no stale frame after recovery"
+    );
+    h.desktop().show(display(0), frame(5));
+    h.desktop().show(display(1), frame(6));
+    h.tick(REC);
+    let mut jobs = h.drain();
+    jobs.sort();
+    assert_eq!(jobs, ["state DISPLAY1 #5", "state DISPLAY2 #6"]);
+    assert_eq!(h.recorder.health(), Health::Saving);
+    assert_eq!(gauge(&h), 0);
+    Ok(())
+}
+
+#[test]
+fn one_bad_tick_does_not_change_the_reported_health() -> TestResult {
+    let mut h = harness(1, Capabilities::WINDOWS);
+    h.desktop().show(display(0), frame(1));
+    h.tick(REC);
+    h.desktop().windows = None;
+    h.tick(REC);
+    h.desktop().windows = Some(Vec::new());
+    h.tick(REC);
+    assert_eq!(h.recorder.health(), Health::Saving);
+    assert_eq!(gauge(&h), 0);
+    assert_eq!(
+        h.counters.window_list_unknown_ticks.load(Ordering::Relaxed),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn unknown_idle_and_failing_capture_are_reported_as_such() -> TestResult {
+    let mut h = harness(1, Capabilities::WINDOWS);
+    h.desktop().idle_ms = None;
+    for seed in 1..=3 {
+        h.desktop().show(display(0), frame(seed));
+        h.tick(REC);
+    }
+    assert_eq!(h.drain(), ["marker idle_start"]);
+    assert_eq!(h.recorder.health(), Health::IdleUnknown);
+    assert_eq!(gauge(&h), Health::IdleUnknown.code());
+    assert_eq!(h.counters.idle_unknown_ticks.load(Ordering::Relaxed), 3);
+
+    let mut h = harness(1, Capabilities::WINDOWS);
+    h.desktop().capture_fails = true;
+    for seed in 1..=3 {
+        h.desktop().show(display(0), frame(seed));
+        h.tick(REC);
+    }
+    assert_eq!(h.drain(), Vec::<String>::new());
+    assert_eq!(h.recorder.health(), Health::CaptureFailing);
+    assert_eq!(h.counters.capture_errors.load(Ordering::Relaxed), 3);
+
+    h.desktop().capture_fails = false;
+    h.desktop().show(display(0), frame(4));
+    h.tick(REC);
+    assert_eq!(h.drain(), ["state DISPLAY1 #4"]);
+    assert_eq!(h.recorder.health(), Health::Saving);
+    Ok(())
+}
+
+#[test]
+fn expected_pauses_in_saving_are_not_faults() -> TestResult {
+    let mut h = harness(1, Capabilities::WINDOWS);
+    h.desktop().idle_ms = Some(61_000);
+    for _ in 0..3 {
+        h.tick(REC);
+    }
+    assert_eq!(h.recorder.health(), Health::Idle);
+    assert!(!h.recorder.health().is_fault());
+
+    h.desktop().idle_ms = Some(0);
+    h.desktop().windows = Some(vec![window_on("KeePassXC.exe", "Vault", 20, 0)]);
+    for seed in 1..=3 {
+        h.desktop().show(display(0), frame(seed));
+        h.tick(REC);
+    }
+    assert_eq!(h.recorder.health(), Health::PrivacyExcluded);
+    assert!(!h.recorder.health().is_fault());
     Ok(())
 }
 

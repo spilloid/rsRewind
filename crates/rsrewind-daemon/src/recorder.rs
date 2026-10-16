@@ -2,6 +2,7 @@
 //! [`crate::platform`].
 
 use crate::counters::{self, Counters};
+use crate::health::{self, Health, HealthTracker, TickFacts};
 use crate::persist::{self, Job, PersistConfig, Subject};
 use crate::plan::{self, MonitorAction, MonitorTick, SkipReason};
 use crate::platform::{
@@ -252,6 +253,19 @@ struct MonitorSlot {
     last_frame: Option<BgraFrame>,
     /// Fingerprint of the last frame handed to the persist thread.
     persisted: Option<Fingerprint>,
+    /// Capture on this monitor failed last time, so the next failure is not logged again at
+    /// warn level (a lock screen fails every tick).
+    failing: bool,
+}
+
+/// What one monitor's tick amounted to, for the health signal.
+#[derive(Debug, Clone, Copy, Default)]
+struct MonitorResult {
+    /// A new state or an extension was handed to the persist thread.
+    saving: bool,
+    capture_failed: bool,
+    /// Skipped because a configured exclusion rule matched (not because the list was unknown).
+    rule_excluded: bool,
 }
 
 pub(crate) struct Recorder {
@@ -267,6 +281,12 @@ pub(crate) struct Recorder {
     /// Last reason the whole recorder was not recording, for transition markers.
     last_reason: Option<SkipReason>,
     idle: bool,
+    /// Whether recording ticks are saving anything, published in the heartbeat.
+    health: HealthTracker,
+    /// Why the window list was last unknown / capture last failed. Content-free fault messages,
+    /// kept for the warning logged when health turns bad.
+    last_window_fault: Option<String>,
+    last_capture_fault: Option<String>,
 }
 
 impl Recorder {
@@ -290,7 +310,16 @@ impl Recorder {
             next_monitor_refresh,
             last_reason: None,
             idle: false,
+            health: HealthTracker::default(),
+            last_window_fault: None,
+            last_capture_fault: None,
         }
+    }
+
+    /// The health the heartbeat currently reports.
+    #[cfg(test)]
+    pub(crate) fn health(&self) -> Health {
+        self.health.current()
     }
 
     pub(crate) fn tick(&mut self, control: CaptureState, now: Timestamp) {
@@ -300,7 +329,8 @@ impl Recorder {
         let effective = control.effective_at(now);
         // Unknown idle time means do not record: a platform that cannot say whether the user is
         // there must not keep storing frames on their behalf.
-        let idle = match self.backends.idle.idle_millis() {
+        let idle_ms = self.backends.idle.idle_millis();
+        let idle = match idle_ms {
             Some(idle_ms) => idle_ms > u64::from(self.config.capture.idle_after_secs) * 1_000,
             None => true,
         };
@@ -314,6 +344,9 @@ impl Recorder {
             }
             return;
         }
+        if idle_ms.is_none() {
+            counters::bump(&self.counters.idle_unknown_ticks);
+        }
 
         // A provider that cannot list windows is never asked: its empty answer would read as
         // "nothing excluded is visible". The recorder only gets here with such a provider after
@@ -323,10 +356,81 @@ impl Recorder {
         } else {
             Ok(Vec::new())
         };
+        if let Err(fault) = &windows {
+            // Counted once per tick (privacy_skips counts it once per monitor).
+            counters::bump(&self.counters.window_list_unknown_ticks);
+            self.last_window_fault = Some(fault.message.clone());
+        }
         let focus = self.backends.context.foreground();
         let devices: Vec<String> = self.monitors.keys().cloned().collect();
+        let mut facts = TickFacts {
+            monitors: devices.len(),
+            window_list_unknown: windows.is_err(),
+            idle_unknown: idle_ms.is_none(),
+            idle,
+            ..TickFacts::default()
+        };
         for device in devices {
-            self.tick_monitor(&device, windows.as_deref(), focus.as_ref(), idle, now);
+            let result = self.tick_monitor(&device, windows.as_deref(), focus.as_ref(), idle, now);
+            facts.saving += usize::from(result.saving);
+            facts.capture_failed += usize::from(result.capture_failed);
+            facts.rule_excluded += usize::from(result.rule_excluded);
+        }
+        self.observe_health(&facts, now);
+    }
+
+    /// Classifies this recording tick and publishes/logs a health change. Logged once per
+    /// transition, never per tick, and only conditions and counts: no titles, process or rule
+    /// names.
+    fn observe_health(&mut self, facts: &TickFacts, now: Timestamp) {
+        let Some(change) = self.health.observe(health::classify(facts), now) else {
+            return;
+        };
+        self.counters
+            .health
+            .store(change.to.code(), Ordering::Relaxed);
+        self.counters.health_since_ms.store(
+            u64::try_from(change.since.0).unwrap_or(0),
+            Ordering::Relaxed,
+        );
+        let counts = (
+            self.counters
+                .window_list_unknown_ticks
+                .load(Ordering::Relaxed),
+            self.counters.idle_unknown_ticks.load(Ordering::Relaxed),
+            self.counters.capture_errors.load(Ordering::Relaxed),
+        );
+        if change.to.is_fault() {
+            let detail = match change.to {
+                Health::WindowListUnknown => self.last_window_fault.clone(),
+                Health::CaptureFailing => self.last_capture_fault.clone(),
+                Health::IdleUnknown => self.backends.idle.unknown_reason(),
+                _ => None,
+            }
+            .unwrap_or_default();
+            tracing::warn!(
+                health = change.to.name(),
+                %detail,
+                window_list_unknown_ticks = counts.0,
+                idle_unknown_ticks = counts.1,
+                capture_errors = counts.2,
+                "recording, but nothing is being saved: {}",
+                change.to.phrase()
+            );
+        } else if change.to == Health::Saving {
+            tracing::info!(
+                after = change.from.name(),
+                window_list_unknown_ticks = counts.0,
+                idle_unknown_ticks = counts.1,
+                capture_errors = counts.2,
+                "saving again"
+            );
+        } else {
+            tracing::info!(
+                health = change.to.name(),
+                "not saving: {}",
+                change.to.phrase()
+            );
         }
     }
 
@@ -337,11 +441,12 @@ impl Recorder {
         focus: Option<&FocusContext>,
         idle: bool,
         now: Timestamp,
-    ) {
+    ) -> MonitorResult {
+        let mut result = MonitorResult::default();
         let list_windows = self.capabilities.list_windows;
         let policy = &self.config.privacy;
         let Some(slot) = self.monitors.get_mut(device) else {
-            return;
+            return result;
         };
 
         // Any visible window touching this monitor counts, not just the one it is mostly on: a
@@ -392,22 +497,42 @@ impl Recorder {
                 }
                 Err(error) => {
                     counters::bump(&self.counters.capture_errors);
-                    tracing::warn!(device, %error, "could not start capture");
-                    return;
+                    if slot.failing {
+                        tracing::debug!(device, %error, "could not start capture (still)");
+                    } else {
+                        tracing::warn!(device, %error, "could not start capture");
+                    }
+                    slot.failing = true;
+                    self.last_capture_fault = Some(error.message);
+                    result.capture_failed = true;
+                    return result;
                 }
             }
         }
         if let Some(capturer) = slot.capturer.as_mut() {
             match capturer.latest_frame() {
-                Ok(Some(frame)) => {
-                    counters::bump(&self.counters.candidate_frames);
-                    slot.last_frame = Some(frame);
-                    has_new_frame = true;
+                Ok(frame) => {
+                    if slot.failing {
+                        tracing::info!(device, "capture works again");
+                        slot.failing = false;
+                    }
+                    if let Some(frame) = frame {
+                        counters::bump(&self.counters.candidate_frames);
+                        slot.last_frame = Some(frame);
+                        has_new_frame = true;
+                    }
                 }
-                Ok(None) => {}
                 Err(error) => {
                     counters::bump(&self.counters.capture_errors);
-                    tracing::warn!(device, %error, recoverable = error.recoverable, "capture failed; restarting capturer");
+                    // Warn once per failure streak; a lock screen or a broken grant fails every tick.
+                    if slot.failing {
+                        tracing::debug!(device, %error, recoverable = error.recoverable, "capture failed (still); restarting capturer");
+                    } else {
+                        tracing::warn!(device, %error, recoverable = error.recoverable, "capture failed; restarting capturer");
+                    }
+                    slot.failing = true;
+                    self.last_capture_fault = Some(error.message);
+                    result.capture_failed = true;
                     slot.capturer = None;
                     self.next_monitor_refresh = self.backends.clock.monotonic();
                 }
@@ -439,7 +564,7 @@ impl Recorder {
             MonitorAction::Persist => {
                 let (Some(frame), Some(fingerprint)) = (slot.last_frame.clone(), fingerprint)
                 else {
-                    return;
+                    return result;
                 };
                 let job = Job::NewState {
                     monitor: slot.info.clone(),
@@ -449,10 +574,15 @@ impl Recorder {
                     subject: subject_for(&on_monitor, focus),
                 };
                 match self.jobs.try_send(job) {
-                    Ok(()) => slot.persisted = Some(fingerprint),
+                    Ok(()) => {
+                        slot.persisted = Some(fingerprint);
+                        result.saving = true;
+                    }
                     Err(TrySendError::Full(_)) => {
-                        // Not marking it persisted means the next tick tries again.
+                        // Not marking it persisted means the next tick tries again. The persist
+                        // thread is busy saving, so this still counts as saving.
                         counters::bump(&self.counters.dropped_queue_full);
+                        result.saving = true;
                     }
                     Err(TrySendError::Disconnected(_)) => {
                         counters::bump(&self.counters.persist_errors);
@@ -471,12 +601,16 @@ impl Recorder {
                 if self.jobs.try_send(job).is_err() {
                     counters::bump(&self.counters.dropped_queue_full);
                 }
+                // Extending the previous picture while capture is failing is not evidence that
+                // anything current is being saved.
+                result.saving = !result.capture_failed;
             }
             MonitorAction::Skip(reason) => {
                 slot.persisted = None;
                 match reason {
                     SkipReason::Privacy(rule) => {
                         counters::bump(&self.counters.privacy_skips);
+                        result.rule_excluded = rule != RULE_WINDOWS_UNKNOWN;
                         tracing::debug!(device, rule, "privacy rule matched; nothing stored");
                     }
                     SkipReason::Idle => counters::bump(&self.counters.idle_ticks),
@@ -484,6 +618,7 @@ impl Recorder {
                 }
             }
         }
+        result
     }
 
     /// Records pause/resume/idle/privacy transitions once, not every tick.
@@ -566,6 +701,7 @@ impl Recorder {
                             capturer: None,
                             last_frame: None,
                             persisted: None,
+                            failing: false,
                         },
                     );
                 }

@@ -110,6 +110,8 @@ pub struct Desktop {
     /// How often each display was asked for a frame.
     pub polls: HashMap<DisplayHandle, usize>,
     pub window_queries: usize,
+    /// Makes every frame poll fail (a broken grant, a lock screen on macOS).
+    pub capture_fails: bool,
 }
 
 pub type SharedDesktop = Arc<Mutex<Desktop>>;
@@ -184,6 +186,9 @@ impl FrameSource for FakeFrames {
     fn latest_frame(&mut self) -> Result<Option<BgraFrame>, PlatformFault> {
         let mut desktop = lock(&self.desktop);
         *desktop.polls.entry(self.display).or_default() += 1;
+        if desktop.capture_fails {
+            return Err(PlatformFault::new("scripted capture failure", true));
+        }
         Ok(desktop
             .pending
             .get_mut(&self.display)
