@@ -307,6 +307,59 @@ fn one_bad_tick_does_not_change_the_reported_health() -> TestResult {
     Ok(())
 }
 
+/// A `tracing` writer into a shared buffer.
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        lock(&self.0).extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Runs `body` with every info-and-above log line captured, and returns them.
+fn logs_at_info(body: impl FnOnce()) -> String {
+    let buffer = LogBuffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, body);
+    String::from_utf8_lossy(&lock(&buffer.0)).into_owned()
+}
+
+#[test]
+fn a_window_fault_message_never_reaches_a_log_line() -> TestResult {
+    // A platform fault built from a parse error can echo input (serde_json quotes string
+    // values), and the input is window titles. Only the reason name and counts may be logged.
+    let mut h = harness(1, Capabilities::WINDOWS);
+    {
+        let mut d = h.desktop();
+        d.windows = None;
+        d.window_fault =
+            Some(r#"KWin snapshot: invalid type: string "Bank - Account 12345""#.into());
+    }
+    let logs = logs_at_info(|| {
+        for seed in 1..=4 {
+            h.desktop().show(display(0), frame(seed));
+            h.tick(REC);
+        }
+        h.desktop().windows = Some(Vec::new());
+        h.tick(REC);
+    });
+    assert!(logs.contains("window_context_unavailable"), "{logs}");
+    assert!(logs.contains("saving again"), "{logs}");
+    assert!(!logs.contains("12345"), "{logs}");
+    assert!(!logs.contains("Bank"), "{logs}");
+    Ok(())
+}
+
 #[test]
 fn unknown_idle_and_failing_capture_are_reported_as_such() -> TestResult {
     let mut h = harness(1, Capabilities::WINDOWS);

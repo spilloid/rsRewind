@@ -36,7 +36,7 @@ mod wide;
 mod window;
 
 pub use change::{ChangeDetection, ChangeDetector, Fingerprint, FingerprintError};
-pub use context::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow};
+pub use context::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow, json_error_summary};
 #[cfg(windows)]
 pub use error::{CaptureError, Result, is_access_denied, is_recoverable_hresult};
 #[cfg(windows)]

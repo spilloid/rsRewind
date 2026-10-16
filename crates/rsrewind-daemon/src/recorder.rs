@@ -283,10 +283,6 @@ pub(crate) struct Recorder {
     idle: bool,
     /// Whether recording ticks are saving anything, published in the heartbeat.
     health: HealthTracker,
-    /// Why the window list was last unknown / capture last failed. Content-free fault messages,
-    /// kept for the warning logged when health turns bad.
-    last_window_fault: Option<String>,
-    last_capture_fault: Option<String>,
 }
 
 impl Recorder {
@@ -311,8 +307,6 @@ impl Recorder {
             last_reason: None,
             idle: false,
             health: HealthTracker::default(),
-            last_window_fault: None,
-            last_capture_fault: None,
         }
     }
 
@@ -356,10 +350,10 @@ impl Recorder {
         } else {
             Ok(Vec::new())
         };
-        if let Err(fault) = &windows {
-            // Counted once per tick (privacy_skips counts it once per monitor).
+        if windows.is_err() {
+            // Counted once per tick (privacy_skips counts it once per monitor). The fault's text
+            // is not kept or logged (see `observe_health`).
             counters::bump(&self.counters.window_list_unknown_ticks);
-            self.last_window_fault = Some(fault.message.clone());
         }
         let focus = self.backends.context.foreground();
         let devices: Vec<String> = self.monitors.keys().cloned().collect();
@@ -400,17 +394,12 @@ impl Recorder {
             self.counters.idle_unknown_ticks.load(Ordering::Relaxed),
             self.counters.capture_errors.load(Ordering::Relaxed),
         );
+        // Only the condition's name and counts: a platform's fault text can be built from a parse
+        // error that quotes its input, and that input is window titles. `doctor` names the exact
+        // cause on demand instead.
         if change.to.is_fault() {
-            let detail = match change.to {
-                Health::WindowListUnknown => self.last_window_fault.clone(),
-                Health::CaptureFailing => self.last_capture_fault.clone(),
-                Health::IdleUnknown => self.backends.idle.unknown_reason(),
-                _ => None,
-            }
-            .unwrap_or_default();
             tracing::warn!(
                 health = change.to.name(),
-                %detail,
                 window_list_unknown_ticks = counts.0,
                 idle_unknown_ticks = counts.1,
                 capture_errors = counts.2,
@@ -503,7 +492,6 @@ impl Recorder {
                         tracing::warn!(device, %error, "could not start capture");
                     }
                     slot.failing = true;
-                    self.last_capture_fault = Some(error.message);
                     result.capture_failed = true;
                     return result;
                 }
@@ -531,7 +519,6 @@ impl Recorder {
                         tracing::warn!(device, %error, recoverable = error.recoverable, "capture failed; restarting capturer");
                     }
                     slot.failing = true;
-                    self.last_capture_fault = Some(error.message);
                     result.capture_failed = true;
                     slot.capturer = None;
                     self.next_monitor_refresh = self.backends.clock.monotonic();

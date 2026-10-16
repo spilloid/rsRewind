@@ -39,7 +39,7 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         Platform {
             context: Box::new(MacContext { needs }),
             capture: Box::new(MacCapture),
-            idle: Box::new(MacIdle { last: None }),
+            idle: Box::new(MacIdle),
             clock: Arc::new(SystemClock::new()),
             lifecycle: Box::new(guard),
             ocr: Some(Box::new(move || {
@@ -94,25 +94,11 @@ impl FrameSource for MacFrames {
         macos::capture(self.0).map(Some).map_err(fault)
     }
 }
-struct MacIdle {
-    /// Why the last reading was unknown (content-free), for the health warning.
-    last: Option<String>,
-}
+struct MacIdle;
 impl IdleClock for MacIdle {
     fn idle_millis(&mut self) -> Option<u64> {
-        match macos::session_idle() {
-            Ok(ms) => {
-                self.last = None;
-                Some(ms)
-            }
-            Err(why) => {
-                self.last = Some(why.to_string());
-                None
-            }
-        }
-    }
-    fn unknown_reason(&self) -> Option<String> {
-        self.last.clone()
+        // Why it is unknown is for `doctor`; the recorder only needs "unknown".
+        macos::session_idle().ok()
     }
 }
 struct Vision(rsrewind_ocr::VisionEngine);

@@ -33,6 +33,8 @@ windows = { workspace = true, features = [
 rsrewind-query.workspace = true
 rsrewind-segment.workspace = true
 tempfile.workspace = true
+# Captures log output in tests that prove captured content never reaches a log line.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

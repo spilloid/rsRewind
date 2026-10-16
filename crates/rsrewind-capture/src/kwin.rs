@@ -139,9 +139,16 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn parse(json: &str) -> Result<Self, KwinError> {
-        // serde_json's message names a position and an expected token, not the input text.
-        serde_json::from_str(json)
-            .map_err(|error| KwinError::new(format!("KWin snapshot: {error}"), true))
+        // Not serde_json's own message: it quotes rejected values, and those are window titles.
+        serde_json::from_str(json).map_err(|error| {
+            KwinError::new(
+                format!(
+                    "KWin snapshot did not parse: {}",
+                    crate::json_error_summary(&error)
+                ),
+                true,
+            )
+        })
     }
 
     /// Screens as monitors, in logical coordinates; the first screen KWin lists is primary.
@@ -613,6 +620,13 @@ mod tests {
     fn malformed_reports_are_errors_and_debug_hides_titles() {
         assert!(Snapshot::parse("{").is_err());
         assert!(Snapshot::parse(r#"{"nonce":"1"}"#).is_err());
+        // A rejected value is never quoted back (it could be a title).
+        let error = Snapshot::parse(r#"{"windows":[{"pid":"secret title"}]}"#)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("did not parse"), "{error}");
+        assert!(!error.contains("secret"), "{error}");
         let w = KwinWindow {
             title: "secret title".into(),
             class: "c".into(),

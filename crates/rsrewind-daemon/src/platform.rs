@@ -81,11 +81,6 @@ pub trait ScreenContext {
 pub trait IdleClock {
     /// `None` when the platform cannot tell; the recorder treats that as idle.
     fn idle_millis(&mut self) -> Option<u64>;
-    /// Why the last [`IdleClock::idle_millis`] was `None`, if the platform can say. Content-free
-    /// (safe to log); used only for diagnostics.
-    fn unknown_reason(&self) -> Option<String> {
-        None
-    }
 }
 
 /// Wall clock, monotonic clock and sleeping, so tests can run the recorder loop without waiting.

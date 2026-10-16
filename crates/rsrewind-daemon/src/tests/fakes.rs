@@ -112,6 +112,9 @@ pub struct Desktop {
     pub window_queries: usize,
     /// Makes every frame poll fail (a broken grant, a lock screen on macOS).
     pub capture_fails: bool,
+    /// The message a failed `visible_windows` carries (default: a fixed sentence). Tests put
+    /// title-like text here to prove fault text never reaches a log line.
+    pub window_fault: Option<String>,
 }
 
 pub type SharedDesktop = Arc<Mutex<Desktop>>;
@@ -155,10 +158,14 @@ impl ScreenContext for FakeContext {
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault> {
         let mut desktop = lock(&self.desktop);
         desktop.window_queries += 1;
+        let message = desktop
+            .window_fault
+            .clone()
+            .unwrap_or_else(|| "scripted enumeration failure".into());
         desktop
             .windows
             .clone()
-            .ok_or_else(|| PlatformFault::new("scripted enumeration failure", false))
+            .ok_or_else(|| PlatformFault::new(message, false))
     }
 }
 
