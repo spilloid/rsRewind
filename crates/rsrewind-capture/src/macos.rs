@@ -2,11 +2,13 @@
 //! freed here. The bridge reports raw facts; [`crate::macos_facts`] decides what they mean.
 use crate::VisibleWindow;
 use crate::macos_facts::{
-    self, RuleNeeds, SessionFacts, SessionUnknown, WindowList, WindowListError, WindowSnapshot,
+    self, OwnIdentity, RuleNeeds, SessionFacts, SessionUnknown, WindowList, WindowListError,
+    WindowSnapshot,
 };
 use rsrewind_core::{BgraFrame, MonitorInfo};
 use serde::Deserialize;
 use std::ffi::{CStr, c_char, c_void};
+use std::sync::OnceLock;
 unsafe extern "C" {
     fn rs_capture_permission(request: bool) -> bool;
     fn rs_capture_monitors() -> *mut c_char;
@@ -45,6 +47,9 @@ fn decode<T: serde::de::DeserializeOwned>(p: *mut c_char) -> Result<T, String> {
                 .into(),
         );
     };
+    if let Some(error) = macos_facts::bridge_error(&bytes) {
+        return Err(error.to_string());
+    }
     serde_json::from_slice(&bytes).map_err(|_| "invalid native desktop context".into())
 }
 #[derive(Deserialize)]
@@ -64,7 +69,9 @@ fn window_snapshot() -> Result<WindowSnapshot, WindowListError> {
 /// The visible windows with how they were obtained, or why the list is unknown. `needs` says
 /// which rule kinds are configured (see [`macos_facts::classify_windows`]).
 pub fn window_list(needs: RuleNeeds) -> Result<WindowList, WindowListError> {
-    macos_facts::classify_windows(&window_snapshot()?, needs, std::process::id())
+    static OWN: OnceLock<OwnIdentity> = OnceLock::new();
+    let own = OWN.get_or_init(OwnIdentity::current);
+    macos_facts::classify_windows(&window_snapshot()?, needs, own)
 }
 pub fn visible_windows(needs: RuleNeeds) -> Result<Vec<VisibleWindow>, WindowListError> {
     window_list(needs).map(|list| list.windows)

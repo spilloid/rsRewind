@@ -37,8 +37,27 @@ private func displays() -> [Display]? {
         return d
     }
 }
+/// Every display has a finite, positive size in points and pixels. `Display.sx` divides by the
+/// point width, and `Int(...)` of an infinite or NaN value traps, so nothing may use a display
+/// before this holds.
+private func geometryUsable(_ ds: [Display]) -> Bool {
+    return ds.allSatisfy { d in
+        d.width > 0 && d.height > 0
+            && d.bounds.minX.isFinite && d.bounds.minY.isFinite
+            && d.bounds.width.isFinite && d.bounds.height.isFinite
+            && d.bounds.width > 0 && d.bounds.height > 0
+    }
+}
+private func displayFacts(_ ds: [Display]) -> [[String: Any]] {
+    return ds.map { d -> [String: Any] in
+        return ["x": d.x, "min_x": Double(d.bounds.minX), "min_y": Double(d.bounds.minY),
+                "width_pt": Double(d.bounds.width), "height_pt": Double(d.bounds.height),
+                "width_px": d.width, "height_px": d.height]
+    }
+}
 @_cdecl("rs_capture_monitors") public func monitors() -> UnsafeMutablePointer<CChar>? {
     guard let ds = displays() else { return nil }
+    guard geometryUsable(ds) else { return json(["error": "bad-display-geometry"]) }
     return json(ds.map { d -> [String: Any] in
         let uuid = CGDisplayCreateUUIDFromDisplayID(d.id).takeRetainedValue()
         return ["id": d.id, "info": ["device_name": "macos-" + (CFUUIDCreateString(nil, uuid) as String), "left": d.x, "top": 0, "width": d.width, "height": d.height, "dpi": Int(96 * d.sx), "primary": d.id == CGMainDisplayID()]]
@@ -57,6 +76,7 @@ private func boundsOf(_ w: [String: Any]) -> CGRect? {
 @_cdecl("rs_capture_windows") public func windows() -> UnsafeMutablePointer<CChar>? {
     guard CGPreflightScreenCaptureAccess() else { return json(["error": "no-permission"]) }
     guard let ds = displays() else { return json(["error": "no-displays"]) }
+    guard geometryUsable(ds) else { return json(["error": "bad-display-geometry"]) }
     guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
         return json(["error": "list-unavailable"])
     }
@@ -74,18 +94,16 @@ private func boundsOf(_ w: [String: Any]) -> CGRect? {
         if let owner = w[kCGWindowOwnerName as String] as? String { f["owner_name"] = owner }
         if let title = w[kCGWindowName as String] as? String { f["title"] = title }
         if let layer = w[kCGWindowLayer as String] as? Int { f["layer"] = layer }
-        if let r = boundsOf(w), r.minX.isFinite, r.minY.isFinite, r.width.isFinite, r.height.isFinite {
-            f["bounds"] = ["x": Double(r.minX), "y": Double(r.minY), "width": Double(r.width), "height": Double(r.height)]
-        }
+        // Absent when missing, unparseable or not finite: Rust then treats the list as unknown.
+        if let b = boundsFacts(w) { f["bounds"] = b }
         out.append(f)
     }
-    let displayFacts: [[String: Any]] = ds.map { d -> [String: Any] in
-        return ["x": d.x, "min_x": Double(d.bounds.minX), "min_y": Double(d.bounds.minY),
-                "width_pt": Double(d.bounds.width), "height_pt": Double(d.bounds.height),
-                "width_px": d.width, "height_px": d.height]
-    }
-    let payload: [String: Any] = ["displays": displayFacts, "windows": out]
+    let payload: [String: Any] = ["displays": displayFacts(ds), "windows": out]
     return json(payload)
+}
+private func boundsFacts(_ w: [String: Any]) -> [String: Double]? {
+    guard let r = boundsOf(w), r.minX.isFinite, r.minY.isFinite, r.width.isFinite, r.height.isFinite else { return nil }
+    return ["x": Double(r.minX), "y": Double(r.minY), "width": Double(r.width), "height": Double(r.height)]
 }
 /// Raw session facts: console/login/lock state, loginwindow windows on screen, idle seconds.
 @_cdecl("rs_capture_session") public func session() -> UnsafeMutablePointer<CChar>? {
@@ -100,6 +118,7 @@ private func boundsOf(_ w: [String: Any]) -> CGRect? {
     if let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] {
         f["windows_listed"] = true
         var login: [[String: Any]] = []
+        var anonymous: [[String: Any]] = []
         var unresolved = 0
         for w in list {
             var exe: String? = nil
@@ -108,6 +127,12 @@ private func boundsOf(_ w: [String: Any]) -> CGRect? {
             }
             if exe == nil { unresolved += 1 }
             let owner = w[kCGWindowOwnerName as String] as? String
+            // Nothing names this window: it could be a lock screen. Rust judges its coverage.
+            if (exe ?? "").isEmpty && (owner ?? "").isEmpty {
+                var a: [String: Any] = [:]
+                if let b = boundsFacts(w) { a["bounds"] = b }
+                anonymous.append(a)
+            }
             if exe == "loginwindow" || owner == "loginwindow" {
                 var l: [String: Any] = [:]
                 if let layer = w[kCGWindowLayer as String] as? Int { l["layer"] = layer }
@@ -119,8 +144,12 @@ private func boundsOf(_ w: [String: Any]) -> CGRect? {
             }
         }
         f["loginwindow"] = login
+        f["anonymous"] = anonymous
         f["unresolved_owners"] = unresolved
     }
+    // Geometry to judge unidentified windows against; omitted (Rust then clears nothing) when
+    // unusable.
+    if let ds = displays(), geometryUsable(ds) { f["displays"] = displayFacts(ds) }
     if let anyInput = CGEventType(rawValue: UInt32.max) {
         let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
         if seconds.isFinite && seconds >= 0 { f["idle_seconds"] = seconds }
@@ -141,37 +170,46 @@ private final class FrameResult: @unchecked Sendable {
     }
     func get() -> (CGImage?, Int32, Int) { lock.lock(); defer { lock.unlock() }; return (image, reason, code) }
 }
-// Failure codes match `macos_facts::frame_reason`.
+// Failure codes. They must equal `macos_facts::frame_reason`; a Rust test reads these lines.
+private let FRAME_NO_PERMISSION: Int32 = 1
+private let FRAME_OS_TOO_OLD: Int32 = 2
+private let FRAME_SHAREABLE_CONTENT: Int32 = 3
+private let FRAME_DISPLAY_NOT_FOUND: Int32 = 4
+private let FRAME_SCREENSHOT: Int32 = 5
+private let FRAME_TIMEOUT: Int32 = 6
+private let FRAME_NO_IMAGE: Int32 = 7
+private let FRAME_BAD_SIZE: Int32 = 8
+private let FRAME_DRAW: Int32 = 9
 @_cdecl("rs_capture_frame") public func frame(_ id: UInt32, _ width: UnsafeMutablePointer<UInt32>, _ height: UnsafeMutablePointer<UInt32>, _ length: UnsafeMutablePointer<Int>, _ reason: UnsafeMutablePointer<Int32>, _ osCode: UnsafeMutablePointer<Int>) -> UnsafeMutableRawPointer? {
     reason.pointee = 0
     osCode.pointee = 0
-    guard #available(macOS 14.0, *) else { reason.pointee = 2; return nil }
-    guard CGPreflightScreenCaptureAccess() else { reason.pointee = 1; return nil }
+    guard #available(macOS 14.0, *) else { reason.pointee = FRAME_OS_TOO_OLD; return nil }
+    guard CGPreflightScreenCaptureAccess() else { reason.pointee = FRAME_NO_PERMISSION; return nil }
     let done = DispatchSemaphore(value: 0)
     let result = FrameResult()
     SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-        guard let content = content else { result.fail(3, error); done.signal(); return }
-        guard let display = content.displays.first(where: { $0.displayID == id }) else { result.fail(4, nil); done.signal(); return }
+        guard let content = content else { result.fail(FRAME_SHAREABLE_CONTENT, error); done.signal(); return }
+        guard let display = content.displays.first(where: { $0.displayID == id }) else { result.fail(FRAME_DISPLAY_NOT_FOUND, nil); done.signal(); return }
         let config = SCStreamConfiguration()
         config.width = CGDisplayPixelsWide(id)
         config.height = CGDisplayPixelsHigh(id)
         config.showsCursor = true
         let filter = SCContentFilter(display: display, excludingWindows: [])
         SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
-            if let image = image { result.set(image) } else { result.fail(5, error) }
+            if let image = image { result.set(image) } else { result.fail(FRAME_SCREENSHOT, error) }
             done.signal()
         }
     }
-    guard done.wait(timeout: .now() + 15) == .success else { reason.pointee = 6; return nil }
+    guard done.wait(timeout: .now() + 15) == .success else { reason.pointee = FRAME_TIMEOUT; return nil }
     let (captured, failure, code) = result.get()
     guard let image = captured else {
-        reason.pointee = failure == 0 ? 7 : failure
+        reason.pointee = failure == 0 ? FRAME_NO_IMAGE : failure
         osCode.pointee = code
         return nil
     }
     let bytes = image.width * image.height * 4
-    guard bytes > 0, bytes <= 512 * 1024 * 1024, let p = malloc(bytes) else { reason.pointee = 8; return nil }
-    guard let ctx = CGContext(data: p, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { free(p); reason.pointee = 9; return nil }
+    guard bytes > 0, bytes <= 512 * 1024 * 1024, let p = malloc(bytes) else { reason.pointee = FRAME_BAD_SIZE; return nil }
+    guard let ctx = CGContext(data: p, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { free(p); reason.pointee = FRAME_DRAW; return nil }
     ctx.translateBy(x: 0, y: CGFloat(image.height)); ctx.scaleBy(x: 1, y: -1)
     ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
     width.pointee = UInt32(image.width); height.pointee = UInt32(image.height); length.pointee = bytes

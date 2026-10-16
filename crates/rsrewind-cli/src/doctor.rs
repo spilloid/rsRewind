@@ -443,20 +443,21 @@ fn macos_checks(config: Option<&Config>) -> Vec<Check> {
                 let s = list.stats;
                 let mut detail = format!(
                     "{} on-screen window(s) of {} listed: {} untitled, {} named by their owner \
-                     (process not resolvable), {} with no owner, {} without a layer, {} skipped \
-                     without bounds",
+                     (process not resolvable), {} with no owner, {} without a layer, {} of zero \
+                     size skipped",
                     s.on_screen,
                     s.listed,
                     s.untitled,
                     s.owner_fallback,
                     s.owner_unknown,
                     s.layer_unknown,
-                    s.no_bounds
+                    s.zero_area
                 );
                 let level = if needs.title_rules && s.untitled_regular > 0 {
                     detail.push_str(&format!(
                         "; {} application window(s) report no title, so window-title exclusion \
-                         rules cannot match them (application rules still do)",
+                         rules cannot match them (application rules still do; an open decision, \
+                         see docs/macos.md)",
                         s.untitled_regular
                     ));
                     Level::Warn

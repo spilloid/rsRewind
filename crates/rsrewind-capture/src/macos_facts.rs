@@ -37,6 +37,44 @@ impl RuleNeeds {
     }
 }
 
+/// rsRewind's own processes, whose windows prove nothing about whether *other* processes' titles
+/// are visible: a process always sees its own titles, and `rsrewind ui` (a separate, regular,
+/// titled process) runs from the same executable as the recorder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnIdentity {
+    /// This process.
+    pub pid: u32,
+    /// Executable file names that are rsRewind (compared case-insensitively).
+    pub executables: Vec<String>,
+}
+
+impl OwnIdentity {
+    /// This process, `rsrewind`, and this executable's own file name (the bundle's executable).
+    pub fn current() -> Self {
+        let mut executables = vec!["rsrewind".to_string()];
+        if let Some(name) = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            && !executables.iter().any(|e| e.eq_ignore_ascii_case(&name))
+        {
+            executables.push(name);
+        }
+        Self {
+            pid: std::process::id(),
+            executables,
+        }
+    }
+
+    fn owns(&self, pid: u32, executable: Option<&str>) -> bool {
+        pid == self.pid
+            || executable.is_some_and(|exe| {
+                self.executables
+                    .iter()
+                    .any(|own| own.eq_ignore_ascii_case(exe))
+            })
+    }
+}
+
 // ----- window list ---------------------------------------------------------------------------
 
 /// `rs_capture_windows` output: either `{"error": code}` or the displays and every on-screen
@@ -142,6 +180,9 @@ pub enum WindowListError {
     /// Title rules exist, regular applications have windows on screen, and not one of them reports
     /// a title: titles are evidently being withheld, so no title rule could match.
     TitlesUnavailable { untitled: usize },
+    /// Windows whose bounds are missing, unparseable or not finite: they could be on any display,
+    /// so no display can be cleared.
+    BoundsUnknown { windows: usize },
 }
 
 impl WindowListError {
@@ -157,6 +198,7 @@ impl WindowListError {
             Self::BadDisplayGeometry => "bad-display-geometry",
             Self::OwnerUnknown { .. } => "owner-unknown",
             Self::TitlesUnavailable { .. } => "titles-unavailable",
+            Self::BoundsUnknown { .. } => "bounds-unknown",
         }
     }
 }
@@ -181,6 +223,10 @@ impl fmt::Display for WindowListError {
             Self::TitlesUnavailable { untitled } => write!(
                 f,
                 "none of the {untitled} on-screen application window(s) reports a title, so window-title exclusion rules cannot be checked"
+            ),
+            Self::BoundsUnknown { windows } => write!(
+                f,
+                "{windows} window(s) have missing or unreadable bounds, so no display can be cleared of them"
             ),
         }
     }
@@ -208,9 +254,11 @@ pub struct WindowStats {
     pub owner_unknown: usize,
     /// On-screen windows without an integer layer (kept).
     pub layer_unknown: usize,
-    /// Listed windows skipped because they have no usable bounds (they cannot be placed on any
-    /// display).
-    pub no_bounds: usize,
+    /// Listed windows whose bounds are missing, unparseable or not finite. Any one makes the list
+    /// unknown ([`WindowListError::BoundsUnknown`]); counted for `doctor`.
+    pub bounds_unknown: usize,
+    /// Listed windows with valid bounds of zero area: invisible, skipped.
+    pub zero_area: usize,
     /// Listed windows with bounds that touch no active display.
     pub off_display: usize,
 }
@@ -225,6 +273,18 @@ pub struct WindowList {
     pub stats: WindowStats,
 }
 
+/// `{"error": code}` from any bridge call that otherwise returns data (`rs_capture_monitors` uses
+/// it for unusable display geometry), or `None` when `json` is not an error object.
+pub fn bridge_error(json: &[u8]) -> Option<WindowListError> {
+    #[derive(Deserialize)]
+    struct ErrorOnly {
+        error: String,
+    }
+    serde_json::from_slice::<ErrorOnly>(json)
+        .ok()
+        .map(|e| known_bridge_error(&e.error))
+}
+
 pub fn parse_windows(json: &[u8]) -> Result<WindowSnapshot, WindowListError> {
     serde_json::from_slice(json).map_err(|_| WindowListError::Malformed)
 }
@@ -234,6 +294,7 @@ fn known_bridge_error(code: &str) -> WindowListError {
         "no-permission" => WindowListError::NoPermission,
         "no-displays" => WindowListError::NoDisplays,
         "list-unavailable" => WindowListError::ListUnavailable,
+        "bad-display-geometry" => WindowListError::BadDisplayGeometry,
         other => WindowListError::Bridge(
             other
                 .chars()
@@ -244,12 +305,28 @@ fn known_bridge_error(code: &str) -> WindowListError {
     }
 }
 
-fn usable(rect: &RawRect) -> bool {
-    [rect.x, rect.y, rect.width, rect.height]
-        .iter()
-        .all(|v| v.is_finite())
-        && rect.width > 0.0
-        && rect.height > 0.0
+/// What a window's bounds allow.
+enum Bounds {
+    /// Finite, non-negative size, non-zero area.
+    Visible(RawRect),
+    /// Finite and valid but zero width or height: nothing of it can be seen.
+    ZeroArea,
+    /// Missing, unparseable (the bridge omits those), not finite, or negative size.
+    Unknown,
+}
+
+fn bounds_of(rect: Option<RawRect>) -> Bounds {
+    let Some(r) = rect else {
+        return Bounds::Unknown;
+    };
+    let finite = [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite());
+    if !finite || r.width < 0.0 || r.height < 0.0 {
+        Bounds::Unknown
+    } else if r.width == 0.0 || r.height == 0.0 {
+        Bounds::ZeroArea
+    } else {
+        Bounds::Visible(r)
+    }
 }
 
 fn display_usable(d: &RawDisplay) -> bool {
@@ -306,14 +383,17 @@ fn non_blank(value: Option<&str>) -> Option<&str> {
 ///   name is [`UNKNOWN_PROCESS`], and if process rules exist the whole list is unknown
 ///   ([`WindowListError::OwnerUnknown`]);
 /// - layer missing or not an integer: kept;
-/// - no usable bounds: skipped and counted (it cannot be placed on any display).
+/// - bounds missing, unparseable or not finite: the whole list is unknown
+///   ([`WindowListError::BoundsUnknown`]): such a window could be on any display;
+/// - valid bounds of zero area: skipped and counted (nothing of it is visible).
 ///
-/// `own_pid` (this process) is left out of the title-availability evidence: a process always sees
-/// its own titles, so they prove nothing about everyone else's.
+/// `own` (rsRewind's processes: this one and any running the rsRewind executable, such as
+/// `rsrewind ui`) is left out of the title-availability evidence: rsRewind's titles prove nothing
+/// about whether other processes' titles are visible.
 pub fn classify_windows(
     snapshot: &WindowSnapshot,
     needs: RuleNeeds,
-    own_pid: u32,
+    own: &OwnIdentity,
 ) -> Result<WindowList, WindowListError> {
     if let Some(code) = &snapshot.error {
         return Err(known_bridge_error(code));
@@ -330,9 +410,16 @@ pub fn classify_windows(
     };
     let mut windows = Vec::new();
     for raw in &snapshot.windows {
-        let Some(bounds) = raw.bounds.filter(usable) else {
-            stats.no_bounds += 1;
-            continue;
+        let bounds = match bounds_of(raw.bounds) {
+            Bounds::Visible(bounds) => bounds,
+            Bounds::ZeroArea => {
+                stats.zero_area += 1;
+                continue;
+            }
+            Bounds::Unknown => {
+                stats.bounds_unknown += 1;
+                continue;
+            }
         };
         let rects: Vec<ScreenRect> = snapshot
             .displays
@@ -367,7 +454,9 @@ pub fn classify_windows(
         let title = raw.title.as_deref().unwrap_or("");
         let titled = !title.trim().is_empty();
         let pid = raw.pid.and_then(|p| u32::try_from(p).ok()).unwrap_or(0);
-        let counts_as_evidence = raw.regular == Some(true) && pid != own_pid;
+        // Evidence about titles: only a regular application that resolved (`regular: None` means
+        // the owner did not) and is not rsRewind itself.
+        let counts_as_evidence = raw.regular == Some(true) && !own.owns(pid, executable);
         if !titled {
             stats.untitled += 1;
             if counts_as_evidence {
@@ -391,6 +480,11 @@ pub fn classify_windows(
                 });
             }
         }
+    }
+    if stats.bounds_unknown > 0 {
+        return Err(WindowListError::BoundsUnknown {
+            windows: stats.bounds_unknown,
+        });
     }
     if needs.process_rules && stats.owner_unknown > 0 {
         return Err(WindowListError::OwnerUnknown {
@@ -428,6 +522,41 @@ pub struct SessionFacts {
     pub unresolved_owners: u32,
     /// `CGEventSource.secondsSinceLastEventType`, when finite and non-negative.
     pub idle_seconds: Option<f64>,
+    /// Active displays (same shape as the window snapshot's), to judge how much of a display an
+    /// unidentified window covers.
+    pub displays: Vec<RawDisplay>,
+    /// On-screen windows with neither a resolvable executable nor an owner name. A lock screen
+    /// whose owner cannot be named would look like this.
+    pub anonymous: Vec<AnonymousWindow>,
+}
+
+/// An on-screen window nothing identifies; only its bounds (absent when unreadable).
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AnonymousWindow {
+    pub bounds: Option<RawRect>,
+}
+
+/// Share of a display an unidentified window must cover to count as a possible lock screen.
+pub const COVERING_SHARE: f64 = 0.9;
+
+fn covers_a_display(window: &AnonymousWindow, displays: &[RawDisplay]) -> bool {
+    let r = match bounds_of(window.bounds) {
+        Bounds::Visible(r) => r,
+        Bounds::ZeroArea => return false,
+        // Unreadable bounds cannot rule it out.
+        Bounds::Unknown => return true,
+    };
+    if displays.is_empty() {
+        return true;
+    }
+    displays.iter().any(|d| {
+        let w = (r.x + r.width).min(d.min_x + d.width_pt) - r.x.max(d.min_x);
+        let h = (r.y + r.height).min(d.min_y + d.height_pt) - r.y.max(d.min_y);
+        let area = d.width_pt * d.height_pt;
+        // A display with unusable geometry cannot be cleared.
+        !(area.is_finite() && area > 0.0) || (w > 0.0 && h > 0.0 && w * h >= COVERING_SHARE * area)
+    })
 }
 
 /// Shape of one `loginwindow` window, for `doctor` (no content).
@@ -459,6 +588,11 @@ pub enum SessionUnknown {
     LoginWindowVisible {
         windows: usize,
     },
+    /// A window nothing identifies (no executable, no owner name) covers most of a display, or
+    /// its bounds are unreadable: it could be a lock screen.
+    UnidentifiedCoveringWindow {
+        windows: usize,
+    },
     /// No idle time from `CGEventSource`.
     IdleUnavailable,
 }
@@ -474,6 +608,7 @@ impl SessionUnknown {
             Self::ScreenLocked => "screen-locked",
             Self::WindowListUnavailable => "list-unavailable",
             Self::LoginWindowVisible { .. } => "loginwindow-visible",
+            Self::UnidentifiedCoveringWindow { .. } => "unidentified-covering-window",
             Self::IdleUnavailable => "idle-unavailable",
         }
     }
@@ -500,6 +635,10 @@ impl fmt::Display for SessionUnknown {
                 f,
                 "{windows} loginwindow window(s) are on screen (lock, login or user-switch screen)"
             ),
+            Self::UnidentifiedCoveringWindow { windows } => write!(
+                f,
+                "{windows} window(s) with no identifiable owner cover most of a display (or have unreadable bounds), so a lock screen cannot be ruled out"
+            ),
             Self::IdleUnavailable => f.write_str("macOS did not report time since the last input"),
         }
     }
@@ -512,7 +651,12 @@ pub fn parse_session(json: &[u8]) -> Result<SessionFacts, SessionUnknown> {
 }
 
 /// Milliseconds since the last input, or why that is unknown. Fails closed on everything that
-/// could mean a locked or foreign session; an unresolvable window owner is no longer one of them.
+/// could mean a locked or foreign session; an unresolvable window owner is no longer one of them,
+/// unless nothing at all names it and it covers at least [`COVERING_SHARE`] of a display.
+///
+/// Lock detection relies on, in order: the console/login keys, the undocumented
+/// `CGSSessionScreenIsLocked` key, `loginwindow`-owned windows, and unidentified covering windows.
+/// None is a documented "screen is locked" API; macOS offers none to a non-sandboxed process.
 pub fn classify_session(facts: &SessionFacts) -> Result<u64, SessionUnknown> {
     if !facts.have_session {
         return Err(SessionUnknown::NoSessionInfo);
@@ -533,6 +677,14 @@ pub fn classify_session(facts: &SessionFacts) -> Result<u64, SessionUnknown> {
         return Err(SessionUnknown::LoginWindowVisible {
             windows: facts.loginwindow.len(),
         });
+    }
+    let covering = facts
+        .anonymous
+        .iter()
+        .filter(|w| covers_a_display(w, &facts.displays))
+        .count();
+    if covering > 0 {
+        return Err(SessionUnknown::UnidentifiedCoveringWindow { windows: covering });
     }
     match facts.idle_seconds {
         Some(seconds) if seconds.is_finite() && seconds >= 0.0 => Ok((seconds * 1000.0) as u64),
@@ -566,7 +718,7 @@ pub fn frame_failure(reason: i32, os_code: i64) -> String {
         SHAREABLE_CONTENT => "ScreenCaptureKit could not list shareable content",
         DISPLAY_NOT_FOUND => "the display is not in ScreenCaptureKit's shareable content",
         SCREENSHOT => "ScreenCaptureKit failed to capture the screenshot",
-        TIMEOUT => "ScreenCaptureKit did not answer within 15 s",
+        TIMEOUT => "ScreenCaptureKit timed out (no answer within 15 s)",
         NO_IMAGE => "ScreenCaptureKit returned no image",
         BAD_SIZE => "the captured image has an unusable size",
         DRAW => "the captured image could not be converted to BGRA",
@@ -679,7 +831,7 @@ mod tests {
                 ..app("Terminal", "zsh", 11)
             },
         ]);
-        let list = classify_windows(&snap, BOTH, OWN_PID)?;
+        let list = classify_windows(&snap, BOTH, &own())?;
         assert_eq!(names(&list), ["Safari", "Window Server", "Terminal"]);
         assert_eq!(list.stats.listed, 3);
         assert_eq!(list.stats.on_screen, 3);
@@ -702,7 +854,7 @@ mod tests {
             title: Some("Vault".into()),
             ..overlay(Some("1Password"))
         };
-        let list = classify_windows(&snapshot(vec![vault]), RuleNeeds::of(&policy), OWN_PID)?;
+        let list = classify_windows(&snapshot(vec![vault]), RuleNeeds::of(&policy), &own())?;
         assert_eq!(list.stats.owner_fallback, 1);
         let excluded = list.windows.iter().any(|w| {
             policy
@@ -720,7 +872,7 @@ mod tests {
             owner_name: Some("Code".into()),
             ..app("Electron", "main.rs", 12)
         };
-        let list = classify_windows(&snapshot(vec![window]), BOTH, OWN_PID)?;
+        let list = classify_windows(&snapshot(vec![window]), BOTH, &own())?;
         assert_eq!(names(&list), ["Electron", "Code"]);
         // Attribution (first entry) stays the executable.
         assert_eq!(list.windows[0].process_name, "Electron");
@@ -742,7 +894,7 @@ mod tests {
             ..app("Safari", "x", 13)
         };
         assert_eq!(
-            names(&classify_windows(&snapshot(vec![same]), BOTH, OWN_PID)?),
+            names(&classify_windows(&snapshot(vec![same]), BOTH, &own())?),
             ["Safari"]
         );
         Ok(())
@@ -753,14 +905,14 @@ mod tests {
     {
         let snap = snapshot(vec![app("Safari", "Docs", 10), overlay(None)]);
         assert_eq!(
-            classify_windows(&snap, BOTH, OWN_PID).err(),
+            classify_windows(&snap, BOTH, &own()).err(),
             Some(WindowListError::OwnerUnknown { windows: 1 })
         );
         let titles_only = RuleNeeds {
             process_rules: false,
             title_rules: true,
         };
-        let list = classify_windows(&snap, titles_only, OWN_PID)?;
+        let list = classify_windows(&snap, titles_only, &own())?;
         assert_eq!(list.stats.owner_unknown, 1);
         assert_eq!(list.windows[1].process_name, UNKNOWN_PROCESS);
         Ok(())
@@ -778,7 +930,7 @@ mod tests {
             untitled("Terminal", 11),
             overlay(Some("Window Server")),
         ]);
-        let error = classify_windows(&snap, BOTH, OWN_PID)
+        let error = classify_windows(&snap, BOTH, &own())
             .err()
             .ok_or("withheld titles must make the list unknown")?;
         assert_eq!(error, WindowListError::TitlesUnavailable { untitled: 2 });
@@ -788,44 +940,131 @@ mod tests {
             process_rules: true,
             title_rules: false,
         };
-        assert!(classify_windows(&snap, processes_only, OWN_PID).is_ok());
+        assert!(classify_windows(&snap, processes_only, &own()).is_ok());
         // One titled regular window is evidence titles are visible: the untitled ones are kept.
         let mut snap = snap;
         snap.windows.push(app("Notes", "Shopping", 14));
-        let list = classify_windows(&snap, BOTH, OWN_PID)?;
+        let list = classify_windows(&snap, BOTH, &own())?;
         assert_eq!(list.stats.untitled_regular, 2);
         assert_eq!(list.stats.titled_regular, 1);
         Ok(())
     }
 
+    fn own() -> OwnIdentity {
+        OwnIdentity {
+            pid: OWN_PID,
+            executables: vec!["rsrewind".into()],
+        }
+    }
+
+    fn untitled_safari() -> RawWindow {
+        RawWindow {
+            title: None,
+            ..app("Safari", "", 10)
+        }
+    }
+
     #[test]
     fn own_titled_windows_are_not_evidence_that_titles_are_visible() {
         let snap = snapshot(vec![
-            RawWindow {
-                title: None,
-                ..app("Safari", "", 10)
-            },
+            untitled_safari(),
             app("rsrewind", "rsRewind", i64::from(OWN_PID)),
         ]);
         assert_eq!(
-            classify_windows(&snap, BOTH, OWN_PID).err(),
+            classify_windows(&snap, BOTH, &own()).err(),
             Some(WindowListError::TitlesUnavailable { untitled: 1 })
         );
     }
 
     #[test]
-    fn windows_without_usable_bounds_are_skipped_and_counted() -> TestResult {
+    fn the_separate_ui_process_is_not_evidence_either() {
+        // `rsrewind ui`: another pid, same executable (any case), regular and titled.
+        for exe in ["rsrewind", "RSRewind"] {
+            let snap = snapshot(vec![untitled_safari(), app(exe, "rsRewind", 5150)]);
+            assert_eq!(
+                classify_windows(&snap, BOTH, &own()).err(),
+                Some(WindowListError::TitlesUnavailable { untitled: 1 }),
+                "{exe}"
+            );
+        }
+        // Alone on screen, it is no evidence at all (and nothing else needs any).
+        let snap = snapshot(vec![app("rsrewind", "rsRewind", 5150)]);
+        let list = classify_windows(&snap, BOTH, &own());
+        assert_eq!(
+            list.map(|l| (l.stats.titled_regular, l.stats.untitled_regular)),
+            Ok((0, 0))
+        );
+        // The bundle executable's own name counts as rsRewind too.
+        let bundle = OwnIdentity {
+            pid: OWN_PID,
+            executables: vec!["rsrewind".into(), "rsRewind-bundle".into()],
+        };
+        let snap = snapshot(vec![untitled_safari(), app("rsRewind-bundle", "w", 5151)]);
+        assert!(classify_windows(&snap, BOTH, &bundle).is_err());
+    }
+
+    #[test]
+    fn an_unresolved_owner_is_not_evidence_but_a_titled_app_on_another_display_is() -> TestResult {
+        // regular: None (NSRunningApplication did not resolve), titled: no evidence.
+        let unresolved = RawWindow {
+            title: Some("Something".into()),
+            ..overlay(Some("SomeAgent"))
+        };
+        let snap = snapshot(vec![untitled_safari(), unresolved]);
+        assert_eq!(
+            classify_windows(&snap, BOTH, &own()).err(),
+            Some(WindowListError::TitlesUnavailable { untitled: 1 })
+        );
+        // A titled regular app window on the second display is evidence.
+        let elsewhere = RawWindow {
+            bounds: rect(2000.0, 100.0, 400.0, 300.0),
+            ..app("Notes", "Shopping", 14)
+        };
+        let list = classify_windows(&snapshot(vec![untitled_safari(), elsewhere]), BOTH, &own())?;
+        assert_eq!(list.stats.titled_regular, 1);
+        assert_eq!(list.stats.untitled_regular, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn windows_with_unknown_bounds_make_the_list_unknown() {
+        for bounds in [
+            None,
+            rect(f64::NAN, 0.0, 10.0, 10.0),
+            rect(0.0, f64::INFINITY, 10.0, 10.0),
+            rect(0.0, 0.0, -10.0, 10.0),
+        ] {
+            let snap = snapshot(vec![
+                app("E", "e", 5),
+                RawWindow {
+                    bounds,
+                    ..app("A", "a", 1)
+                },
+            ]);
+            let error = classify_windows(&snap, BOTH, &own()).err();
+            assert_eq!(
+                error,
+                Some(WindowListError::BoundsUnknown { windows: 1 }),
+                "{bounds:?}"
+            );
+            // Whatever rules exist: an unplaceable window could be on any display.
+            assert!(classify_windows(&snap, RuleNeeds::default(), &own()).is_err());
+        }
+        assert_eq!(
+            WindowListError::BoundsUnknown { windows: 2 }.code(),
+            "bounds-unknown"
+        );
+    }
+
+    #[test]
+    fn zero_area_and_off_display_windows_are_skipped_and_counted() -> TestResult {
         let snap = snapshot(vec![
-            RawWindow {
-                bounds: None,
-                ..app("A", "a", 1)
-            },
             RawWindow {
                 bounds: rect(0.0, 0.0, 0.0, 10.0),
                 ..app("B", "b", 2)
             },
             RawWindow {
-                bounds: rect(f64::NAN, 0.0, 10.0, 10.0),
+                bounds: rect(5.0, 5.0, 10.0, 0.0),
                 ..app("C", "c", 3)
             },
             RawWindow {
@@ -834,11 +1073,111 @@ mod tests {
             },
             app("E", "e", 5),
         ]);
-        let list = classify_windows(&snap, BOTH, OWN_PID)?;
-        assert_eq!(list.stats.no_bounds, 3);
+        let list = classify_windows(&snap, BOTH, &own())?;
+        assert_eq!(list.stats.zero_area, 2);
+        assert_eq!(list.stats.bounds_unknown, 0);
         assert_eq!(list.stats.off_display, 1);
         assert_eq!(names(&list), ["E"]);
         Ok(())
+    }
+
+    #[test]
+    fn a_monitors_error_object_is_recognised_and_a_list_is_not() {
+        // What `rs_capture_monitors` returns instead of trapping on a zero-width display.
+        assert_eq!(
+            bridge_error(br#"{"error":"bad-display-geometry"}"#),
+            Some(WindowListError::BadDisplayGeometry)
+        );
+        assert_eq!(bridge_error(br#"[{"id":1,"info":{}}]"#), None);
+        assert_eq!(bridge_error(b"garbage"), None);
+    }
+
+    #[test]
+    fn bad_display_geometry_from_the_bridge_is_named() {
+        let snap = WindowSnapshot {
+            error: Some("bad-display-geometry".into()),
+            ..WindowSnapshot::default()
+        };
+        assert_eq!(
+            classify_windows(&snap, BOTH, &own()).err(),
+            Some(WindowListError::BadDisplayGeometry)
+        );
+    }
+
+    #[test]
+    fn current_identity_names_rsrewind_and_this_executable() {
+        let me = OwnIdentity::current();
+        assert_eq!(me.pid, std::process::id());
+        assert!(me.executables.iter().any(|e| e == "rsrewind"));
+        assert!(me.executables.len() >= 2, "{:?}", me.executables);
+    }
+
+    // ----- Swift/Rust agreement: the bridge source is checked as text ----------------------
+
+    const SWIFT: &str = include_str!("macos.swift");
+
+    #[test]
+    fn swift_frame_reason_constants_match_rust() {
+        let rust = [
+            ("NO_PERMISSION", frame_reason::NO_PERMISSION),
+            ("OS_TOO_OLD", frame_reason::OS_TOO_OLD),
+            ("SHAREABLE_CONTENT", frame_reason::SHAREABLE_CONTENT),
+            ("DISPLAY_NOT_FOUND", frame_reason::DISPLAY_NOT_FOUND),
+            ("SCREENSHOT", frame_reason::SCREENSHOT),
+            ("TIMEOUT", frame_reason::TIMEOUT),
+            ("NO_IMAGE", frame_reason::NO_IMAGE),
+            ("BAD_SIZE", frame_reason::BAD_SIZE),
+            ("DRAW", frame_reason::DRAW),
+        ];
+        let mut swift = Vec::new();
+        for line in SWIFT.lines() {
+            // private let FRAME_TIMEOUT: Int32 = 6
+            if let Some(rest) = line.trim().strip_prefix("private let FRAME_")
+                && let Some((name, value)) = rest.split_once(": Int32 = ")
+            {
+                swift.push((name.to_string(), value.trim().parse::<i32>()));
+            }
+        }
+        assert_eq!(swift.len(), rust.len(), "{swift:?}");
+        for (name, value) in rust {
+            let found = swift.iter().find(|(n, _)| n == name);
+            assert_eq!(
+                found.map(|(_, v)| v.clone()),
+                Some(Ok(value)),
+                "FRAME_{name}"
+            );
+        }
+        // Every failure the bridge reports goes through a named constant.
+        for line in SWIFT.lines() {
+            for marker in ["reason.pointee = ", "result.fail("] {
+                if let Some((_, after)) = line.split_once(marker) {
+                    assert!(
+                        !after.starts_with(|c: char| c.is_ascii_digit() && c != '0'),
+                        "bare reason literal in: {line}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_error_code_the_swift_bridge_emits_is_known_to_rust() {
+        let mut codes = Vec::new();
+        let mut rest = SWIFT;
+        while let Some(at) = rest.find("[\"error\": \"") {
+            rest = &rest[at + 11..];
+            if let Some(end) = rest.find('"') {
+                codes.push(&rest[..end]);
+            }
+        }
+        assert!(codes.len() >= 4, "{codes:?}");
+        for code in codes {
+            assert!(
+                !matches!(known_bridge_error(code), WindowListError::Bridge(_)),
+                "{code} is not known to known_bridge_error"
+            );
+            assert_eq!(known_bridge_error(code).code(), code);
+        }
     }
 
     #[test]
@@ -846,11 +1185,11 @@ mod tests {
         let mut snap = snapshot(vec![app("Safari", "Docs", 10)]);
         snap.error = Some("no-permission".into());
         assert_eq!(
-            classify_windows(&snap, BOTH, OWN_PID).err(),
+            classify_windows(&snap, BOTH, &own()).err(),
             Some(WindowListError::NoPermission)
         );
         snap.error = Some("weird <title> stuff".into());
-        let error = classify_windows(&snap, BOTH, OWN_PID).err();
+        let error = classify_windows(&snap, BOTH, &own()).err();
         assert_eq!(
             error,
             Some(WindowListError::Bridge("weirdtitlestuff".into()))
@@ -859,13 +1198,13 @@ mod tests {
         let mut snap = snapshot(vec![]);
         snap.displays.clear();
         assert_eq!(
-            classify_windows(&snap, BOTH, OWN_PID).err(),
+            classify_windows(&snap, BOTH, &own()).err(),
             Some(WindowListError::NoDisplays)
         );
         let mut snap = snapshot(vec![]);
         snap.displays[1].width_pt = 0.0;
         assert_eq!(
-            classify_windows(&snap, BOTH, OWN_PID).err(),
+            classify_windows(&snap, BOTH, &own()).err(),
             Some(WindowListError::BadDisplayGeometry)
         );
         assert_eq!(
@@ -880,7 +1219,7 @@ mod tests {
             "windows":[{"pid":5,"owner_name":"Control Center","bounds":{"x":1300,"y":0,"width":40,"height":24}},
                        {"pid":6,"executable":"Safari","regular":true,"owner_name":"Safari","title":"t","layer":0,"bounds":{"x":0,"y":30,"width":100,"height":100}}]}"#;
         let snap = parse_windows(json)?;
-        let list = classify_windows(&snap, BOTH, OWN_PID)?;
+        let list = classify_windows(&snap, BOTH, &own())?;
         assert_eq!(names(&list), ["Control Center", "Safari"]);
         assert_eq!(
             parse_windows(br#"{"error":"list-unavailable"}"#)?
@@ -951,7 +1290,7 @@ mod tests {
             bounds: rect(1340.0, 10.0, 200.0, 50.0),
             ..app("Safari", "Docs", 10)
         };
-        let list = classify_windows(&snapshot(vec![window]), BOTH, OWN_PID)?;
+        let list = classify_windows(&snapshot(vec![window]), BOTH, &own())?;
         assert_eq!(list.windows.len(), 2);
         assert_eq!(list.stats.on_screen, 1);
         Ok(())
@@ -991,7 +1330,54 @@ mod tests {
             loginwindow: Vec::new(),
             unresolved_owners: 0,
             idle_seconds: Some(2.5),
+            displays: displays(),
+            anonymous: Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_unidentified_window_covering_a_display_means_a_lock_screen_cannot_be_ruled_out() {
+        let anon = |bounds| AnonymousWindow { bounds };
+        // Covers 95% of the second display (1920x1080 pt at x=1440).
+        let covering = SessionFacts {
+            anonymous: vec![anon(rect(1440.0, 0.0, 1920.0, 1026.0))],
+            ..active()
+        };
+        assert_eq!(
+            classify_session(&covering),
+            Err(SessionUnknown::UnidentifiedCoveringWindow { windows: 1 })
+        );
+        // Unreadable bounds cannot be ruled out either.
+        for bounds in [None, rect(f64::NAN, 0.0, 10.0, 10.0)] {
+            let facts = SessionFacts {
+                anonymous: vec![anon(bounds)],
+                ..active()
+            };
+            assert_eq!(
+                classify_session(&facts),
+                Err(SessionUnknown::UnidentifiedCoveringWindow { windows: 1 }),
+                "{bounds:?}"
+            );
+        }
+        // Without display geometry nothing can be cleared.
+        let no_displays = SessionFacts {
+            anonymous: vec![anon(rect(0.0, 0.0, 10.0, 10.0))],
+            displays: Vec::new(),
+            ..active()
+        };
+        assert!(classify_session(&no_displays).is_err());
+        // Small or zero-area unidentified windows (a menu-bar item) are tolerated.
+        let small = SessionFacts {
+            anonymous: vec![
+                anon(rect(1300.0, 0.0, 40.0, 24.0)),
+                anon(rect(0.0, 0.0, 0.0, 900.0)),
+                // 80% of the first display: below the 90% share.
+                anon(rect(0.0, 0.0, 1440.0, 720.0)),
+            ],
+            ..active()
+        };
+        assert_eq!(classify_session(&small), Ok(2_500));
+        assert!(parse_session(br#"{"anonymous":[{}]}"#).is_ok_and(|f| f.anonymous.len() == 1));
     }
 
     #[test]
