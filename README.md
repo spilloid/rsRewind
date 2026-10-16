@@ -2,7 +2,7 @@
 
 **Find anything you saw.** rsRewind records what changes on your screen, reads the words on it, and lets you search and rewind your own history. It runs entirely on your computer: no account, no cloud, no telemetry, no server.
 
-**Current release: v0.1.1** · [Get rsRewind](https://spilloid.github.io/rsRewind/install.html) · [First few minutes](https://spilloid.github.io/rsRewind/guide.html) · [Website](https://spilloid.github.io/rsRewind/)
+**Current release: v0.1.2** · [Get rsRewind](https://spilloid.github.io/rsRewind/install.html) · [First few minutes](https://spilloid.github.io/rsRewind/guide.html) · [Website](https://spilloid.github.io/rsRewind/)
 
 ![rsRewind displaying synthetic history in the rewind window](site/img/room-dark.png)
 
