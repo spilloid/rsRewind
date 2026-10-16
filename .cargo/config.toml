@@ -1,0 +1,5 @@
+# Link the MSVC C runtime into rsrewind.exe so it starts on a clean Windows install. Without this
+# the exe imports vcruntime140.dll and fails with a missing-DLL dialog on machines that never
+# installed the Visual C++ Redistributable (CHANGELOG 0.1.1). CI checks this on every release.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

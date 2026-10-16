@@ -20,7 +20,7 @@ Build locally (once a real `dist\rsrewind.exe` exists — see `.github/workflows
 how CI produces one):
 
 ```powershell
-wix build installer\rsrewind.wxs -d ProductVersion=0.1.0 -d SourceDir=dist -o out\rsrewind.msi
+wix build installer\rsrewind.wxs -d ProductVersion=0.1.1 -d SourceDir=dist -o out\rsrewind.msi
 ```
 
 `ProductVersion` and `SourceDir` both have fallback defines in the `.wxs` itself

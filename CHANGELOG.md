@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-16
+
+**Two fixes from the first installs: the Mac that never saved, and the Windows exe that would not start.**
+
 ### Fixed
 
 - **macOS: "Recording" but nothing ever saved (issue #33).** The window list was discarded whenever
@@ -24,6 +28,11 @@ All notable changes to this project are documented in this file. The format foll
 - **Logs never carry a window title from a parse error.** The KWin snapshot parser no longer passes
   serde_json's message (which quotes rejected values) into its error, and the "nothing is being
   saved" warning logs only the condition's name and counts.
+- **Windows: `rsrewind.exe` no longer needs the Visual C++ Redistributable.** 0.1.0 imported `vcruntime140.dll`,
+  so on a clean Windows install the MSI installed but the exe died with a missing-DLL dialog. The C runtime
+  is now linked in (`.cargo/config.toml`, `+crt-static`), and the release workflow fails if the staged exe
+  still imports `vcruntime140`/`msvcp140`. Not yet verified on a clean machine: that needs the first build
+  from this change.
 
 ### Added
 
@@ -50,6 +59,17 @@ All notable changes to this project are documented in this file. The format foll
   HTML/CSS/JS, nothing loaded from other servers.
 - Stale references to v0.0.6 and to MCP or macOS being "development builds only" removed from
   `docs/README.md`, `docs/cli.md`, `docs/mcp.md` and `docs/standards.md`.
+
+### Known issues
+
+- **Unverified on a real Mac.** The Mac fix (#33) was written and tested on Windows; the Swift and macOS-only code compiled for the first time in CI, and nothing has recorded on a Mac with it yet. `rsrewind doctor` names the failing condition if it still does not record.
+- **A title exclusion rule cannot match a Mac window whose title macOS does not report**, and Mac exports still carry the `window_titles` tag (an open maintainer decision, PRIVACY.md).
+- **The Windows static-runtime fix is unverified on a clean machine** until this release installs on one.
+- Everything under 0.1.0 Known issues still applies, including the open recorder privacy gaps in [#12](https://github.com/spilloid/rsRewind/issues/12).
+
+### Upgrade notes
+
+- No schema change. Status gains optional fields; older readers ignore them.
 
 ## [0.1.0] - 2026-10-11
 
