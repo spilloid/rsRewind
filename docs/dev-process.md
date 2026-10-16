@@ -160,3 +160,58 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   and clippy clean; the OCR and UI crates are not built there (Windows-only dependencies / not
   needed).
 
+### 2026-10-15 — macOS records nothing while showing "Recording" (issue #33)
+
+- **Routing:** Opus implementer (privacy decision path, FFI), branch `fix/macos-silent-no-record`.
+  No Mac available: Windows dev box only. Next: adversarial review of the diff, then macOS CI and a
+  real-Mac trial by the owner.
+- **Diagnosis (by reading):** `rs_capture_windows` returned nil for the whole list if any on-screen
+  window lacked `kCGWindowName`, a resolvable `NSRunningApplication`/executable or an integer layer;
+  the recorder then excluded every monitor (`unknown:window-list`) every tick, visible only at debug
+  level. `rs_capture_idle` went unknown for any unresolvable window owner (or a loginwindow window),
+  and `rs_capture_frame` required it before and after each capture. SCK errors were dropped.
+- **What changed:** the Swift bridge emits raw facts (JSON) and failure codes; the policy moved to
+  portable Rust (`rsrewind-capture/src/macos_facts.rs`): odd windows kept, owner-name fallback and
+  dual-name rule matching, fail closed on withheld titles (title rules + no titled regular-app
+  window) and on ownerless windows (application rules); session gating moved to Rust. A debounced
+  saving-health signal (`rsrewind-daemon/src/health.rs`) is published through the heartbeat's
+  counter map (no migration) and shown by `status`, `status --json` (`not_saving`), `doctor`, the
+  window chip and the tray. macOS doctor names each failing condition and takes one real test frame.
+- **Privacy decision flagged for the owner:** title rules cannot match an untitled Mac window; the
+  chosen safeguard and the rejected stricter alternative are in `docs/macos.md`.
+- **Verification:** Windows only, with a GNU toolchain (rustc 1.99.1 `x86_64-pc-windows-gnu`,
+  WinLibs gcc 16.2) installed for the session because the box had none: `cargo fmt --check`,
+  `clippy --workspace --all-targets --all-features -D warnings` and `test --workspace` green. New
+  tests: 16 classifier, 5 health, 4 tick-level, 1 end-to-end heartbeat, 1 CLI, 1 UI, 1 tray. Not
+  compiled: `macos.swift`, `macos.rs`, `macos_platform.rs`, doctor's macOS block, tray `macos.rs`.
+  No mutation testing this round.
+
+### 2026-10-16 — Issue #33, review round 2
+
+- **Routing:** Sonnet adversarial review of the round-1 diff; findings adjudicated by the
+  orchestrator; Opus implementer for the fixes. Worked in a separate worktree on
+  `fix/macos-silent-no-record-r2` (stacked on `d2e9604`) because the session's directory moved to
+  another branch's worktree; the round-1 branch needs a fast-forward to it.
+- **Accepted and fixed:** (1, high) windows with missing/unparseable/non-finite bounds were skipped,
+  i.e. fail-open: now `bounds-unknown` makes the list unknown, only valid zero-area windows are
+  skipped. (2) the titles-unavailable evidence accepted the separate `rsrewind ui` process: every
+  process running the rsRewind executable is now excluded, as are unresolved owners. (3) the health
+  warning logged the window fault text, and KWin builds it from serde_json errors that quote values
+  (titles): logs now carry only the condition name and counts; KWin uses a sanitized summary.
+  Reproduced first: the new log-capture test showed `"Bank - Account 12345"` at warn before the fix.
+  (4) the `window_titles` capability is kept (owner decision) but the gap is visible:
+  `untitled_app_window_ticks`, a `status` line, a doctor warning; docs no longer overstate
+  enforcement and list the export tag. (5) an unidentified window covering >= 90 % of a display (or
+  with unreadable bounds) makes the session unknown; reliance on `CGSSessionScreenIsLocked`
+  documented. (6) Swift frame reasons are named constants checked against Rust by a test that reads
+  `macos.swift` (mutation-checked: changing a constant and reintroducing a bare literal both failed
+  it); every Swift `"error"` code is checked to be known to Rust; `rs_capture_monitors` returns
+  `bad-display-geometry` instead of trapping on a zero-width display.
+- **Declined (orchestrator):** redesigning the 15 s ScreenCaptureKit wait (doctor now says
+  "ScreenCaptureKit timed out"; docs ask the owner to watch for it); per-owner title evidence
+  (documented follow-up).
+- **Verification:** Windows, GNU toolchain as in round 1: `cargo fmt --check`, `clippy --workspace
+  --all-targets --all-features -D warnings`, `cargo test --workspace` (408 passed, 0 failed, 2
+  ignored). Still not compiled: `macos.swift`, `capture/src/macos.rs`, `daemon/src/macos_platform.rs`,
+  doctor's macOS block, tray `macos.rs`; `kwin.rs` and its new test (Linux-only) also not compiled
+  here.

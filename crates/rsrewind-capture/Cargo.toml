@@ -11,13 +11,15 @@ publish.workspace = true
 rsrewind-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# The macOS window/session facts are classified in portable Rust (`macos_facts.rs`) so the policy
+# is unit-tested on every platform; the Swift bridge only emits them as JSON.
+serde.workspace = true
+serde_json.workspace = true
 
 # KDE Plasma on Wayland: KWin over the session bus, idle time from ext-idle-notify-v1. Both are
 # pure Rust (no libdbus or libwayland headers needed to build).
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
-serde.workspace = true
-serde_json.workspace = true
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
@@ -48,7 +50,3 @@ windows = { workspace = true, features = [
 
 [lints]
 workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-serde.workspace = true
-serde_json.workspace = true

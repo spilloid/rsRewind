@@ -84,6 +84,30 @@ it. The recorder writes `~/.local/share/applications/rsrewind-recorder.desktop` 
 path) each time it starts. That file is a standing permission for that program path; delete it to
 withdraw it.
 
+**macOS: untitled windows and unresolvable owners (since 2026-10-15, issue #33).** macOS does not
+report a title for many windows (system overlays, untitled app windows) and some window owners
+cannot be resolved to an executable. Such windows no longer make the whole window list "unknown":
+an untitled window is checked with an empty title (as on Windows), and an unresolvable owner is
+named by the owner name macOS reports. **A window-title rule therefore cannot match a Mac window
+whose title macOS does not report**; application rules still apply to it, and on macOS are checked
+against both the executable name and the owner's display name. If title rules exist and *no*
+application window on screen reports a title (titles are being withheld), or a window has no owner
+name at all while application rules exist, or a window's position cannot be read, the list is
+still treated as unknown and nothing is stored. Whenever title rules exist and application windows
+report no title, `rsrewind status` prints "Title rules could not be checked on N tick(s)" and
+`rsrewind doctor` warns. **Open decision for the maintainer:** the Mac backend still declares that
+it provides window titles, so the recorder starts with title rules without `unenforced_ok`, and
+history exported from a Mac still carries the `window_titles` capability tag even though title
+rules cannot match untitled windows. The details, and the stricter alternative, are in
+[docs/macos.md](docs/macos.md#window-list-rules-and-what-they-relax). When the recorder runs but
+stores nothing, `rsrewind status` and the window say so and why.
+
+**macOS lock screen.** macOS has no documented "screen is locked" call for this kind of program,
+so the recorder treats the session as unknown, and stores nothing, from several signals: the
+session not being on the console, an undocumented lock flag (`CGSSessionScreenIsLocked`), any
+window of the system's `loginwindow` process on screen, or an unidentifiable window covering most
+of a display. If a future macOS changes all of these, a lock screen could be recorded.
+
 The suggested patterns are Windows and Linux process names; on macOS add the names of the apps you use (as `rsrewind doctor` and Activity Monitor report them) and check a rule with synthetic content before relying on it. Editing a process or title list replaces that list, so preserve any defaults you still want.
 
 These defaults are **suggestions, not a mandatory policy** — every rule can be edited or removed

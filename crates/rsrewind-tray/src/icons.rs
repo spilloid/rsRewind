@@ -127,6 +127,7 @@ mod tests {
         let recording = Status {
             recorder: Recorder::Recording,
             privacy_unenforced: false,
+            not_saving: None,
         };
         let pixmaps = icons.for_status(&recording);
         assert_eq!(
@@ -153,6 +154,7 @@ mod tests {
         let paused = Status {
             recorder: Recorder::Paused { until: None },
             privacy_unenforced: false,
+            not_saving: None,
         };
         let (r, g) = dominant(&icons.for_status(&paused)[6].1);
         assert!(g > r, "paused art is green");

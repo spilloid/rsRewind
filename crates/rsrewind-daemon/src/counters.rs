@@ -1,5 +1,6 @@
 //! Operational counters, shared by all recorder threads and published in the heartbeat row.
-//! They count events, never content.
+//! They count events, never content. Two are gauges rather than counts: `health` (a
+//! [`crate::health::Health`] code) and `health_since_ms` (when it began, Unix ms).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +40,11 @@ counters!(
     ocr_failed,
     ocr_ms_total,
     retention_runs,
+    window_list_unknown_ticks,
+    idle_unknown_ticks,
+    untitled_app_window_ticks,
+    health,
+    health_since_ms,
 );
 
 pub fn bump(counter: &AtomicU64) {
@@ -62,6 +68,8 @@ mod tests {
         assert_eq!(snap.get("persisted_states"), Some(&1));
         assert_eq!(snap.get("ocr_ms_total"), Some(&40));
         assert_eq!(snap.get("ticks"), Some(&0));
-        assert_eq!(snap.len(), 17);
+        assert_eq!(snap.len(), 22);
+        assert_eq!(snap.get(crate::health::HEALTH_KEY), Some(&0));
+        assert_eq!(snap.get(crate::health::HEALTH_SINCE_KEY), Some(&0));
     }
 }

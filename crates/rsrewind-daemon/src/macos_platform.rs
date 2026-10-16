@@ -5,6 +5,7 @@ use crate::platform::{
 };
 use crate::recorder::{RunOptions, run_with};
 use anyhow::{Context, bail};
+use rsrewind_capture::macos_facts::RuleNeeds;
 use rsrewind_capture::{VisibleWindow, macos};
 use rsrewind_core::{BgraFrame, Capabilities, DataDir, FocusContext, MonitorInfo};
 use std::path::{Path, PathBuf};
@@ -32,10 +33,14 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         );
     }
     let language = options.config.ocr.language.clone();
+    let needs = RuleNeeds::of(&options.config.privacy);
     run_with(
         options,
         Platform {
-            context: Box::new(MacContext),
+            context: Box::new(MacContext {
+                needs,
+                untitled_app_windows: 0,
+            }),
             capture: Box::new(MacCapture),
             idle: Box::new(MacIdle),
             clock: Arc::new(SystemClock::new()),
@@ -48,7 +53,13 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         },
     )
 }
-struct MacContext;
+struct MacContext {
+    /// Which rule kinds are configured: some odd windows are tolerated only when no rule they
+    /// could defeat exists (`macos_facts::classify_windows`).
+    needs: RuleNeeds,
+    /// Untitled windows of other applications in the last list, while title rules exist.
+    untitled_app_windows: usize,
+}
 fn fault(message: String) -> PlatformFault {
     PlatformFault::new(message, true)
 }
@@ -70,7 +81,17 @@ impl ScreenContext for MacContext {
         None
     }
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault> {
-        macos::visible_windows().map_err(fault)
+        // The error's text is a fixed sentence or a count (never a title or name).
+        let list = macos::window_list(self.needs).map_err(|error| fault(error.to_string()))?;
+        self.untitled_app_windows = if self.needs.title_rules {
+            list.stats.untitled_regular
+        } else {
+            0
+        };
+        Ok(list.windows)
+    }
+    fn untitled_app_windows(&self) -> usize {
+        self.untitled_app_windows
     }
 }
 struct MacCapture;
@@ -90,7 +111,8 @@ impl FrameSource for MacFrames {
 struct MacIdle;
 impl IdleClock for MacIdle {
     fn idle_millis(&mut self) -> Option<u64> {
-        macos::idle_millis()
+        // Why it is unknown is for `doctor`; the recorder only needs "unknown".
+        macos::session_idle().ok()
     }
 }
 struct Vision(rsrewind_ocr::VisionEngine);

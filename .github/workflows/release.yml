@@ -97,6 +97,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\x86_64-pc-windows-msvc\release\rsrewind.exe dist\rsrewind.exe
 
+      # The exe must carry its C runtime: a dynamic vcruntime140.dll import means a missing-DLL error
+      # on a clean Windows install (0.1.0). Fail the release rather than ship that again.
+      - name: Check the exe is self-contained
+        shell: pwsh
+        run: |
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("dist\rsrewind.exe"))
+          if ($text -match '(?i)(vcruntime140|msvcp140)[_0-9]*\.dll') { throw "rsrewind.exe imports $($Matches[0]); build with +crt-static" }
+
       # Third-party notices (docs/licensing.md): generated from this build's dependency graph and
       # shipped in the ZIP and the MSI. Fails the release if any license is not accepted.
       - uses: taiki-e/install-action@v2

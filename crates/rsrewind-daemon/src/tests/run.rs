@@ -159,6 +159,72 @@ fn an_opted_in_unenforced_run_records_it_and_never_claims_window_titles() -> Tes
 
 // ----- end to end ----------------------------------------------------------------------------
 
+/// Issue #33: a window list that is unknown on every tick stores nothing, and the heartbeat that
+/// `rsrewind status` / `doctor` / the window read says so while it lasts; once the list is back,
+/// recording resumes and the heartbeat says saving.
+#[test]
+fn an_unknown_window_list_is_visible_in_the_heartbeat_and_recording_resumes() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("data"));
+    let clock = FakeClock::new();
+    let desktop = one_monitor_desktop();
+    {
+        let mut d = lock(&desktop);
+        d.windows = None;
+        d.show(display(0), frame(1)); // never stored: the list is unknown
+    }
+    // The heartbeat is written at t=0 and t=5 (every 5 s); read it between t=5 and t=6.
+    let seen: Arc<Mutex<Option<std::collections::BTreeMap<String, u64>>>> =
+        Arc::new(Mutex::new(None));
+    {
+        let (data, seen) = (data.clone(), seen.clone());
+        clock.at(secs(5.5), move || {
+            if let Ok(Some(status)) = Store::open_existing(&data).and_then(|s| s.read_status()) {
+                *lock(&seen) = Some(status.counters);
+            }
+        });
+    }
+    {
+        let d = desktop.clone();
+        clock.at(secs(6.5), move || {
+            let mut d = lock(&d);
+            d.windows = Some(vec![window_on("notepad.exe", "notes.txt", 10, 0)]);
+            d.show(display(0), frame(2)); // t=7: stored
+        });
+    }
+    run_with_queue(
+        RunOptions {
+            data: data.clone(),
+            config: config(false),
+        },
+        platform(&desktop, Capabilities::WINDOWS, &clock, secs(9.0), None),
+        64,
+    )?;
+
+    let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
+    assert_eq!(
+        crate::health::from_counters(&mid),
+        Some((
+            crate::health::Health::WindowListUnknown,
+            Some(FakeClock::wall_at(secs(0.0)))
+        ))
+    );
+    assert_eq!(mid.get("persisted_states"), Some(&0));
+    assert_eq!(mid.get("window_list_unknown_ticks"), Some(&6));
+
+    let store = Store::open_existing(&data)?;
+    let status = store.read_status()?.ok_or("no heartbeat")?;
+    assert_eq!(status.counters.get("persisted_states"), Some(&1));
+    assert_eq!(
+        crate::health::from_counters(&status.counters).map(|(h, _)| h),
+        Some(crate::health::Health::Saving)
+    );
+    let manifest = sealed(&data, FULL_TAGS)?;
+    let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
+    assert_eq!(captured, [ms(7.0)], "only the frame taken after recovery");
+    Ok(())
+}
+
 #[test]
 fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() -> TestResult {
     let tmp = tempfile::tempdir()?;

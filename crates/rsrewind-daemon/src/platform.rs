@@ -75,6 +75,13 @@ pub trait ScreenContext {
     /// [`Capabilities::list_windows`] is true. `Err` means the list is unknown, and the recorder
     /// then stores nothing on any monitor for that tick.
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault>;
+    /// How many windows of other applications in the last successful
+    /// [`ScreenContext::visible_windows`] report no title while title rules exist: windows those
+    /// rules cannot match (macOS). Counted in the heartbeat so `status`/`doctor` can say so; it
+    /// does not change what is recorded. 0 where titles are always known.
+    fn untitled_app_windows(&self) -> usize {
+        0
+    }
 }
 
 /// Time since the last user input.

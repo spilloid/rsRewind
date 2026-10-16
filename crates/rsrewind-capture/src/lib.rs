@@ -14,6 +14,9 @@
 
 pub mod change;
 mod context;
+/// The macOS bridge's raw window/session facts and the portable policy over them (tested on every
+/// platform; only the Mac backend feeds it real data).
+pub mod macos_facts;
 
 #[cfg(windows)]
 mod error;
@@ -33,7 +36,7 @@ mod wide;
 mod window;
 
 pub use change::{ChangeDetection, ChangeDetector, Fingerprint, FingerprintError};
-pub use context::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow};
+pub use context::{ScreenRect, UNKNOWN_PROCESS, VisibleWindow, json_error_summary};
 #[cfg(windows)]
 pub use error::{CaptureError, Result, is_access_denied, is_recoverable_hresult};
 #[cfg(windows)]

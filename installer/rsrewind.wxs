@@ -25,7 +25,7 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <?ifndef ProductVersion?>
-  <?define ProductVersion="0.1.0"?>
+  <?define ProductVersion="0.1.1"?>
   <?endif?>
 
   <?ifndef SourceDir?>

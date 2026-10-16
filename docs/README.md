@@ -13,4 +13,4 @@ Start with [installation](https://spilloid.github.io/rsRewind/install.html), the
 | Understand the internals | [Architecture](../ARCHITECTURE.md) · [Distributed design](design/distributed.md) |
 | Check what is finished | [Changelog](../CHANGELOG.md) · [Remediation status](remediation-status.md) · [Standards](standards.md) |
 
-The current release is v0.1.0 for Windows 11, macOS 14+ (Apple Silicon) and KDE Plasma 6 on Wayland. Every release ships all three platforms, the MCP server and the command line from the same source and version.
+The current release is v0.1.1 for Windows 11, macOS 14+ (Apple Silicon) and KDE Plasma 6 on Wayland. Every release ships all three platforms, the MCP server and the command line from the same source and version.

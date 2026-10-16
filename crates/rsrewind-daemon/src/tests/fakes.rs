@@ -110,6 +110,13 @@ pub struct Desktop {
     /// How often each display was asked for a frame.
     pub polls: HashMap<DisplayHandle, usize>,
     pub window_queries: usize,
+    /// Makes every frame poll fail (a broken grant, a lock screen on macOS).
+    pub capture_fails: bool,
+    /// The message a failed `visible_windows` carries (default: a fixed sentence). Tests put
+    /// title-like text here to prove fault text never reaches a log line.
+    pub window_fault: Option<String>,
+    /// What `untitled_app_windows` reports (macOS: app windows title rules cannot match).
+    pub untitled_app_windows: usize,
 }
 
 pub type SharedDesktop = Arc<Mutex<Desktop>>;
@@ -153,10 +160,18 @@ impl ScreenContext for FakeContext {
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault> {
         let mut desktop = lock(&self.desktop);
         desktop.window_queries += 1;
+        let message = desktop
+            .window_fault
+            .clone()
+            .unwrap_or_else(|| "scripted enumeration failure".into());
         desktop
             .windows
             .clone()
-            .ok_or_else(|| PlatformFault::new("scripted enumeration failure", false))
+            .ok_or_else(|| PlatformFault::new(message, false))
+    }
+
+    fn untitled_app_windows(&self) -> usize {
+        lock(&self.desktop).untitled_app_windows
     }
 }
 
@@ -184,6 +199,9 @@ impl FrameSource for FakeFrames {
     fn latest_frame(&mut self) -> Result<Option<BgraFrame>, PlatformFault> {
         let mut desktop = lock(&self.desktop);
         *desktop.polls.entry(self.display).or_default() += 1;
+        if desktop.capture_fails {
+            return Err(PlatformFault::new("scripted capture failure", true));
+        }
         Ok(desktop
             .pending
             .get_mut(&self.display)

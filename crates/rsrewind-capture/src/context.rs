@@ -95,9 +95,49 @@ impl std::fmt::Debug for VisibleWindow {
     }
 }
 
+/// A JSON parse error described without its input. serde_json's own message quotes a value it
+/// rejected (`invalid type: string "Bank - Account 12345", expected u32`), and the JSON parsed
+/// here (a compositor's window snapshot) is window titles, so its `Display` must never be logged
+/// or shown. This keeps only the error class and position.
+pub fn json_error_summary(error: &serde_json::Error) -> String {
+    let kind = match error.classify() {
+        serde_json::error::Category::Io => "i/o error",
+        serde_json::error::Category::Syntax => "syntax error",
+        serde_json::error::Category::Data => "unexpected data",
+        serde_json::error::Category::Eof => "unexpected end",
+    };
+    format!("{kind} at line {} column {}", error.line(), error.column())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_error_summaries_never_quote_the_input() {
+        #[derive(serde::Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Window {
+            pid: u32,
+        }
+        let input = r#"{"pid": "Bank - Account 12345"}"#;
+        let Err(error) = serde_json::from_str::<Window>(input) else {
+            panic!("must not parse");
+        };
+        // The hazard is real: serde_json's own text echoes the value.
+        assert!(error.to_string().contains("12345"), "{error}");
+        let summary = json_error_summary(&error);
+        assert!(!summary.contains("12345"), "{summary}");
+        assert!(!summary.contains("Bank"), "{summary}");
+        assert!(
+            summary.starts_with("unexpected data at line 1"),
+            "{summary}"
+        );
+        let Err(eof) = serde_json::from_str::<Window>(r#"{"pid": 1"#) else {
+            panic!("must not parse");
+        };
+        assert!(json_error_summary(&eof).starts_with("unexpected end"));
+    }
 
     fn monitor(left: i32, top: i32, width: u32, height: u32) -> MonitorInfo {
         MonitorInfo {

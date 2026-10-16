@@ -21,6 +21,7 @@
 //! with deterministic fakes. Any other platform has no backends yet.
 
 pub mod counters;
+pub mod health;
 #[cfg(target_os = "linux")]
 pub mod linux_platform;
 mod ocr_worker;
