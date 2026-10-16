@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: captured frames were upside down.** The capture code flipped the drawing context before
+  drawing, but a bitmap context already stores its top row first, so every frame came out inverted.
+  Frames are now top-down, as the rest of the pipeline expects. Found on the first run of 0.1.1 on a Mac.
+
 ## [0.1.1] - 2026-10-16
 
 **Two fixes from the first installs: the Mac that never saved, and the Windows exe that would not start.**

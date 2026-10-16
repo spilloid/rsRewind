@@ -210,7 +210,6 @@ private let FRAME_DRAW: Int32 = 9
     let bytes = image.width * image.height * 4
     guard bytes > 0, bytes <= 512 * 1024 * 1024, let p = malloc(bytes) else { reason.pointee = FRAME_BAD_SIZE; return nil }
     guard let ctx = CGContext(data: p, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { free(p); reason.pointee = FRAME_DRAW; return nil }
-    ctx.translateBy(x: 0, y: CGFloat(image.height)); ctx.scaleBy(x: 1, y: -1)
     ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
     width.pointee = UInt32(image.width); height.pointee = UInt32(image.height); length.pointee = bytes
     return p
