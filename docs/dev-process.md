@@ -160,3 +160,28 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   and clippy clean; the OCR and UI crates are not built there (Windows-only dependencies / not
   needed).
 
+### 2026-10-15 — macOS records nothing while showing "Recording" (issue #33)
+
+- **Routing:** Opus implementer (privacy decision path, FFI), branch `fix/macos-silent-no-record`.
+  No Mac available: Windows dev box only. Next: adversarial review of the diff, then macOS CI and a
+  real-Mac trial by the owner.
+- **Diagnosis (by reading):** `rs_capture_windows` returned nil for the whole list if any on-screen
+  window lacked `kCGWindowName`, a resolvable `NSRunningApplication`/executable or an integer layer;
+  the recorder then excluded every monitor (`unknown:window-list`) every tick, visible only at debug
+  level. `rs_capture_idle` went unknown for any unresolvable window owner (or a loginwindow window),
+  and `rs_capture_frame` required it before and after each capture. SCK errors were dropped.
+- **What changed:** the Swift bridge emits raw facts (JSON) and failure codes; the policy moved to
+  portable Rust (`rsrewind-capture/src/macos_facts.rs`): odd windows kept, owner-name fallback and
+  dual-name rule matching, fail closed on withheld titles (title rules + no titled regular-app
+  window) and on ownerless windows (application rules); session gating moved to Rust. A debounced
+  saving-health signal (`rsrewind-daemon/src/health.rs`) is published through the heartbeat's
+  counter map (no migration) and shown by `status`, `status --json` (`not_saving`), `doctor`, the
+  window chip and the tray. macOS doctor names each failing condition and takes one real test frame.
+- **Privacy decision flagged for the owner:** title rules cannot match an untitled Mac window; the
+  chosen safeguard and the rejected stricter alternative are in `docs/macos.md`.
+- **Verification:** Windows only, with a GNU toolchain (rustc 1.99.1 `x86_64-pc-windows-gnu`,
+  WinLibs gcc 16.2) installed for the session because the box had none: `cargo fmt --check`,
+  `clippy --workspace --all-targets --all-features -D warnings` and `test --workspace` green. New
+  tests: 16 classifier, 5 health, 4 tick-level, 1 end-to-end heartbeat, 1 CLI, 1 UI, 1 tray. Not
+  compiled: `macos.swift`, `macos.rs`, `macos_platform.rs`, doctor's macOS block, tray `macos.rs`.
+  No mutation testing this round.

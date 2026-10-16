@@ -201,6 +201,11 @@ date is not allowed; re-verify it or delete it.
   `docs/macos.md` (deny/grant permission, exclusions per display, lock/sleep/display changes, login
   startup, light/dark and Retina scaling) has no dated run recorded in this repository. The bundle is
   ad-hoc signed and not notarized; the backend attributes no foreground application to Mac moments.
+- **2026-10-15:** The issue #33 fix (macOS recorded nothing while showing "Recording"; branch
+  `fix/macos-silent-no-record`) is **unverified on a real Mac**. It was written and tested on Windows
+  only; `macos.swift` and all `cfg(target_os = "macos")` code it touches were not even compiled in
+  that session. The relaxed window-list rules (untitled windows kept, owner-name fallback) and their
+  safeguard are an open owner decision (`docs/macos.md`, "Window list rules and what they relax").
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only. A read-only adversarial review by a different model ran on

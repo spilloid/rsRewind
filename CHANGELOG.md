@@ -6,6 +6,31 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: "Recording" but nothing ever saved (issue #33).** The window list was discarded whenever
+  any on-screen window had no title, an unresolvable owner or an unusual layer, which every real Mac
+  has, so every monitor was skipped on every tick; an unresolvable window owner also made idle time
+  unknown. Odd windows are now kept (untitled: empty title; unresolvable owner: the owner name macOS
+  reports; application rules are checked against both names). The list still counts as unknown,
+  and nothing is stored, when title rules exist and no application window reports a title, or a
+  window has no owner name while application rules exist. Locked, switched-away and login-window
+  sessions still record nothing. **Privacy note:** a title rule cannot match a Mac window whose
+  title macOS does not report; see PRIVACY.md. **Unverified on a real Mac**: written and tested on
+  Windows; the Swift and macOS-only code was not compiled before this entry was written.
+
+### Added
+
+- **Saving health.** When the recorder runs but stores nothing, `rsrewind status` says so and why
+  ("Nothing is being saved since 14:02:11: window context unavailable"), `status --json` adds an
+  optional `not_saving` object (absent while saving), `doctor` adds a "saving" line with per-reason
+  tick counts, and the window's chip and the tray headline say "Recording · nothing saved: …". The
+  log gets one warning when it starts and one line when saving resumes. New heartbeat counters:
+  `window_list_unknown_ticks`, `idle_unknown_ticks`, `health`, `health_since_ms`. No schema change.
+- **macOS doctor** names the exact failing condition for the window list and the session, takes one
+  real test frame (discarded) so a granted-but-failing capture shows, and warns when title rules
+  exist and application windows report no title.
+
 ### Changed
 
 - **macOS is presented as a fully supported platform** alongside Windows 11 and KDE Plasma 6, on the
