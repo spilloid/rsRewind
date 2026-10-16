@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `rsrewind.exe` no longer needs the Visual C++ Redistributable.** 0.1.0 imported `vcruntime140.dll`,
+  so on a clean Windows install the MSI installed but the exe died with a missing-DLL dialog. The C runtime
+  is now linked in (`.cargo/config.toml`, `+crt-static`), and the release workflow fails if the staged exe
+  still imports `vcruntime140`/`msvcp140`. Not yet verified on a clean machine: that needs the first build
+  from this change.
+
 ### Changed
 
 - **macOS is presented as a fully supported platform** alongside Windows 11 and KDE Plasma 6, on the
