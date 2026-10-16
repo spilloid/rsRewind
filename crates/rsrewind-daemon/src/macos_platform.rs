@@ -5,6 +5,7 @@ use crate::platform::{
 };
 use crate::recorder::{RunOptions, run_with};
 use anyhow::{Context, bail};
+use rsrewind_capture::macos_facts::RuleNeeds;
 use rsrewind_capture::{VisibleWindow, macos};
 use rsrewind_core::{BgraFrame, Capabilities, DataDir, FocusContext, MonitorInfo};
 use std::path::{Path, PathBuf};
@@ -32,12 +33,13 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         );
     }
     let language = options.config.ocr.language.clone();
+    let needs = RuleNeeds::of(&options.config.privacy);
     run_with(
         options,
         Platform {
-            context: Box::new(MacContext),
+            context: Box::new(MacContext { needs }),
             capture: Box::new(MacCapture),
-            idle: Box::new(MacIdle),
+            idle: Box::new(MacIdle { last: None }),
             clock: Arc::new(SystemClock::new()),
             lifecycle: Box::new(guard),
             ocr: Some(Box::new(move || {
@@ -48,7 +50,11 @@ pub fn run(options: RunOptions) -> anyhow::Result<()> {
         },
     )
 }
-struct MacContext;
+struct MacContext {
+    /// Which rule kinds are configured: some odd windows are tolerated only when no rule they
+    /// could defeat exists (`macos_facts::classify_windows`).
+    needs: RuleNeeds,
+}
 fn fault(message: String) -> PlatformFault {
     PlatformFault::new(message, true)
 }
@@ -70,7 +76,8 @@ impl ScreenContext for MacContext {
         None
     }
     fn visible_windows(&mut self) -> Result<Vec<VisibleWindow>, PlatformFault> {
-        macos::visible_windows().map_err(fault)
+        // The error's text is a fixed sentence or a count (never a title or name): safe to log.
+        macos::visible_windows(self.needs).map_err(|error| fault(error.to_string()))
     }
 }
 struct MacCapture;
@@ -87,10 +94,25 @@ impl FrameSource for MacFrames {
         macos::capture(self.0).map(Some).map_err(fault)
     }
 }
-struct MacIdle;
+struct MacIdle {
+    /// Why the last reading was unknown (content-free), for the health warning.
+    last: Option<String>,
+}
 impl IdleClock for MacIdle {
     fn idle_millis(&mut self) -> Option<u64> {
-        macos::idle_millis()
+        match macos::session_idle() {
+            Ok(ms) => {
+                self.last = None;
+                Some(ms)
+            }
+            Err(why) => {
+                self.last = Some(why.to_string());
+                None
+            }
+        }
+    }
+    fn unknown_reason(&self) -> Option<String> {
+        self.last.clone()
     }
 }
 struct Vision(rsrewind_ocr::VisionEngine);

@@ -244,36 +244,7 @@ fn collect(data: &DataDir) -> Vec<Check> {
     }
 
     #[cfg(target_os = "macos")]
-    {
-        if !rsrewind_capture::macos::screen_recording_permission(false) {
-            checks.push(check("capture", Level::Fail, "Grant rsRewind Screen & System Audio Recording in System Settings → Privacy & Security, then restart the app"));
-        } else {
-            match rsrewind_capture::macos::monitors() {
-                Ok(displays) if !displays.is_empty() => checks.push(check("capture", Level::Ok, format!("{} display(s); screen-recording permission granted; interactive capture still needs verification", displays.len()))),
-                Ok(_) => checks.push(check("capture", Level::Fail, "macOS reports no displays")),
-                Err(_) => checks.push(check("capture", Level::Fail, "Could not enumerate macOS displays")),
-            }
-            match rsrewind_capture::macos::visible_windows() {
-                Ok(_) => checks.push(check(
-                    "window context",
-                    Level::Ok,
-                    "Native visible-window context is available",
-                )),
-                Err(_) => checks.push(check(
-                    "window context",
-                    Level::Fail,
-                    "Window context is unavailable; recording will skip ticks until it is known",
-                )),
-            }
-        }
-        if rsrewind_capture::macos::idle_millis().is_none() {
-            checks.push(check(
-                "idle/session",
-                Level::Warn,
-                "Idle or active-session state is unknown; nothing will be recorded",
-            ));
-        }
-    }
+    checks.extend(macos_checks(config.as_ref()));
 
     // OCR
     #[cfg(windows)]
@@ -380,6 +351,9 @@ fn collect(data: &DataDir) -> Vec<Check> {
                         format!("not running; last seen {}", status.heartbeat_at)
                     },
                 ));
+                if running {
+                    checks.extend(saving_check(&status.counters));
+                }
             }
             Ok(None) => checks.push(check("recorder", Level::Warn, "has never run")),
             Err(error) => checks.push(check("recorder", Level::Warn, error.to_string())),
@@ -398,6 +372,191 @@ fn collect(data: &DataDir) -> Vec<Check> {
     }
 
     checks
+}
+
+/// Screen Recording, one real test frame, the window list and the session, each with the exact
+/// condition that failed. Nothing captured is stored or printed: only counts and fixed sentences.
+#[cfg(target_os = "macos")]
+fn macos_checks(config: Option<&Config>) -> Vec<Check> {
+    use rsrewind_capture::macos;
+    use rsrewind_capture::macos_facts::{RuleNeeds, SessionUnknown, classify_session};
+    const TERMINAL_HINT: &str = "If you ran doctor from Terminal, macOS judged Terminal's permission, \
+        not rsRewind.app's; the recorder started by the app or at login is judged separately.";
+    let mut checks = Vec::new();
+    // Without a readable config, judge as if both kinds of rule exist (the stricter answer).
+    let needs = config.map_or(
+        RuleNeeds {
+            process_rules: true,
+            title_rules: true,
+        },
+        |c| RuleNeeds::of(&c.privacy),
+    );
+
+    if !macos::screen_recording_permission(false) {
+        checks.push(check(
+            "capture",
+            Level::Fail,
+            format!(
+                "Screen Recording is not granted to this process: grant rsRewind Screen & System \
+                 Audio Recording in System Settings → Privacy & Security, then restart the app. \
+                 {TERMINAL_HINT}"
+            ),
+        ));
+    } else {
+        match macos::monitors() {
+            Ok(displays) => match displays.first() {
+                // Permission can read "granted" while capture still fails (the grant belongs to
+                // another code identity), so take one real frame. It is dropped at once.
+                Some(first) => match macos::capture(first.id) {
+                    Ok(frame) => checks.push(check(
+                        "capture",
+                        Level::Ok,
+                        format!(
+                            "{} display(s); Screen Recording granted; a test frame of {} ({}x{}) \
+                             was captured and discarded (nothing stored)",
+                            displays.len(),
+                            first.info.device_name,
+                            frame.width,
+                            frame.height
+                        ),
+                    )),
+                    Err(error) => checks.push(check(
+                        "capture",
+                        Level::Fail,
+                        format!(
+                            "{} display(s) and Screen Recording reported granted, but a test \
+                             capture of {} failed: {error}. If permission looks granted, macOS may \
+                             tie it to a different build of the ad-hoc-signed app: remove rsRewind \
+                             from the Screen Recording list, add it again and restart it. \
+                             {TERMINAL_HINT}",
+                            displays.len(),
+                            first.info.device_name
+                        ),
+                    )),
+                },
+                None => checks.push(check("capture", Level::Fail, "macOS reports no displays")),
+            },
+            Err(error) => checks.push(check("capture", Level::Fail, error)),
+        }
+        match macos::window_list(needs) {
+            Ok(list) => {
+                let s = list.stats;
+                let mut detail = format!(
+                    "{} on-screen window(s) of {} listed: {} untitled, {} named by their owner \
+                     (process not resolvable), {} with no owner, {} without a layer, {} skipped \
+                     without bounds",
+                    s.on_screen,
+                    s.listed,
+                    s.untitled,
+                    s.owner_fallback,
+                    s.owner_unknown,
+                    s.layer_unknown,
+                    s.no_bounds
+                );
+                let level = if needs.title_rules && s.untitled_regular > 0 {
+                    detail.push_str(&format!(
+                        "; {} application window(s) report no title, so window-title exclusion \
+                         rules cannot match them (application rules still do)",
+                        s.untitled_regular
+                    ));
+                    Level::Warn
+                } else {
+                    Level::Ok
+                };
+                checks.push(check("window context", level, detail));
+            }
+            Err(error) => checks.push(check(
+                "window context",
+                Level::Fail,
+                format!("{error}; nothing is recorded while this lasts"),
+            )),
+        }
+    }
+
+    match macos::session_facts().map(|facts| {
+        let idle = classify_session(&facts);
+        (facts, idle)
+    }) {
+        Ok((facts, Ok(ms))) => checks.push(check(
+            "idle/session",
+            Level::Ok,
+            format!(
+                "session active on the console; last input {}s ago; {} window owner(s) not \
+                 resolvable (tolerated)",
+                ms / 1000,
+                facts.unresolved_owners
+            ),
+        )),
+        Ok((facts, Err(why))) => {
+            let shapes = if matches!(why, SessionUnknown::LoginWindowVisible { .. }) {
+                let list: Vec<String> = facts
+                    .loginwindow
+                    .iter()
+                    .map(|w| {
+                        format!(
+                            "layer {} alpha {} {}x{}",
+                            w.layer.map_or("?".into(), |l| l.to_string()),
+                            w.alpha.map_or("?".into(), |a| format!("{a:.2}")),
+                            w.width.map_or(0.0, |v| v.round()),
+                            w.height.map_or(0.0, |v| v.round()),
+                        )
+                    })
+                    .collect();
+                format!(" [loginwindow windows: {}]", list.join("; "))
+            } else {
+                String::new()
+            };
+            checks.push(check(
+                "idle/session",
+                Level::Warn,
+                format!("{why}{shapes}; nothing is recorded while this lasts"),
+            ));
+        }
+        Err(why) => checks.push(check(
+            "idle/session",
+            Level::Fail,
+            format!("{why}; nothing is recorded while this lasts"),
+        )),
+    }
+    checks
+}
+
+/// Whether the running recorder is saving anything (issue #33), from its heartbeat. `None` from a
+/// recorder that predates the signal.
+fn saving_check(counters: &std::collections::BTreeMap<String, u64>) -> Option<Check> {
+    use rsrewind_daemon::health::{self, Health};
+    let (state, since) = health::from_counters(counters)?;
+    let count = |key: &str| counters.get(key).copied().unwrap_or(0);
+    let tally = format!(
+        "{} tick(s) with the window list unknown, {} with idle/session unknown, {} capture error(s) so far",
+        count("window_list_unknown_ticks"),
+        count("idle_unknown_ticks"),
+        count("capture_errors")
+    );
+    let since = since
+        .map(|t| format!(" since {}", t.to_local().format("%Y-%m-%d %H:%M:%S")))
+        .unwrap_or_default();
+    Some(match state {
+        Health::Saving => check(
+            "saving",
+            Level::Ok,
+            format!("the recorder is saving; {tally}"),
+        ),
+        s if s.is_fault() => check(
+            "saving",
+            Level::Warn,
+            format!(
+                "recording, but NOTHING has been saved{since}: {} ({}); {tally}. The checks above say why on this machine.",
+                s.phrase(),
+                s.name()
+            ),
+        ),
+        s => check(
+            "saving",
+            Level::Ok,
+            format!("not saving right now{since}: {}; {tally}", s.phrase()),
+        ),
+    })
 }
 
 #[cfg(windows)]

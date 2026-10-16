@@ -14,6 +14,9 @@
 
 pub mod change;
 mod context;
+/// The macOS bridge's raw window/session facts and the portable policy over them (tested on every
+/// platform; only the Mac backend feeds it real data).
+pub mod macos_facts;
 
 #[cfg(windows)]
 mod error;
