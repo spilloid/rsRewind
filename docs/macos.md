@@ -188,7 +188,7 @@ rules could not be checked on N tick(s)…", `status --json` carries `untitled_a
 
 The recorder classifies every recording tick and publishes the result in its heartbeat. `rsrewind
 status` prints `⚠ Nothing is being saved since HH:MM:SS: window context unavailable` (or session
-state unknown, capture failing, no displays), `status --json` carries `not_saving` with a `reason`,
+state unknown, capture failing, no displays, saving to disk is failing), `status --json` carries `not_saving` with a `reason`,
 the window's chip reads "Recording · nothing saved: …", the menu bar headline says the same with a
 warning badge, and `doctor` has a "saving" line with how many ticks were skipped for each reason.
 The log gets one warning when the condition starts and one line when saving resumes. Idle and an

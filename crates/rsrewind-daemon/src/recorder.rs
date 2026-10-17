@@ -341,6 +341,16 @@ impl Recorder {
         if idle_ms.is_none() {
             counters::bump(&self.counters.idle_unknown_ticks);
         }
+        // The persist thread failed to write and has written nothing since (a full disk, an
+        // unwritable folder). What it was handed is lost, so offer the current screens again every
+        // tick until a write succeeds; otherwise a static screen would stay unsaved after the disk
+        // has room again.
+        let persist_streak = self.counters.persist_failing.load(Ordering::Relaxed);
+        if persist_streak > 0 {
+            for slot in self.monitors.values_mut() {
+                slot.persisted = None;
+            }
+        }
 
         // A provider that cannot list windows is never asked: its empty answer would read as
         // "nothing excluded is visible". The recorder only gets here with such a provider after
@@ -367,6 +377,7 @@ impl Recorder {
             window_list_unknown: windows.is_err(),
             idle_unknown: idle_ms.is_none(),
             idle,
+            persist_failing: persist_streak >= health::PERSIST_FAILING_AFTER,
             ..TickFacts::default()
         };
         for device in devices {

@@ -2,12 +2,14 @@
 
 use crate::counters::{self, Counters};
 use rsrewind_core::{
-    ApplicationContext, ApplicationId, BgraFrame, DataDir, EventKind, MonitorId, MonitorInfo,
-    SessionId, Timestamp, VisualStateId, WindowContext, WindowId, paths::media_relative_path,
+    ApplicationContext, ApplicationId, BgraFrame, DataDir, EventId, EventKind, MonitorId,
+    MonitorInfo, SessionId, Timestamp, VisualStateId, WindowContext, WindowId,
+    paths::media_relative_path,
 };
 use rsrewind_storage::{NewVisualState, Observation, StorageError, Store, media};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
@@ -67,14 +69,46 @@ pub fn run(
         windows: HashMap::new(),
     };
     let mut next_retention = Instant::now() + Duration::from_secs(60);
+    // Failed jobs since anything was last written, published as the `persist_failing` gauge; the
+    // capture loop turns it into "nothing saved: saving to disk is failing" (a full disk, an
+    // unwritable folder). Jobs that had nothing to write (an Extend with no current picture) leave
+    // it as it is: they are no evidence that writing works.
+    let mut streak: u64 = 0;
 
     // `recv` returns Err only when the capture loop dropped the sender: that is shutdown.
     while let Ok(job) = jobs.recv() {
         let woke_ocr = matches!(job, Job::NewState { .. });
-        if let Err(error) = state.handle(job) {
-            counters::bump(&state.counters.persist_errors);
-            tracing::warn!(%error, "persist failed");
-        } else if woke_ocr && let Some(wake) = &ocr_wake {
+        let wrote = match state.handle(job) {
+            Ok(wrote) => wrote,
+            // Expected after `forget`: a frame queued before its fence committed. Not a fault.
+            Err(StorageError::Fenced { .. }) => {
+                tracing::debug!("a queued moment fell inside forgotten time; dropped");
+                false
+            }
+            Err(error) => {
+                counters::bump(&state.counters.persist_errors);
+                // Once per streak at warn: a full disk fails every job, every second.
+                if streak == 0 {
+                    tracing::warn!(%error, "persist failed");
+                } else {
+                    tracing::debug!(%error, streak, "persist failed (still)");
+                }
+                streak += 1;
+                false
+            }
+        };
+        if wrote && streak > 0 {
+            tracing::info!(failed_jobs = streak, "persisting works again");
+            streak = 0;
+        }
+        state
+            .counters
+            .persist_failing
+            .store(streak, Ordering::Relaxed);
+        if wrote
+            && woke_ocr
+            && let Some(wake) = &ocr_wake
+        {
             // Lossy on purpose: the OCR worker reads its backlog from SQLite.
             if let Err(TrySendError::Disconnected(())) = wake.try_send(()) {
                 tracing::debug!("OCR worker is gone");
@@ -100,7 +134,9 @@ struct PersistState {
 }
 
 impl PersistState {
-    fn handle(&mut self, job: Job) -> Result<(), StorageError> {
+    /// Applies one job. `Ok(true)` if something was written, `Ok(false)` if there was nothing to
+    /// write (an Extend of a picture that is no longer current).
+    fn handle(&mut self, job: Job) -> Result<bool, StorageError> {
         match job {
             Job::NewState {
                 monitor,
@@ -115,8 +151,8 @@ impl PersistState {
                 let monitor_id = self.monitor_id(&monitor, at)?;
                 let relative = media_relative_path(at, monitor_id);
                 let bytes = media::encode_webp(&frame, self.config.image_quality)?;
-                media::write_webp_exclusive(&self.data, &relative, &bytes)?;
-                let visual_state = self.store.insert_visual_state(&NewVisualState {
+                let written = media::write_webp_exclusive(&self.data, &relative, &bytes)?;
+                let visual_state = match self.store.insert_visual_state(&NewVisualState {
                     monitor: monitor_id,
                     captured_at: at,
                     media_path: relative,
@@ -125,20 +161,20 @@ impl PersistState {
                     byte_size: bytes.len() as u64,
                     fingerprint: Some(fingerprint),
                     ocr_enabled: self.config.ocr_enabled,
-                })?;
-                let (application, window) = self.subject_ids(subject.as_ref(), at)?;
-                self.store.record_observation(&Observation {
-                    session: self.config.session,
-                    monitor: monitor_id,
-                    visual_state,
-                    application,
-                    window,
-                    at,
-                    max_gap_ms: self.config.max_gap_ms,
-                })?;
+                }) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        // No row will ever point at the file (e.g. `Fenced`: the moment was
+                        // forgotten while this frame was queued). Do not leave it behind.
+                        let _ = std::fs::remove_file(&written);
+                        return Err(error);
+                    }
+                };
+                self.observe(monitor_id, visual_state, subject.as_ref(), at)?;
                 self.current.insert(monitor.device_name, visual_state);
                 counters::bump(&self.counters.persisted_states);
                 counters::add(&self.counters.storage_bytes_written, bytes.len() as u64);
+                Ok(true)
             }
             Job::Extend {
                 device_name,
@@ -149,25 +185,20 @@ impl PersistState {
                     self.current.get(&device_name),
                     self.monitors.get(&device_name),
                 ) else {
-                    return Ok(());
+                    return Ok(false);
                 };
-                let (application, window) = self.subject_ids(subject.as_ref(), at)?;
-                match self.store.record_observation(&Observation {
-                    session: self.config.session,
-                    monitor,
-                    visual_state,
-                    application,
-                    window,
-                    at,
-                    max_gap_ms: self.config.max_gap_ms,
-                }) {
-                    Ok(_) => counters::bump(&self.counters.extended_observations),
+                match self.observe(monitor, visual_state, subject.as_ref(), at) {
+                    Ok(_) => {
+                        counters::bump(&self.counters.extended_observations);
+                        Ok(true)
+                    }
                     // Deleted under us (delete-recent / retention): stop extending it. The
                     // capture loop will persist a fresh state on the next change.
                     Err(StorageError::VisualStateMissing(_)) => {
                         self.current.remove(&device_name);
+                        Ok(false)
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => Err(error),
                 }
             }
             Job::Marker { kind, at, metadata } => {
@@ -180,9 +211,47 @@ impl PersistState {
                     // A gap in recording ends every open span.
                     self.current.clear();
                 }
+                Ok(true)
             }
         }
-        Ok(())
+    }
+
+    /// Records that `monitor` showed `visual_state` at `at`. `forget` and retention delete the
+    /// application and window rows nothing references any more, which after "forget the last 10
+    /// minutes" are usually the ones cached here for the app still in front; storage then answers
+    /// `ContextMissing`, and the caches are dropped and the rows looked up (re-created) once more.
+    /// Without this, every later moment of that app failed until the recorder restarted
+    /// (road-to-1.0 audit, 2026-10-16).
+    fn observe(
+        &mut self,
+        monitor: MonitorId,
+        visual_state: VisualStateId,
+        subject: Option<&Subject>,
+        at: Timestamp,
+    ) -> Result<EventId, StorageError> {
+        let mut retried = false;
+        loop {
+            let (application, window) = self.subject_ids(subject, at)?;
+            match self.store.record_observation(&Observation {
+                session: self.config.session,
+                monitor,
+                visual_state,
+                application,
+                window,
+                at,
+                max_gap_ms: self.config.max_gap_ms,
+            }) {
+                Err(StorageError::ContextMissing) if !retried => {
+                    tracing::debug!(
+                        "a cached application or window was deleted; looking it up again"
+                    );
+                    self.applications.clear();
+                    self.windows.clear();
+                    retried = true;
+                }
+                other => return other,
+            }
+        }
     }
 
     fn monitor_id(

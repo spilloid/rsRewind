@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **Moments of the app in front stopped being saved after a forget.** `forget` (and retention) delete
+  the application and window rows nothing references any more, which after "forget the last 10
+  minutes" usually includes the app still in front. The recorder kept using its cached ids, every
+  later moment of that app failed to save (`persist_errors` grew, nothing showed on the timeline)
+  until the recorder was restarted, and each failure left an invisible screenshot behind. It now
+  looks the rows up again. A frame queued just before a `forget` and refused by its fence is no
+  longer counted as an error, and its file is removed at once.
+- **A full disk no longer looks like "Recording".** When writing fails (disk full, data folder not
+  writable), `rsrewind status`, `status --json` (`not_saving.reason = "storage_failing"`), `doctor`,
+  the window's chip and the tray now say "nothing saved: saving to disk is failing", the screens on
+  display are offered again every second, and saving resumes by itself, without waiting for the
+  screen to change, once there is room. The log gets one warning per failure streak instead of one
+  per second. New heartbeat gauge: `persist_failing`. No schema change.
+
 ## [0.1.2] - 2026-10-16
 
 ### Fixed

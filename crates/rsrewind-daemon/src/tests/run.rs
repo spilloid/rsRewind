@@ -387,3 +387,175 @@ fn walk(dir: &std::path::Path) -> Result<usize, Box<dyn std::error::Error>> {
     }
     Ok(files)
 }
+
+/// Waits (real time, bounded) until the persist thread has stored `count` visual states. Hooks run
+/// on the recorder thread while the persist thread works on its own, so a hook that changes the
+/// store "after" a frame must first see that frame land.
+fn wait_for_states(data: &DataDir, count: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if let Ok(stats) = Store::open_existing(data).and_then(|s| s.stats())
+            && stats.visual_states >= count
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
+/// `forget` (or retention) deletes the application and window rows nothing references any more,
+/// which after "forget the last 10 minutes" is usually the app still in front. The persist thread
+/// must look them up again instead of failing every later moment of that app with
+/// `ContextMissing` until the recorder restarts (found 2026-10-16, road-to-1.0 audit).
+#[test]
+fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("data"));
+    let clock = FakeClock::new();
+    let desktop = one_monitor_desktop();
+    lock(&desktop).show(display(0), frame(1)); // t=0: stored, notepad / notes.txt
+    let forgot = Arc::new(Mutex::new(None));
+    {
+        let (d, data, forgot) = (desktop.clone(), data.clone(), forgot.clone());
+        clock.at(secs(1.5), move || {
+            // `rsrewind forget` from another process: everything so far, notepad's rows with it.
+            if wait_for_states(&data, 1)
+                && let Ok(store) = Store::open_existing(&data)
+            {
+                *lock(&forgot) = store
+                    .delete_range(Timestamp(ms(0.0) - 1), Timestamp(ms(1.5)))
+                    .ok()
+                    .map(|r| r.visual_states_deleted);
+            }
+            lock(&d).show(display(0), frame(2)); // t=2: same app and window, new picture
+        });
+    }
+    {
+        let d = desktop.clone();
+        clock.at(secs(3.5), move || lock(&d).show(display(0), frame(3))); // t=4
+    }
+    run_with_queue(
+        RunOptions {
+            data: data.clone(),
+            config: config(false),
+        },
+        platform(&desktop, Capabilities::WINDOWS, &clock, secs(6.0), None),
+        64,
+    )?;
+
+    assert_eq!(
+        *lock(&forgot),
+        Some(1),
+        "the forget did not run as scripted"
+    );
+    let store = Store::open_existing(&data)?;
+    let status = store.read_status()?.ok_or("no heartbeat")?;
+    assert_eq!(status.counters.get("persist_errors"), Some(&0));
+    let manifest = sealed(&data, FULL_TAGS)?;
+    let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
+    assert_eq!(captured, [ms(2.0), ms(4.0)]);
+    // Each stored picture is on the timeline (an observation shows it), credited to notepad.
+    for (index, state) in manifest.states.iter().enumerate() {
+        let shown = manifest.events.iter().any(|e| {
+            e.kind == "observation"
+                && e.state == u32::try_from(index).ok()
+                && e.application.is_some()
+        });
+        assert!(
+            shown,
+            "state at {} has no credited observation",
+            state.captured_at
+        );
+    }
+    Ok(())
+}
+
+/// A full disk (here: `media/` replaced by a file, so no picture can be written) must not read as
+/// "Recording" while nothing is saved: the heartbeat says `storage_failing`, and once writing works
+/// again the screen on display is saved without waiting for it to change (road-to-1.0 audit,
+/// 2026-10-16; before, the capture loop counted a queued frame as saved and never offered a
+/// static screen again).
+#[test]
+fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("data"));
+    let clock = FakeClock::new();
+    let desktop = one_monitor_desktop();
+    lock(&desktop).show(display(0), frame(1)); // t=0: stored
+    let media = data.media_root();
+    let parked = tmp.path().join("media-parked");
+    {
+        let (d, data, media, parked) =
+            (desktop.clone(), data.clone(), media.clone(), parked.clone());
+        clock.at(secs(1.5), move || {
+            if wait_for_states(&data, 1) {
+                // "Disk full": nothing can be created under media/ any more.
+                let _ = std::fs::rename(&media, &parked);
+                let _ = std::fs::write(&media, b"not a folder");
+            }
+            lock(&d).show(display(0), frame(2)); // t=2..11: never stored
+        });
+    }
+    // The persist thread runs in real time beside the fake clock: give it a moment after each
+    // failing tick so the recorder sees the failure on the next one.
+    for t in 2..=12 {
+        clock.at(secs(f64::from(t) + 0.5), || {
+            std::thread::sleep(Duration::from_millis(50));
+        });
+    }
+    let seen: Arc<Mutex<Option<std::collections::BTreeMap<String, u64>>>> =
+        Arc::new(Mutex::new(None));
+    {
+        let (data, seen) = (data.clone(), seen.clone());
+        clock.at(secs(10.6), move || {
+            if let Ok(Some(status)) = Store::open_existing(&data).and_then(|s| s.read_status()) {
+                *lock(&seen) = Some(status.counters);
+            }
+        });
+    }
+    {
+        let (media, parked) = (media.clone(), parked.clone());
+        clock.at(secs(11.7), move || {
+            // Room again. The screen still shows picture 2 and does not change.
+            let _ = std::fs::remove_file(&media);
+            let _ = std::fs::rename(&parked, &media);
+        });
+    }
+    run_with_queue(
+        RunOptions {
+            data: data.clone(),
+            config: config(false),
+        },
+        platform(&desktop, Capabilities::WINDOWS, &clock, secs(15.0), None),
+        64,
+    )?;
+
+    let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
+    assert_eq!(
+        crate::health::from_counters(&mid).map(|(h, _)| h),
+        Some(crate::health::Health::StorageFailing),
+        "{mid:?}"
+    );
+    assert!(
+        mid.get("persist_errors").is_some_and(|&n| n >= 3),
+        "{mid:?}"
+    );
+
+    let store = Store::open_existing(&data)?;
+    let status = store.read_status()?.ok_or("no heartbeat")?;
+    assert_eq!(
+        crate::health::from_counters(&status.counters).map(|(h, _)| h),
+        Some(crate::health::Health::Saving),
+        "recovered"
+    );
+    assert_eq!(status.counters.get("persist_failing"), Some(&0));
+    let manifest = sealed(&data, FULL_TAGS)?;
+    let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
+    assert_eq!(
+        captured,
+        [ms(0.0), ms(12.0)],
+        "the unchanged screen is saved once there is room"
+    );
+    Ok(())
+}

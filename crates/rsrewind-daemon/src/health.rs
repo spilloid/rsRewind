@@ -32,6 +32,8 @@ pub enum Health {
     Idle,
     /// Every monitor shows a window an exclusion rule matches. Expected.
     PrivacyExcluded,
+    /// Frames are captured, but writing them fails (a full disk, an unwritable data folder).
+    StorageFailing,
     /// A code this build does not know.
     Other(u64),
 }
@@ -46,6 +48,7 @@ impl Health {
             Self::NoDisplays => 4,
             Self::Idle => 5,
             Self::PrivacyExcluded => 6,
+            Self::StorageFailing => 7,
             Self::Other(code) => code,
         }
     }
@@ -59,6 +62,7 @@ impl Health {
             4 => Self::NoDisplays,
             5 => Self::Idle,
             6 => Self::PrivacyExcluded,
+            7 => Self::StorageFailing,
             other => Self::Other(other),
         }
     }
@@ -73,6 +77,7 @@ impl Health {
             Self::NoDisplays => "no_displays",
             Self::Idle => "idle",
             Self::PrivacyExcluded => "privacy_excluded",
+            Self::StorageFailing => "storage_failing",
             Self::Other(_) => "unknown",
         }
     }
@@ -87,6 +92,7 @@ impl Health {
             Self::NoDisplays => "no displays found",
             Self::Idle => "you are idle",
             Self::PrivacyExcluded => "an excluded window is on every screen",
+            Self::StorageFailing => "saving to disk is failing (disk full?)",
             Self::Other(_) => "unrecognised condition",
         }
     }
@@ -127,7 +133,13 @@ pub struct TickFacts {
     pub capture_failed: usize,
     /// Monitors skipped because a configured exclusion rule matched.
     pub rule_excluded: usize,
+    /// The persist thread has failed jobs and written nothing since ([`PERSIST_FAILING_AFTER`]).
+    pub persist_failing: bool,
 }
+
+/// Failed persist jobs in a row, with nothing written in between, after which saving is reported
+/// as failing. One failure can be a race; two in a row with nothing between is a pattern.
+pub const PERSIST_FAILING_AFTER: u64 = 2;
 
 /// The health one recording tick shows. A tick that saved anything is [`Health::Saving`]; else the
 /// most fundamental reason wins.
@@ -136,7 +148,12 @@ pub fn classify(t: &TickFacts) -> Health {
         return Health::NoDisplays;
     }
     if t.saving > 0 {
-        return Health::Saving;
+        // Handed to the persist thread is not saved: a full disk fails every write.
+        return if t.persist_failing {
+            Health::StorageFailing
+        } else {
+            Health::Saving
+        };
     }
     if t.window_list_unknown {
         return Health::WindowListUnknown;
@@ -153,8 +170,13 @@ pub fn classify(t: &TickFacts) -> Health {
     if t.idle {
         return Health::Idle;
     }
-    // Waiting for a first frame, or a mix (some monitors excluded, some unchanged).
-    Health::Saving
+    // Waiting for a first frame, or a mix (some monitors excluded, some unchanged), unless the
+    // last attempts to write failed and nothing has been written since.
+    if t.persist_failing {
+        Health::StorageFailing
+    } else {
+        Health::Saving
+    }
 }
 
 /// Consecutive ticks a new not-saving condition must persist before it is reported. Recovery to
@@ -239,6 +261,7 @@ mod tests {
             Health::NoDisplays,
             Health::Idle,
             Health::PrivacyExcluded,
+            Health::StorageFailing,
         ] {
             assert_eq!(Health::from_code(h.code()), h);
         }
@@ -358,6 +381,29 @@ mod tests {
             }),
             Health::Saving
         );
+        // Handed over is not written: a failing persist thread overrides "saving", and a
+        // quiet tick (nothing new to hand over) does not hide it. The upstream reasons still win
+        // when nothing was handed over at all.
+        let failing = TickFacts {
+            persist_failing: true,
+            ..base
+        };
+        assert_eq!(
+            classify(&TickFacts {
+                saving: 2,
+                ..failing
+            }),
+            Health::StorageFailing
+        );
+        assert_eq!(classify(&failing), Health::StorageFailing);
+        assert_eq!(
+            classify(&TickFacts {
+                idle: true,
+                ..failing
+            }),
+            Health::Idle
+        );
+        assert!(Health::StorageFailing.is_fault());
     }
 
     #[test]
