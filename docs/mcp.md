@@ -19,6 +19,11 @@ rsrewind mcp --enable      # prints what is shared; rsrewind mcp --disable turns
 Agents can then read recognized text and window details from the **last 30 days**. They **cannot** see screenshots
 unless you allow it, and they **cannot** resume recording, delete or move history. They can pause recording.
 
+These limits apply to what `rsrewind mcp` answers, and nothing else. An assistant that can also read files or run
+commands on your computer (Claude Code and other coding agents usually can) is able to open the data folder
+(`rsrewind data-dir`) directly, screenshots included, whether or not MCP is enabled; the history is unencrypted
+(`PRIVACY.md`). Treat such an assistant as having access to everything rsRewind recorded.
+
 ## Connect your assistant
 
 Use the full path to `rsrewind` if it is not on your PATH (Windows MSI: `%LOCALAPPDATA%\Programs\rsRewind\rsrewind.exe`;

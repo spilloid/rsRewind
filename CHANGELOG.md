@@ -35,6 +35,17 @@ All notable changes to this project are documented in this file. The format foll
   `max_size_gb`, with a warning when it is more than 10 % over. Its "saving" line also counts failed
   writes.
 
+### Changed
+
+- `PRIVACY.md` now states what was true but unsaid: the size limit is soft (enforced hourly) and does
+  not count backups, exports, outbox, imported history or logs; a custom `--data-dir` on Windows
+  keeps its parent folder's permissions; Time Machine and other backups copy the history; any
+  program or assistant that can read your files can read it, whatever the MCP settings; nothing
+  detects passwords or one-time codes on screen. The encryption plan points at its design note.
+- Corrected: MCP logs do not record the client's request id (`PRIVACY.md` said they did); exports
+  made on macOS (and Linux) carry no capability tags at all (docs said Mac exports carry
+  `window_titles`); a garbled `backups/recall-v{N}-*.db` path in `PRIVACY.md`.
+
 ## [0.1.2] - 2026-10-16
 
 ### Fixed

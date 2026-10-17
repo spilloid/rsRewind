@@ -177,8 +177,11 @@ rules could not be checked on N tick(s)…", `status --json` carries `untitled_a
   stricter option may re-create #33 on Macs whose apps keep untitled helper windows on screen; the
   doctor counts and `untitled_app_window_ticks` on a real Mac are the evidence to decide on.
 - The macOS backend still declares the `window_titles` capability, so the recorder does not refuse
-  to start with title rules, sessions record titles as enforced, and **exported segments carry the
-  `window_titles` tag**, although title rules cannot match untitled windows. Flipping the capability
+  to start with title rules and sessions record titles as enforced, although title rules cannot
+  match untitled windows. (Correction 2026-10-16: exported segments from a Mac do **not** carry the
+  `window_titles` tag, or any tag: `rsrewind export` claims capability tags only on Windows, see
+  `docs/platform-parity.md`. Whether Mac and Linux exports should claim their session's tags, and
+  then whether `window_titles` is among them, is part of the same owner decision.) Flipping the capability
   would make the recorder refuse to start with title rules unless `privacy.unenforced_ok` is set;
   that is the owner's call, not made here.
 - Follow-up, not done: judge title availability **per owner** (an application that reports titles
