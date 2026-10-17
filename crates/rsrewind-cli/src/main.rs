@@ -439,8 +439,15 @@ fn stop(data: &DataDir) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Signals the session's stop event, but only when this data folder has a live recorder. The
+/// event is one per Windows session, not per data folder, so without that check `rsrewind
+/// --data-dir <other> stop` stopped whichever recorder was running (the user's real one), unlike
+/// Linux and macOS, which stop only the pid in that folder's heartbeat.
 #[cfg(windows)]
-fn signal_stop(_: &DataDir) -> Result<bool> {
+fn signal_stop(data: &DataDir) -> Result<bool> {
+    if live_status(data)?.is_none() {
+        return Ok(false);
+    }
     Ok(rsrewind_daemon::win::signal_stop()?)
 }
 

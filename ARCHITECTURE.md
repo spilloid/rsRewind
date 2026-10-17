@@ -137,10 +137,13 @@ The persist thread and the OCR thread each own their own `Store` (their own SQLi
 WAL mode plus a 5-second busy timeout make two writers from one process safe. See
 [Storage model](#storage-model).
 
-Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) on Windows (the
-`SingleInstance` trait of the [platform seam](#platform-seam-and-capabilities); another platform
-needs an equivalent, e.g. a lock file held for the process lifetime) so a second `rsrewind
-daemon`/`start` cannot run concurrently and corrupt or race on the same database.
+Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) on Windows, one per
+logon session whatever the data folder, and an advisory lock on `<data>/recorder.lock` on Linux and
+macOS, one per data folder (the `SingleInstance` trait of the
+[platform seam](#platform-seam-and-capabilities)), so a second `rsrewind daemon`/`start` cannot run
+concurrently and corrupt or race on the same database. `rsrewind stop` acts only on a recorder whose
+heartbeat is live in the data folder it was given (on Windows it then sets the session's stop
+event); see `docs/platform-parity.md`.
 
 ## Platform seam and capabilities
 

@@ -24,6 +24,9 @@ All notable changes to this project are documented in this file. The format foll
 - **Windows: unknown idle time now means "do not record".** If Windows will not report the time
   since the last input, the recorder treats it as idle (as on Plasma and macOS) instead of as
   active, so it no longer keeps storing frames when it cannot tell whether anyone is there.
+- **Windows: `rsrewind --data-dir <other folder> stop` stopped the real recorder.** The stop signal
+  is one per Windows session, and `stop` sent it whatever folder it was given. It now stops only a
+  recorder recording into that folder, as on Linux and macOS.
 
 ## [0.1.2] - 2026-10-16
 
