@@ -21,6 +21,9 @@ All notable changes to this project are documented in this file. The format foll
   display are offered again every second, and saving resumes by itself, without waiting for the
   screen to change, once there is room. The log gets one warning per failure streak instead of one
   per second. New heartbeat gauge: `persist_failing`. No schema change.
+- **Windows: unknown idle time now means "do not record".** If Windows will not report the time
+  since the last input, the recorder treats it as idle (as on Plasma and macOS) instead of as
+  active, so it no longer keeps storing frames when it cannot tell whether anyone is there.
 
 ## [0.1.2] - 2026-10-16
 

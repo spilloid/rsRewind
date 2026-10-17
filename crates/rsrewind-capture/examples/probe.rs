@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let touching = windows.iter().filter(|w| w.rect.intersects(info)).count();
         println!("  [{i}] mostly-on={on} intersecting={touching}");
     }
-    println!("idle ms: {}", idle_millis());
+    println!("idle ms: {:?}", idle_millis());
 
     let detector = ChangeDetector::default();
     for (i, (handle, info)) in monitors.iter().enumerate() {
