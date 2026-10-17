@@ -166,7 +166,13 @@ ecall-v{N}-*.db` copies, made before a schema
 Retention (`apply_retention`, `storage.retention_days` / `storage.max_size_gb`) runs the same
 deletion path (without a fence) oldest-first. The size cap bounds the real disk footprint:
 `recall.db`, its WAL and every file under `media/`, orphans included; the database is compacted
-before more history is deleted.
+before more history is deleted. It is a **soft** cap: retention runs about a minute after the
+recorder starts and then hourly, so the folder can exceed it by up to an hour of capture. It does
+**not** count `backups/`, `exports/`, `outbox/`, `sources/` (history imported from other machines)
+or `logs/` (daily files, the newest 14 kept). `rsrewind doctor` prints the counted footprint against
+the limit. When the disk is full the recorder stores nothing, and `status`, the window and the tray
+say "saving to disk is failing" until space is freed; rsRewind does not itself stop short of filling
+the disk.
 
 ## Encryption — current state: none
 

@@ -28,6 +28,13 @@ All notable changes to this project are documented in this file. The format foll
   is one per Windows session, and `stop` sent it whatever folder it was given. It now stops only a
   recorder recording into that folder, as on Linux and macOS.
 
+### Added
+
+- `rsrewind doctor` checks free disk space on Linux and macOS too (it was Windows-only), and prints
+  the storage footprint the size limit counts (`recall.db`, its WAL and `media/`) against
+  `max_size_gb`, with a warning when it is more than 10 % over. Its "saving" line also counts failed
+  writes.
+
 ## [0.1.2] - 2026-10-16
 
 ### Fixed

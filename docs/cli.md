@@ -22,7 +22,7 @@ On Windows, the installer does not add the executable to PATH; in PowerShell use
 | `rsrewind export` | Seal settled history into segment files for another machine. |
 | `rsrewind import <files or folders>` | Merge segment files from other machines (safe to repeat). |
 | `rsrewind sources` | List the machines whose history this one holds. |
-| `rsrewind doctor [--json]` | Check capture (including screen-recording permission on macOS and the KWin `.desktop` grant on Plasma), OCR, disk, database, privacy rules and replication. |
+| `rsrewind doctor [--json]` | Check capture (including screen-recording permission on macOS and the KWin `.desktop` grant on Plasma), OCR, free disk space, the storage footprint against `max_size_gb`, database, privacy rules, replication and whether the recorder is saving. |
 | `rsrewind tray [--start-recorder] [--autostart on\|off]` | The icon next to the clock (notification area on Windows, system tray on Linux, menu bar on macOS): state at a glance, pause, resume, forget the last 10 min / 1 h, open the window, start/stop, Quit (stops recording). `--autostart` registers or removes login startup (HKCU Run entry, XDG autostart file or LaunchAgent). |
 | `rsrewind mcp [--enable\|--disable]` | Let an AI assistant search your history over MCP (stdio; off until enabled; see `docs/mcp.md`). |
 | `rsrewind data-dir` | Print the data folder. |
@@ -54,6 +54,6 @@ Run `rsrewind data-dir` to find your history. Defaults:
 | Linux | `$XDG_DATA_HOME/rsRewind`, or `~/.local/share/rsRewind` |
 | macOS | `~/Library/Application Support/rsRewind` |
 
-`config.toml` holds settings and privacy rules; `recall.db` holds events and recognized text; `media/` holds screenshots; `backups/` holds database backups; `outbox/` holds exports; `sources/` holds imported history. Stop the recorder before moving its store. `RSREWIND_DATA_DIR` or `--data-dir` selects another location. Defaults retain 90 days with a 50 GB soft storage limit. Data is unencrypted at rest. Forgetting history does not erase exported copies or backups.
+`config.toml` holds settings and privacy rules; `recall.db` holds events and recognized text; `media/` holds screenshots; `backups/` holds database backups; `outbox/` holds exports; `sources/` holds imported history. Stop the recorder before moving its store. `RSREWIND_DATA_DIR` or `--data-dir` selects another location. Defaults retain 90 days with a 50 GB soft storage limit, which counts `recall.db`, its WAL and `media/` only (not backups, exports, outbox, sources or logs) and is enforced hourly. Data is unencrypted at rest. Forgetting history does not erase exported copies or backups.
 
 [Privacy and configuration](../PRIVACY.md) · [Multiple computers](https://spilloid.github.io/rsRewind/probes.html) · [Architecture](../ARCHITECTURE.md)
