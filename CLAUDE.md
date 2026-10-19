@@ -209,8 +209,27 @@ date is not allowed; re-verify it or delete it.
 - **2026-10-16:** Review round 2 on the same fix (bounds-unknown fails closed, rsRewind's own windows
   excluded from title evidence, unidentified display-covering windows block the session, sanitized
   KWin parse errors) is likewise unverified: the macOS code and the Linux-only `kwin.rs` change were
-  not compiled; only the portable logic and Windows build/tests ran. Mac exports still carry the
-  `window_titles` tag although title rules cannot match untitled windows (owner decision).
+  not compiled; only the portable logic and Windows build/tests ran. Mac sessions record title rules
+  as enforced although they cannot match untitled windows (owner decision). (Corrected 2026-10-16:
+  this line used to say Mac exports carry the `window_titles` tag; `rsrewind export` claims no tags
+  at all outside Windows, `crates/rsrewind-cli/src/replicate.rs`.)
+- **2026-10-16:** Road-to-1.0 audit (branch `hardening/road-to-1.0`, `docs/dev-process.md`), all on
+  this Windows 11 box with the GNU toolchain; nothing ran on Linux or a Mac, and the installed
+  recorder was not touched. Fixed and tested on fakes only, never against a real full disk or a real
+  `forget` on a live recorder: persist keeps saving after `forget` deletes the app in front
+  (`ContextMissing`), a failing disk shows as `storage_failing`, a fenced frame's file is removed.
+  The Windows `stop` scope fix was not run red on purpose (that would have stopped the installed
+  recorder); its test cannot tell old from new on a machine with no other recorder. The Windows idle
+  fail-closed change has no test that makes `GetLastInputInfo` fail. `doctor`'s Unix free-space
+  check (`df -Pk`) was not compiled: only its parser ran. GIF export is covered by encoder-level
+  tests (orientation, colours, letterboxing, sizes, limits; two mutants killed) but no person has
+  exported a GIF from real history on Windows or macOS. Suspected, unverified: macOS captures at
+  `CGDisplayPixelsWide` resolution, which is points (half the pixels) on Retina displays.
+- **2026-10-16:** `tests::capture_loop::a_window_fault_message_never_reaches_a_log_line` failed once
+  in seven runs of `cargo test -p rsrewind-daemon` (did not find `window_context_unavailable` in the
+  captured log). Suspected: a `tracing` callsite-interest race between its thread-local subscriber
+  and other tests logging from the same callsites. Not fixed; treat a single failure of it as flaky,
+  repeated failures as real.
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only. A read-only adversarial review by a different model ran on

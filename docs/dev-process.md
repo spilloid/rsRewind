@@ -215,3 +215,50 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   ignored). Still not compiled: `macos.swift`, `capture/src/macos.rs`, `daemon/src/macos_platform.rs`,
   doctor's macOS block, tray `macos.rs`; `kwin.rs` and its new test (Linux-only) also not compiled
   here.
+
+### 2026-10-16 — Road to 1.0: reliability, privacy honesty, GIF export, platform parity
+
+- **Routing:** one Opus session as orchestrator and implementer (persist thread and health are
+  concurrency and privacy-adjacent: Opus tier per the table), branch `hardening/road-to-1.0`, on the
+  maintainer's Windows 11 box with the GNU toolchain. The installed, running v0.1.2 recorder and its
+  data folder were only inspected read-only (size, layout, ACL, `config.toml`). **No independent
+  adversarial review** of this round yet; it is owed one (Sonnet or Astra), aimed at the persist
+  streak/retry logic and the doc corrections.
+- **Baseline first:** `cargo fmt --check` and `cargo test --workspace` on `main` (e098329): 408
+  passed, 0 failed, 2 ignored.
+- **Found and fixed (reproduced first):** (1, high) after `forget` (or retention) deleted the
+  application/window rows of the app still in front, the persist thread kept its cached ids and
+  every later moment of that app failed with `ContextMissing` until restart, leaving invisible
+  files and rows. New end-to-end test red on `main` (`persist_errors` = 2, expected 0), green after.
+  (2, high) a failing disk read as "Recording": the capture loop counted a queued frame as saved,
+  and an unchanged screen was never offered again. Now a `persist_failing` gauge feeds a
+  `storage_failing` health, screens are re-offered while it lasts, and the warning is logged once
+  per streak. The end-to-end test replaces `media/` with a file mid-run; with the retry removed
+  (mutant) it shows exactly the old behaviour (`persist_failing` 1, health "saving"). (3) Windows
+  idle failure reported "active" (F4, open since 2026-10-01): now unknown, i.e. do not record.
+  (4) Windows `rsrewind --data-dir X stop` set the session-wide stop event and so stopped the real
+  recorder: now it requires a live heartbeat in X. **Not run red on purpose** (it would have
+  stopped the installed recorder); the new test only discriminates where another recorder runs.
+  (5) `doctor` free-space check was Windows-only: added `df -Pk` for Unix (parser unit-tested; the
+  call was not compiled here) and a storage-footprint line against `max_size_gb`.
+- **Docs that said something untrue, corrected:** PRIVACY.md said MCP logs the request id (it logs a
+  server call number); PRIVACY.md, `docs/macos.md` and `CLAUDE.md` said Mac exports carry the
+  `window_titles` tag (exports off Windows carry no tags, `replicate.rs`); a `backups\recall` path in
+  PRIVACY.md had been mangled into a line break. Added what was true but unsaid (soft cap and what
+  it does not count, custom Windows data folders keep their parent's ACL, Time Machine copies the
+  history, assistants with file access bypass MCP limits, no password/OTP detection).
+- **Tests added and graded:** GIF export (orientation/colour, letterboxing across monitor shapes,
+  odd and extreme sizes, empty/one/300/301 selections, size limits by monitor shape) and a shared
+  storage-encode/query-decode orientation test. Mutation-checked: flipping rows and swapping R/B in
+  `letterbox` each killed by the new GIF tests and by none of the old ones; reversing rows in
+  `encode_webp` killed by the orientation test and by none of storage's 69 tests. Both persist
+  fixes mutation-checked as above. Graded weak: the Windows idle change (no test can make
+  `GetLastInputInfo` fail) and the `stop` test (see above).
+- **Flaky test seen:** `a_window_fault_message_never_reaches_a_log_line` failed once in seven runs;
+  suspected `tracing` callsite-interest race; recorded in `CLAUDE.md`, not fixed.
+- **Deliverables:** the 1.0 bar and pilot checklist (`ROADMAP.md`), `docs/platform-parity.md`.
+- **Verification after:** on Windows, `cargo fmt --check` clean, `cargo clippy --workspace
+  --all-targets --all-features -D warnings` clean, `cargo test --workspace` 418 passed, 0 failed, 2
+  ignored (2026-10-16; re-run on the final commit 2026-10-19). `scripts/check-docs.sh` could not
+  finish here: its XML check needs Python, which this box lacks. Not compiled: every `cfg(target_os = "macos")` and
+  `cfg(target_os = "linux")` path, including the new Unix `free_bytes`.

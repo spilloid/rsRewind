@@ -45,6 +45,9 @@ All notable changes to this project are documented in this file. The format foll
 - Corrected: MCP logs do not record the client's request id (`PRIVACY.md` said they did); exports
   made on macOS (and Linux) carry no capability tags at all (docs said Mac exports carry
   `window_titles`); a garbled `backups/recall-v{N}-*.db` path in `PRIVACY.md`.
+- `ROADMAP.md` has an objective 1.0 bar (a four-week pilot, retention at the cap, disk-full,
+  crash, sleep/lock/display and clock drills, privacy and GIF export checks) and a pilot checklist;
+  `docs/platform-parity.md` lists what each platform does and how sure we are.
 
 ## [0.1.2] - 2026-10-16
 

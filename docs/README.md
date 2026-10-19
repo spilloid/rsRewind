@@ -12,5 +12,6 @@ Start with [installation](https://spilloid.github.io/rsRewind/install.html), the
 | Build or contribute | [Development](development.md) · [Contributing](../CONTRIBUTING.md) |
 | Understand the internals | [Architecture](../ARCHITECTURE.md) · [Distributed design](design/distributed.md) |
 | Check what is finished | [Changelog](../CHANGELOG.md) · [Remediation status](remediation-status.md) · [Standards](standards.md) |
+| Compare Windows, Linux and macOS | [Platform parity](platform-parity.md) · [The 1.0 bar](../ROADMAP.md#the-10-bar-written-2026-10-16) |
 
 The current release is v0.1.2 for Windows 11, macOS 14+ (Apple Silicon) and KDE Plasma 6 on Wayland. Every release ships all three platforms, the MCP server and the command line from the same source and version.
