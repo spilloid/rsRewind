@@ -254,8 +254,12 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   `encode_webp` killed by the orientation test and by none of storage's 69 tests. Both persist
   fixes mutation-checked as above. Graded weak: the Windows idle change (no test can make
   `GetLastInputInfo` fail) and the `stop` test (see above).
-- **Flaky test seen:** `a_window_fault_message_never_reaches_a_log_line` failed once in seven runs;
-  suspected `tracing` callsite-interest race; recorded in `CLAUDE.md`, not fixed.
+- **Flaky tests (fixed 2026-10-19, after the session resumed):** `a_window_fault_message_never_reaches_a_log_line`
+  failed about 1 run in 6 under parallel runs (its scoped `tracing` subscriber missed lines while
+  other threads logged from the same callsites; a rebuild of the interest cache and a warm-up did
+  not help) and now uses one global subscriber writing to a per-thread buffer. This round's disk-full
+  test was also flaky (a fixed 50 ms wait, and a possible duplicate re-offer): it now waits for the
+  recovered picture and allows one duplicate. 0 failures in 40 consecutive daemon runs.
 - **Deliverables:** the 1.0 bar and pilot checklist (`ROADMAP.md`), `docs/platform-parity.md`.
 - **Verification after:** on Windows, `cargo fmt --check` clean, `cargo clippy --workspace
   --all-targets --all-features -D warnings` clean, `cargo test --workspace` 418 passed, 0 failed, 2

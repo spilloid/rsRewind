@@ -307,13 +307,20 @@ fn one_bad_tick_does_not_change_the_reported_health() -> TestResult {
     Ok(())
 }
 
-/// A `tracing` writer into a shared buffer.
-#[derive(Clone, Default)]
-struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+/// A `tracing` writer into the calling thread's capture buffer, if it has one.
+struct ThreadCapture;
 
-impl std::io::Write for LogBuffer {
+thread_local! {
+    static CAPTURE: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+}
+
+impl std::io::Write for ThreadCapture {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        lock(&self.0).extend_from_slice(bytes);
+        CAPTURE.with(|c| {
+            if let Some(buffer) = c.borrow_mut().as_mut() {
+                buffer.extend_from_slice(bytes);
+            }
+        });
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -321,17 +328,29 @@ impl std::io::Write for LogBuffer {
     }
 }
 
-/// Runs `body` with every info-and-above log line captured, and returns them.
+/// Runs `body` with every info-and-above log line *of this thread* captured, and returns them.
+///
+/// One global subscriber for the whole test binary, installed once, writing into a per-thread
+/// buffer. A scoped (`with_default`) subscriber was flaky (about 1 run in 6, 2026-10-16/19):
+/// other test threads logging from the same callsites at the same time could leave them cached as
+/// uninteresting while the scope was live, and the captured log missed lines. With a global
+/// subscriber every callsite's interest is fixed and nothing races.
 fn logs_at_info(body: impl FnOnce()) -> String {
-    let buffer = LogBuffer::default();
-    let writer = buffer.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(move || writer.clone())
-        .with_max_level(tracing::Level::INFO)
-        .with_ansi(false)
-        .finish();
-    tracing::subscriber::with_default(subscriber, body);
-    String::from_utf8_lossy(&lock(&buffer.0)).into_owned()
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(|| ThreadCapture)
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+        // Fails only if something else installed a global subscriber first; then capture works
+        // only if that one writes here, and the assertions say so.
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
+    body();
+    let bytes = CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[test]

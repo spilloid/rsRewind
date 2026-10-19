@@ -225,11 +225,11 @@ date is not allowed; re-verify it or delete it.
   tests (orientation, colours, letterboxing, sizes, limits; two mutants killed) but no person has
   exported a GIF from real history on Windows or macOS. Suspected, unverified: macOS captures at
   `CGDisplayPixelsWide` resolution, which is points (half the pixels) on Retina displays.
-- **2026-10-16:** `tests::capture_loop::a_window_fault_message_never_reaches_a_log_line` failed once
-  in seven runs of `cargo test -p rsrewind-daemon` (did not find `window_context_unavailable` in the
-  captured log). Suspected: a `tracing` callsite-interest race between its thread-local subscriber
-  and other tests logging from the same callsites. Not fixed; treat a single failure of it as flaky,
-  repeated failures as real.
+- **2026-10-19:** Two daemon tests were flaky under parallel runs and were fixed: the log-capture
+  test (`a_window_fault_message_never_reaches_a_log_line`, about 1 run in 6 with a scoped `tracing`
+  subscriber; now a global per-thread capture) and this round's own disk-full test (a fixed 50 ms
+  wait; now waits for the recovered picture and tolerates one duplicate re-offer). 0 failures in 40
+  consecutive `cargo test -p rsrewind-daemon --lib` runs afterwards, on this Windows box only.
 - **2026-10-11:** Marks, keyframes, the navigator, multi-select and clip export (branch
   `claude/nifty-einstein-dd0bhh`, `docs/design/marks-keyframes.md`) are covered by unit and
   integration tests on Linux only. A read-only adversarial review by a different model ran on
