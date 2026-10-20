@@ -637,17 +637,25 @@ fn free_bytes(path: &std::path::Path) -> Option<u64> {
 /// diagnostic line). `None` when `df` is missing or its output is not the POSIX format.
 #[cfg(unix)]
 fn free_bytes(path: &std::path::Path) -> Option<u64> {
-    let out = std::process::Command::new("df")
-        .arg("-Pk")
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let out = df_command(path).output().ok()?;
     if !out.status.success() {
         return None;
     }
     parse_df_available(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `df -Pk <path>` in the POSIX locale: GNU `df` translates its header (German: "Verfügbar"), and
+/// the parser below finds the column by its English name.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn df_command(path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("df");
+    command
+        .arg("-Pk")
+        .arg(path)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
 }
 
 /// The "Available" column (1024-byte blocks) of `df -P`'s one data line, in bytes.
@@ -738,5 +746,23 @@ mod tests {
         assert_eq!(parse_df_available(""), None);
         assert_eq!(parse_df_available("garbage\n1 2 3 x\n"), None);
         assert_eq!(parse_df_available("Filesystem Avail\n"), None);
+    }
+
+    /// astra review, 2026-10-19, finding 5: GNU `df` translates its header, which the parser
+    /// rejects, so `doctor` lost the free-space line on localized systems. `df` now runs in the
+    /// POSIX locale.
+    #[test]
+    fn df_runs_in_the_posix_locale() {
+        let german = "Dateisystem    1024-Blöcke  Benutzt Verfügbar Kapazität Eingehängt auf\n\
+                      /dev/sda1        100000    40000     60000       40% /\n";
+        assert_eq!(parse_df_available(german), None, "a translated header");
+        let command = super::df_command(std::path::Path::new("/data"));
+        let lc_all = command
+            .get_envs()
+            .find(|(key, _)| *key == "LC_ALL")
+            .and_then(|(_, value)| value);
+        assert_eq!(lc_all, Some(std::ffi::OsStr::new("C")));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["-Pk", "/data"]);
     }
 }
