@@ -3,7 +3,7 @@
 
 use crate::counters::{self, Counters};
 use crate::health::{self, Health, HealthTracker, TickFacts};
-use crate::persist::{self, Job, PersistConfig, Subject};
+use crate::persist::{self, Handoff, Job, PersistConfig, Subject};
 use crate::plan::{self, MonitorAction, MonitorTick, SkipReason};
 use crate::platform::{
     CaptureBackend, Clock, DisplayHandle, FrameSource, IdleClock, Lifecycle, Platform,
@@ -52,7 +52,7 @@ fn unenforced_refusal(gaps: &[&str]) -> String {
 /// Refuses to start (before touching the data folder) when the platform cannot enforce the
 /// configured privacy rules and `privacy.unenforced_ok` is not set.
 pub fn run_with(options: RunOptions, platform: Platform) -> anyhow::Result<()> {
-    run_with_queue(options, platform, PERSIST_QUEUE)
+    run_with_queue(options, platform, PERSIST_QUEUE, Arc::default())
 }
 
 /// [`run_with`] with a chosen persist queue depth. End-to-end tests on the fake clock use a deeper
@@ -63,6 +63,7 @@ pub(crate) fn run_with_queue(
     options: RunOptions,
     platform: Platform,
     queue_depth: usize,
+    handoff: Arc<Handoff>,
 ) -> anyhow::Result<()> {
     let RunOptions { data, config } = options;
     let capabilities = platform.capabilities();
@@ -124,6 +125,7 @@ pub(crate) fn run_with_queue(
     let persist_thread = {
         let data = data.clone();
         let counters = counters.clone();
+        let handoff = handoff.clone();
         let config = PersistConfig {
             session,
             image_quality: config.capture.image_quality,
@@ -135,7 +137,15 @@ pub(crate) fn run_with_queue(
         std::thread::Builder::new()
             .name("rsrewind-persist".into())
             .spawn(move || {
-                persist::run(persist_store, data, config, jobs_rx, ocr_wake_tx, counters)
+                persist::run(
+                    persist_store,
+                    data,
+                    config,
+                    jobs_rx,
+                    ocr_wake_tx,
+                    counters,
+                    handoff,
+                )
             })?
     };
 
@@ -150,6 +160,7 @@ pub(crate) fn run_with_queue(
         },
         jobs_tx,
         counters.clone(),
+        handoff,
     );
 
     let mut next_heartbeat = clock.monotonic();
@@ -181,11 +192,17 @@ pub(crate) fn run_with_queue(
 
     tracing::info!("recorder stopping");
     let stopped_at = clock.now();
-    let _ = recorder.jobs.send(Job::Marker {
-        kind: EventKind::RecorderStop,
-        at: stopped_at,
-        metadata: None,
-    });
+    if recorder
+        .jobs
+        .send(Job::Marker {
+            kind: EventKind::RecorderStop,
+            at: stopped_at,
+            metadata: None,
+        })
+        .is_ok()
+    {
+        recorder.handoff.queued();
+    }
     drop(recorder);
     stop.store(true, Ordering::Relaxed);
     if persist_thread.join().is_err() {
@@ -274,6 +291,8 @@ pub(crate) struct Recorder {
     backends: Backends,
     counters: Arc<Counters>,
     pub(crate) jobs: SyncSender<Job>,
+    /// Per-monitor "offer this screen again" from the persist thread, and job accounting.
+    pub(crate) handoff: Arc<Handoff>,
     detector: ChangeDetector,
     monitors: HashMap<String, MonitorSlot>,
     /// Monotonic deadline for the next display enumeration.
@@ -292,6 +311,7 @@ impl Recorder {
         backends: Backends,
         jobs: SyncSender<Job>,
         counters: Arc<Counters>,
+        handoff: Arc<Handoff>,
     ) -> Self {
         let detector = ChangeDetector::new(config.capture.change_threshold);
         let next_monitor_refresh = backends.clock.monotonic();
@@ -301,6 +321,7 @@ impl Recorder {
             backends,
             counters,
             jobs,
+            handoff,
             detector,
             monitors: HashMap::new(),
             next_monitor_refresh,
@@ -341,16 +362,17 @@ impl Recorder {
         if idle_ms.is_none() {
             counters::bump(&self.counters.idle_unknown_ticks);
         }
-        // The persist thread failed to write and has written nothing since (a full disk, an
-        // unwritable folder). What it was handed is lost, so offer the current screens again every
-        // tick until a write succeeds; otherwise a static screen would stay unsaved after the disk
-        // has room again.
-        let persist_streak = self.counters.persist_failing.load(Ordering::Relaxed);
-        if persist_streak > 0 {
-            for slot in self.monitors.values_mut() {
+        // Screens the persist thread was handed but could not save (a full disk, an unwritable
+        // folder, a picture fenced by `forget`) or whose saved picture is gone: offer them again,
+        // or a static screen would stay unsaved after the disk has room again. Per monitor, and
+        // cleared only here or by that monitor's own saved picture, so another monitor's
+        // successful write cannot cancel it.
+        for device in self.handoff.take_unsaved() {
+            if let Some(slot) = self.monitors.get_mut(&device) {
                 slot.persisted = None;
             }
         }
+        let persist_streak = self.counters.persist_failing.load(Ordering::Relaxed);
 
         // A provider that cannot list windows is never asked: its empty answer would read as
         // "nothing excluded is visible". The recorder only gets here with such a provider after
@@ -576,7 +598,7 @@ impl Recorder {
                     at: now,
                     subject: subject_for(&on_monitor, focus),
                 };
-                match self.jobs.try_send(job) {
+                match send_job(&self.jobs, &self.handoff, job) {
                     Ok(()) => {
                         slot.persisted = Some(fingerprint);
                         result.saving = true;
@@ -601,7 +623,7 @@ impl Recorder {
                     at: now,
                     subject: subject_for(&on_monitor, focus),
                 };
-                if self.jobs.try_send(job).is_err() {
+                if send_job(&self.jobs, &self.handoff, job).is_err() {
                     counters::bump(&self.counters.dropped_queue_full);
                 }
                 // Extending the previous picture while capture is failing is not evidence that
@@ -644,11 +666,15 @@ impl Recorder {
                 _ => (EventKind::Resumed, None),
             };
             tracing::info!(state = ?effective, "recording state changed");
-            let _ = self.jobs.try_send(Job::Marker {
-                kind,
-                at: now,
-                metadata,
-            });
+            let _ = send_job(
+                &self.jobs,
+                &self.handoff,
+                Job::Marker {
+                    kind,
+                    at: now,
+                    metadata,
+                },
+            );
             self.last_reason = reason;
         }
         if idle != self.idle && matches!(effective, CaptureState::Recording) {
@@ -657,11 +683,15 @@ impl Recorder {
             } else {
                 EventKind::IdleEnd
             };
-            let _ = self.jobs.try_send(Job::Marker {
-                kind,
-                at: now,
-                metadata: None,
-            });
+            let _ = send_job(
+                &self.jobs,
+                &self.handoff,
+                Job::Marker {
+                    kind,
+                    at: now,
+                    metadata: None,
+                },
+            );
             self.idle = idle;
         }
     }
@@ -735,4 +765,17 @@ fn subject_for(on_monitor: &[&VisibleWindow], focus: Option<&FocusContext>) -> O
         application: w.application_context(),
         window: w.window_context(),
     })
+}
+
+/// Queues `job` for the persist thread without ever blocking capture, and counts it. The job
+/// itself is dropped on failure: only why it was not queued comes back.
+fn send_job(jobs: &SyncSender<Job>, handoff: &Handoff, job: Job) -> Result<(), TrySendError<()>> {
+    match jobs.try_send(job) {
+        Ok(()) => {
+            handoff.queued();
+            Ok(())
+        }
+        Err(TrySendError::Full(_)) => Err(TrySendError::Full(())),
+        Err(TrySendError::Disconnected(_)) => Err(TrySendError::Disconnected(())),
+    }
 }

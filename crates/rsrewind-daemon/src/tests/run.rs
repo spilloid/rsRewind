@@ -199,6 +199,7 @@ fn an_unknown_window_list_is_visible_in_the_heartbeat_and_recording_resumes() ->
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(9.0), None),
         64,
+        Arc::default(),
     )?;
 
     let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
@@ -300,6 +301,7 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
             Some(fake_ocr(probe.clone())),
         ),
         64,
+        Arc::default(),
     )?;
 
     // Shutdown order: by the time run_with returns, the OCR thread has finished (its backend is
@@ -442,6 +444,7 @@ fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(6.0), None),
         64,
+        Arc::default(),
     )?;
 
     assert_eq!(
@@ -543,6 +546,7 @@ fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestR
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(16.0), None),
         64,
+        Arc::default(),
     )?;
 
     let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;

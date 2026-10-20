@@ -4,4 +4,5 @@
 
 mod capture_loop;
 mod fakes;
+mod persist;
 mod run;

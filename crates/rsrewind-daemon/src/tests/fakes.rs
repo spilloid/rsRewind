@@ -398,3 +398,60 @@ pub fn focus(process: &str, title: &str, pid: u32) -> FocusContext {
         pid,
     }
 }
+
+/// A real persist thread's loop body on a real store in `data`, driven one job at a time by the
+/// test (no thread), so the order in which jobs land is the test's choice.
+pub fn persister(
+    data: &rsrewind_core::DataDir,
+    counters: Arc<crate::counters::Counters>,
+    handoff: Arc<crate::persist::Handoff>,
+) -> Result<crate::persist::Persister, Box<dyn std::error::Error>> {
+    data.ensure()?;
+    let store = rsrewind_storage::Store::open(data)?;
+    let session = store.begin_session(FakeClock::wall_at(Duration::ZERO), "test", "0")?;
+    Ok(crate::persist::Persister::new(
+        store,
+        data.clone(),
+        crate::persist::PersistConfig {
+            session,
+            image_quality: 80,
+            ocr_enabled: false,
+            max_gap_ms: 3_000,
+            retention_days: 0,
+            max_bytes: u64::MAX,
+        },
+        None,
+        counters,
+        handoff,
+    ))
+}
+
+/// "The disk is full" for pictures: `media/` becomes a file, so no screenshot can be written
+/// (SQLite still works). Returns where the real folder went.
+pub fn break_media(data: &rsrewind_core::DataDir) -> std::io::Result<std::path::PathBuf> {
+    let media = data.media_root();
+    let parked = data.root().join("media-parked");
+    std::fs::rename(&media, &parked)?;
+    std::fs::write(&media, b"not a folder")?;
+    Ok(parked)
+}
+
+/// Undoes [`break_media`]. (Windows may refuse the rename for a moment while a scanner holds the
+/// folder: retried, bounded.)
+pub fn restore_media(
+    data: &rsrewind_core::DataDir,
+    parked: &std::path::Path,
+) -> std::io::Result<()> {
+    let media = data.media_root();
+    std::fs::remove_file(&media)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match std::fs::rename(parked, &media) {
+            Ok(()) => return Ok(()),
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}

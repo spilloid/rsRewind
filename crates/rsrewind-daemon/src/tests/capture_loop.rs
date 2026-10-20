@@ -5,7 +5,7 @@
 use super::fakes::*;
 use crate::counters::Counters;
 use crate::health::Health;
-use crate::persist::Job;
+use crate::persist::{Handoff, Job};
 use crate::platform::Clock;
 use crate::recorder::{Backends, PERSIST_QUEUE, RULE_WINDOWS_UNKNOWN, Recorder};
 use rsrewind_core::{Capabilities, CaptureState, Config, PrivacyPolicy};
@@ -25,6 +25,7 @@ struct Harness {
     desktop: SharedDesktop,
     clock: Arc<FakeClock>,
     counters: Arc<Counters>,
+    handoff: Arc<Handoff>,
 }
 
 #[allow(clippy::field_reassign_with_default)]
@@ -49,6 +50,7 @@ fn harness(monitors: u64, capabilities: Capabilities) -> Harness {
     let clock = FakeClock::new();
     let counters = Arc::new(Counters::default());
     let (tx, rx) = sync_channel(PERSIST_QUEUE);
+    let handoff = Arc::new(Handoff::default());
     let recorder = Recorder::new(
         config(),
         capabilities,
@@ -67,6 +69,7 @@ fn harness(monitors: u64, capabilities: Capabilities) -> Harness {
         },
         tx,
         counters.clone(),
+        handoff.clone(),
     );
     Harness {
         recorder,
@@ -74,6 +77,7 @@ fn harness(monitors: u64, capabilities: Capabilities) -> Harness {
         desktop,
         clock,
         counters,
+        handoff,
     }
 }
 
@@ -551,6 +555,7 @@ fn a_full_persist_queue_drops_candidates_and_never_blocks_capture() -> TestResul
             desktop,
             clock,
             counters,
+            ..
         } = harness(1, Capabilities::WINDOWS);
         let _ = handoff_tx.send((jobs, counters));
         for seed in 1..=(PERSIST_QUEUE as u8 + 3) {
@@ -617,5 +622,64 @@ fn markers_are_recorded_once_per_transition() -> TestResult {
     }
     let kinds: Vec<String> = h.drain();
     assert_eq!(kinds, ["marker paused", "marker resumed"]);
+    Ok(())
+}
+
+// ----- saving after a failed write (astra review, 2026-10-19) ---------------------------------
+
+/// A picture that failed to save stays owed until it is offered again, whatever other monitors
+/// save in between. Before the fix, the retry hung on a global "failed since anything was last
+/// written" streak: DISPLAY1's successful extension, landing after DISPLAY2's failed picture,
+/// reset it to 0 before the capture loop looked, and DISPLAY2's unchanged screen was never
+/// offered again (its extensions found no current picture and wrote nothing, for as long as the
+/// screen stayed the same). The jobs go to a real persist loop in a forced order, so the
+/// interleaving is exact, not left to thread scheduling.
+#[test]
+fn a_failed_picture_is_offered_again_even_when_another_monitor_saves_meanwhile() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = rsrewind_core::DataDir::new(tmp.path().join("data"));
+    let mut h = harness(2, Capabilities::WINDOWS);
+    let mut persister = persister(&data, h.counters.clone(), h.handoff.clone())?;
+    let mut run_jobs = |h: &Harness, new_states_first: bool| -> Vec<String> {
+        let mut jobs: Vec<Job> = h.jobs.try_iter().collect();
+        if new_states_first {
+            jobs.sort_by_key(|j| !matches!(j, Job::NewState { .. }));
+        }
+        let summaries = jobs.iter().map(summary).collect();
+        for job in jobs {
+            persister.step(job);
+        }
+        summaries
+    };
+
+    h.desktop().show(display(0), frame(1));
+    h.desktop().show(display(1), frame(2));
+    h.tick(REC);
+    run_jobs(&h, true);
+    assert_eq!(h.counters.persisted_states.load(Ordering::Relaxed), 2);
+
+    let parked = break_media(&data)?;
+    h.desktop().show(display(1), frame(3)); // DISPLAY2 changes; DISPLAY1 stays the same
+    h.tick(REC);
+    assert_eq!(
+        run_jobs(&h, true),
+        ["state DISPLAY2 #3", "extend DISPLAY1"],
+        "the failure must land before the other monitor's success"
+    );
+    assert_eq!(h.counters.persist_errors.load(Ordering::Relaxed), 1);
+    restore_media(&data, &parked)?;
+
+    // DISPLAY2 still shows picture 3, unsaved: the next tick offers it again.
+    h.tick(REC);
+    let mut jobs = run_jobs(&h, false);
+    jobs.sort();
+    assert_eq!(jobs, ["extend DISPLAY1", "state DISPLAY2 #3"]);
+    assert_eq!(h.counters.persisted_states.load(Ordering::Relaxed), 3);
+
+    // Owed once, not forever: after it is saved, both screens are only extended.
+    h.tick(REC);
+    let mut jobs = run_jobs(&h, false);
+    jobs.sort();
+    assert_eq!(jobs, ["extend DISPLAY1", "extend DISPLAY2"]);
     Ok(())
 }
