@@ -4,6 +4,7 @@
 //! exact tick. The only wait is a condition variable on the OCR thread's progress.
 
 use super::fakes::*;
+use crate::persist::Handoff;
 use crate::recorder::run_with_queue;
 use crate::{RunOptions, run_with};
 use rsrewind_core::{
@@ -390,18 +391,17 @@ fn walk(dir: &std::path::Path) -> Result<usize, Box<dyn std::error::Error>> {
     Ok(files)
 }
 
-/// Waits (real time, bounded) until the persist thread has stored `count` visual states. Hooks run
-/// on the recorder thread while the persist thread works on its own, so a hook that changes the
-/// store "after" a frame must first see that frame land.
-fn wait_for_states(data: &DataDir, count: u64) -> bool {
+/// Waits (real time, bounded) until the persist thread has handled every job queued so far, with
+/// all its effects visible: rows, observations, the failure gauge, the monitors it marked to be
+/// offered again. Hooks run on the recorder thread between ticks, so nothing is queued while this
+/// waits, and the next tick sees exactly what those jobs left behind.
+fn settle(handoff: &Handoff) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
-        if let Ok(stats) = Store::open_existing(data).and_then(|s| s.stats())
-            && stats.visual_states >= count
-        {
+        if handoff.settled() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(1));
     }
     false
 }
@@ -416,19 +416,28 @@ fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult
     let data = DataDir::new(tmp.path().join("data"));
     let clock = FakeClock::new();
     let desktop = one_monitor_desktop();
+    let handoff = Arc::new(Handoff::default());
     lock(&desktop).show(display(0), frame(1)); // t=0: stored, notepad / notes.txt
     let forgot = Arc::new(Mutex::new(None));
     {
-        let (d, data, forgot) = (desktop.clone(), data.clone(), forgot.clone());
+        let (d, data, forgot, handoff) = (
+            desktop.clone(),
+            data.clone(),
+            forgot.clone(),
+            handoff.clone(),
+        );
         clock.at(secs(1.5), move || {
             // `rsrewind forget` from another process: everything so far, notepad's rows with it.
-            if wait_for_states(&data, 1)
+            // Only once the picture, its observation and notepad's rows are all written, or the
+            // forget could miss the rows the persist thread has cached.
+            if settle(&handoff)
                 && let Ok(store) = Store::open_existing(&data)
+                && let Ok(before) = store.stats()
             {
                 *lock(&forgot) = store
                     .delete_range(Timestamp(ms(0.0) - 1), Timestamp(ms(1.5)))
                     .ok()
-                    .map(|r| r.visual_states_deleted);
+                    .map(|r| (r.visual_states_deleted, before.observations));
             }
             lock(&d).show(display(0), frame(2)); // t=2: same app and window, new picture
         });
@@ -444,13 +453,13 @@ fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(6.0), None),
         64,
-        Arc::default(),
+        handoff,
     )?;
 
     assert_eq!(
         *lock(&forgot),
-        Some(1),
-        "the forget did not run as scripted"
+        Some((1, 1)),
+        "the forget did not run as scripted (one picture, after its observation was written)"
     );
     let store = Store::open_existing(&data)?;
     let status = store.read_status()?.ok_or("no heartbeat")?;
@@ -478,33 +487,35 @@ fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult
 /// "Recording" while nothing is saved: the heartbeat says `storage_failing`, and once writing works
 /// again the screen on display is saved without waiting for it to change (road-to-1.0 audit,
 /// 2026-10-16; before, the capture loop counted a queued frame as saved and never offered a
-/// static screen again).
+/// static screen again). Every hook first waits for the persist thread to finish what was queued,
+/// so each tick sees the outcome of the one before and the run is exact (astra review, 2026-10-19).
 #[test]
 fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let data = DataDir::new(tmp.path().join("data"));
     let clock = FakeClock::new();
     let desktop = one_monitor_desktop();
+    let handoff = Arc::new(Handoff::default());
     lock(&desktop).show(display(0), frame(1)); // t=0: stored
-    let media = data.media_root();
-    let parked = tmp.path().join("media-parked");
+    let parked: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
     {
-        let (d, data, media, parked) =
-            (desktop.clone(), data.clone(), media.clone(), parked.clone());
+        let (d, data, parked, handoff) = (
+            desktop.clone(),
+            data.clone(),
+            parked.clone(),
+            handoff.clone(),
+        );
         clock.at(secs(1.5), move || {
-            if wait_for_states(&data, 1) {
-                // "Disk full": nothing can be created under media/ any more.
-                let _ = std::fs::rename(&media, &parked);
-                let _ = std::fs::write(&media, b"not a folder");
+            if settle(&handoff) {
+                *lock(&parked) = break_media(&data).ok();
             }
             lock(&d).show(display(0), frame(2)); // t=2..11: never stored
         });
     }
-    // The persist thread runs in real time beside the fake clock: give it a moment after each
-    // failing tick so the recorder sees the failure on the next one.
-    for t in 2..=11 {
-        clock.at(secs(f64::from(t) + 0.5), || {
-            std::thread::sleep(Duration::from_millis(50));
+    for t in 2..=12 {
+        let handoff = handoff.clone();
+        clock.at(secs(f64::from(t) + 0.5), move || {
+            settle(&handoff);
         });
     }
     let seen: Arc<Mutex<Option<std::collections::BTreeMap<String, u64>>>> =
@@ -518,24 +529,12 @@ fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestR
         });
     }
     {
-        let (media, parked) = (media.clone(), parked.clone());
+        let (data, parked) = (data.clone(), parked.clone());
         clock.at(secs(11.7), move || {
-            // Room again. The screen still shows picture 2 and does not change. (Windows may refuse
-            // the rename for a moment while a scanner holds the folder: retry, bounded.)
-            let _ = std::fs::remove_file(&media);
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            while std::fs::rename(&parked, &media).is_err() && std::time::Instant::now() < deadline
-            {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        });
-    }
-    {
-        // Let the re-offered picture land before the next ticks look at the failure gauge.
-        let data = data.clone();
-        clock.at(secs(12.5), move || {
-            if wait_for_states(&data, 2) {
-                std::thread::sleep(Duration::from_millis(50));
+            // Room again (after the t=11 picture failed). The screen still shows picture 2 and
+            // does not change.
+            if let Some(parked) = lock(&parked).take() {
+                let _ = restore_media(&data, &parked);
             }
         });
     }
@@ -546,7 +545,7 @@ fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestR
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(16.0), None),
         64,
-        Arc::default(),
+        handoff,
     )?;
 
     let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
@@ -568,18 +567,11 @@ fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestR
         "recovered"
     );
     assert_eq!(status.counters.get("persist_failing"), Some(&0));
+    // Picture 2 was offered on every tick from 2 to 11 and failed each time.
+    assert_eq!(status.counters.get("persist_errors"), Some(&10));
     let manifest = sealed(&data, FULL_TAGS)?;
     let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
-    // The unchanged screen is saved once there is room. A tick that runs before the persist
-    // thread has reset its failure gauge may offer it once more: at most one such duplicate.
-    assert_eq!(
-        captured.get(..2),
-        Some(&[ms(0.0), ms(12.0)][..]),
-        "{captured:?}"
-    );
-    assert!(
-        captured.len() <= 3 && captured[2..].iter().all(|&t| t == ms(13.0)),
-        "{captured:?}"
-    );
+    // The unchanged screen is saved once there is room, exactly once.
+    assert_eq!(captured, [ms(0.0), ms(12.0)]);
     Ok(())
 }
