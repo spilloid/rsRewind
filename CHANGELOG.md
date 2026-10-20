@@ -14,19 +14,32 @@ All notable changes to this project are documented in this file. The format foll
   later moment of that app failed to save (`persist_errors` grew, nothing showed on the timeline)
   until the recorder was restarted, and each failure left an invisible screenshot behind. It now
   looks the rows up again. A frame queued just before a `forget` and refused by its fence is no
-  longer counted as an error, and its file is removed at once.
+  longer counted as an error, and its file is deleted at once; if the file cannot be deleted
+  (another program has it open), that is counted in `persist_errors`, logged, and retried after
+  each later write and at shutdown. If it still cannot be deleted, `rsrewind doctor` lists it as a
+  file without a row. A screen still on display after a `forget` (or after retention deleted its
+  picture) is saved again within a few seconds instead of on its next change.
 - **A full disk no longer looks like "Recording".** When writing fails (disk full, data folder not
   writable), `rsrewind status`, `status --json` (`not_saving.reason = "storage_failing"`), `doctor`,
-  the window's chip and the tray now say "nothing saved: saving to disk is failing", the screens on
-  display are offered again every second, and saving resumes by itself, without waiting for the
-  screen to change, once there is room. The log gets one warning per failure streak instead of one
-  per second. New heartbeat gauge: `persist_failing`. No schema change.
+  the window's chip and the tray now say "nothing saved: saving to disk is failing", a screen whose
+  picture failed to save is offered again as soon as the failure is known (tracked per monitor, so
+  another monitor's successful write does not cancel it), and saving resumes by itself, without
+  waiting for the screen to change, once there is room. The log gets one warning per failure streak
+  instead of one per second. New heartbeat gauge: `persist_failing`. No schema change.
 - **Windows: unknown idle time now means "do not record".** If Windows will not report the time
   since the last input, the recorder treats it as idle (as on Plasma and macOS) instead of as
   active, so it no longer keeps storing frames when it cannot tell whether anyone is there.
 - **Windows: `rsrewind --data-dir <other folder> stop` stopped the real recorder.** The stop signal
-  is one per Windows session, and `stop` sent it whatever folder it was given. It now stops only a
-  recorder recording into that folder, as on Linux and macOS.
+  was one per Windows session, and `stop` sent it whatever folder it was given. It now requires a
+  live heartbeat in that folder and signals a stop event named for the pid in it, which exists
+  only while that recorder runs, as Linux and macOS signal that pid; if the recorder exits before
+  the signal, the signal reaches no one. A recorder from 0.1.2 or earlier still listens on the old
+  per-session event: `stop` uses it only when that folder's heartbeat is live and its pid still
+  runs. What remains is pid reuse: a recorder started in the instant between check and signal
+  with the very pid that just exited would be stopped; and if that folder's recorder crashed and,
+  within 20 seconds of its last heartbeat, its pid was reused while a 0.1.2 recorder records
+  another folder, that 0.1.2 recorder would be stopped. A 0.1.2 `rsrewind stop` cannot stop a
+  recorder from this version.
 
 ### Added
 

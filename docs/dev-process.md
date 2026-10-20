@@ -266,3 +266,53 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   ignored (2026-10-16; re-run on the final commit 2026-10-19). `scripts/check-docs.sh` could not
   finish here: its XML check needs Python, which this box lacks. Not compiled: every `cfg(target_os = "macos")` and
   `cfg(target_os = "linux")` path, including the new Unix `free_bytes`.
+
+### 2026-10-19 — Road to 1.0: astra review round
+
+- **Routing:** the review owed by the round above. Astra (Codex `gpt-6-astra`, high effort) did a
+  static adversarial review of the branch diff (no commands or tests run); verdict "ship after
+  fixes", test quality graded B−. Findings adjudicated per STD-001 ("a finding can be right about
+  the problem and wrong about the fix") by an Opus session that reproduced each one before
+  choosing and making the fix, on the maintainer's Windows box (GNU toolchain). Cost: Astra's
+  tokens and cost were not reported to this session (unknown); the Opus session's were not
+  measured either. The installed, running 0.1.2 recorder and its data folder were not touched:
+  every new test uses temp folders and stop-event names no real process can have.
+- **(1, high) Real.** The re-offer of unsaved screens hung on one global "failed since anything was
+  last written" streak, so monitor A's successful extension after monitor B's failed picture reset
+  it before the capture loop looked, and B's unchanged screen was never offered again. Reproduced
+  with a tick-level test that feeds the jobs to a real persist loop in a forced order (red:
+  `["extend DISPLAY1", "extend DISPLAY2"]`, expected B's picture re-offered). Fix (ours, close to
+  astra's): the persist thread marks the *monitor* (failed or fenced picture, extension whose
+  picture is missing or was deleted) in a set shared with the capture loop; only the capture loop
+  taking it, or that monitor's own saved picture, clears it. The streak now only drives health.
+  Side effect, intended: a static screen after `forget` or retention is offered again (closes
+  remediation F5's open item); PRIVACY.md now says recording goes on after `forget`.
+- **(2, high) Real.** A fenced picture's failed `remove_file` was ignored and the job treated as an
+  expected drop. Reproduced with an injected refused delete (red: `persist_errors` 0, file left).
+  Fix: a failed delete counts as a persist error, is logged, and is retried before every later job
+  and at shutdown; doctor's orphan listing remains the backstop. CHANGELOG/PRIVACY say exactly that.
+- **(3, medium) Real, fixed narrower than astra's proposal.** Windows `stop` checked the folder's
+  heartbeat and then set a per-session event; a recorder started in between, for any folder, got
+  the signal. Not run red against the old code: the old event name is the one the installed
+  recorder listens on. Fix: the event is named for the recorder's pid (`Local\rsRewind.Stop.<pid>`)
+  and `stop` signals the pid from the heartbeat, so an exited recorder's stop reaches no one. Unit
+  test with impossible pids; mutation-checked (one shared name instead of per-pid: red). A 0.1.2
+  recorder is still reached through the old per-session event, only while the heartbeat's pid runs.
+  What remains (in CHANGELOG): pid reuse in that instant, or after a crash within 20 s while a 0.1.2
+  recorder runs; an old `rsrewind stop` cannot stop a new recorder.
+- **(4, medium) Real.** `wait_for_states` synchronised on the row insert, before the observation,
+  the app/window rows and the gauge. Shown with a 300 ms pause injected after the insert: the old
+  disk-full test failed, and the old forget test passed even with the `ContextMissing` fix removed
+  (it no longer exercised it). Fix: hooks wait until the persist thread has handled every queued
+  job (queued/handled counts); the disk-full test now asserts the exact outcome (no duplicate
+  allowed) and the forget test that the observation existed before the forget. Both pass under the
+  same injected pause; the forget test then fails if the fix is removed.
+- **(5, low) Real.** `df` output was parsed by its English header under the user's locale. Fix:
+  `LC_ALL=C` on the subprocess; a test checks the command's environment (red without it). Not
+  observed live: this box's `df` has no translations. The Unix call itself is still not compiled
+  here.
+- **Rejected:** none. The review's remark that the media-as-file trick tests media failure, not
+  real volume exhaustion, stands (documented in the test); a real full-disk drill is on the 1.0 bar.
+- **Verification:** `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features
+  -D warnings` clean; `cargo test --workspace` 424 passed, 0 failed, 2 ignored; the daemon tests 30
+  consecutive runs and 60 runs four at a time with no failure.

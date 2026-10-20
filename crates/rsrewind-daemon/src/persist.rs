@@ -290,7 +290,7 @@ impl PersistState {
                         counters::bump(&self.counters.extended_observations);
                         Ok(true)
                     }
-                    // Deleted under us (delete-recent / forget / retention): stop extending it;
+                    // Deleted under us (forget / retention): stop extending it;
                     // the screen still on display is offered again as a new picture.
                     Err(StorageError::VisualStateMissing(_)) => {
                         self.current.remove(&device_name);

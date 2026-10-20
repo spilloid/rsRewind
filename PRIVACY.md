@@ -151,7 +151,13 @@ from the same range. Finally it truncates the SQLite write-ahead log.
 - **Fence.** Until a fence is pruned (retention does that once it passes the retention horizon),
   the store refuses to insert a screenshot or observation whose capture time falls inside the
   range (`StorageError::Fenced`). A frame that was queued or still being encoded when you ran
-  `forget` therefore cannot bring the forgotten moment back.
+  `forget` therefore cannot bring the forgotten moment back. Its image file, written before the
+  refusal, is deleted at once; if another program holds it open, the recorder logs that, counts it
+  as a persist error and retries after each later write and at shutdown, and `rsrewind doctor`
+  lists any that remain as files without a row.
+- **Recording goes on.** `forget` does not pause the recorder: whatever is still on screen after
+  the forgotten range is saved again as a new moment within a few seconds. Pause first if it should
+  not be.
 - **Stale OCR.** OCR results are saved against the screenshot's id *and* file path, and ids are
   never reused, so a result computed for a deleted screenshot cannot attach to another one.
 - **Physical erasure inside `recall.db`.** `secure_delete` and FTS5's `secure-delete` are on, so
