@@ -316,3 +316,30 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
 - **Verification:** `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features
   -D warnings` clean; `cargo test --workspace` 424 passed, 0 failed, 2 ignored; the daemon tests 30
   consecutive runs and 60 runs four at a time with no failure.
+
+### 2026-10-19 — Road to 1.0: astra re-review of the fixes
+
+- **Routing:** Astra re-reviewed the five fix commits (static). Findings 1, 2, 4 and 5 resolved;
+  one remained, adjudicated and fixed by the same Opus session.
+- **(Medium) Real.** The automatic fallback to the 0.1.2 per-session stop event kept the original
+  check-then-signal race without any pid reuse (0.1.2 recorder A passes both checks, exits, 0.1.2
+  recorder B starts for another folder and gets the stop), and the CHANGELOG named pid reuse as the
+  only residue. Also real: a crashed run's fresh heartbeat plus a reused pid named the wrong process.
+  Reproduced on the CLI path: the decision was extracted into `stop_target::stop_recorder` over a
+  `StopPort` (behaviour unchanged), and a fake session that swaps recorders between the last check
+  and the signal failed ("stop for folder A stopped the recorder for folder B"). Not run against
+  the real per-session event: the installed 0.1.2 recorder listens on it.
+- **Fix:** each run picks a random 64-bit stop token, publishes it in the heartbeat (`stop_token`)
+  and creates `Local\rsRewind.Stop.<token>` (refusing a name that already exists); `stop` signals
+  exactly that event, so an exited or crashed run reaches no one, whatever pids do. The automatic
+  legacy fallback is gone: for a heartbeat without a token, `stop` sends nothing and names the
+  opt-in `stop --legacy-session`, documented as reaching whichever 0.1.2 recorder runs in the
+  session. Checked first: the installer has no stop step (MSI MajorUpgrade only) and the tray's
+  Stop/Quit run this version's `stop`; CHANGELOG says they do not stop a 0.1.2 recorder left
+  running across an upgrade. Tests: five `stop_target` cases (own recorder, legacy replaced, current
+  replaced, stale heartbeat with a reused pid, legacy with the flag), `win.rs` token test, an
+  end-to-end `stop_scope` test (gone run and legacy heartbeat signal nothing), and the fake run's
+  heartbeat carries its token. CHANGELOG, ARCHITECTURE, platform-parity and `docs/cli.md` state the
+  new guarantee.
+- **Verification:** see the commit; fmt, clippy `-D warnings` and `cargo test --workspace` green,
+  daemon and CLI stop tests looped.

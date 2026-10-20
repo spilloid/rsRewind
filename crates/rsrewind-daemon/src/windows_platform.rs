@@ -58,6 +58,10 @@ impl Lifecycle for InstanceGuard {
     fn stop_requested(&self) -> bool {
         InstanceGuard::stop_requested(self)
     }
+
+    fn stop_token(&self) -> Option<u64> {
+        Some(InstanceGuard::stop_token(self))
+    }
 }
 
 /// EnumDisplayMonitors / EnumWindows / GetForegroundWindow.

@@ -315,6 +315,11 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
     let store = Store::open_existing(&data)?;
     let status = store.read_status()?.ok_or("no heartbeat")?;
     assert_eq!(status.state, CaptureState::Stopped);
+    // The run's stop token is published, so `rsrewind stop` can name exactly this run.
+    assert_eq!(
+        status.counters.get(crate::counters::STOP_TOKEN_KEY),
+        Some(&FAKE_STOP_TOKEN)
+    );
     assert_eq!(status.counters.get("persisted_states"), Some(&4));
     assert_eq!(status.counters.get("privacy_skips"), Some(&2));
     assert_eq!(status.counters.get("paused_ticks"), Some(&2));

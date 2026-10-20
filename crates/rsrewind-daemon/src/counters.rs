@@ -49,6 +49,11 @@ counters!(
     persist_failing,
 );
 
+/// Heartbeat key, not a counter: the recorder run's random stop token where `rsrewind stop`
+/// signals an event named for it (Windows; see [`crate::platform::Lifecycle::stop_token`]).
+/// Absent from heartbeats of recorders up to 0.1.2 and on other platforms.
+pub const STOP_TOKEN_KEY: &str = "stop_token";
+
 pub fn bump(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
 }

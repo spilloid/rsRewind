@@ -84,6 +84,9 @@ impl Clock for FakeClock {
     }
 }
 
+/// The stop token every fake run publishes in its heartbeat.
+pub const FAKE_STOP_TOKEN: u64 = 0x5EED_0F57_0900;
+
 /// Stops the recorder once the fake clock reaches `at`.
 pub struct StopAt {
     pub clock: Arc<FakeClock>,
@@ -93,6 +96,10 @@ pub struct StopAt {
 impl Lifecycle for StopAt {
     fn stop_requested(&self) -> bool {
         self.clock.monotonic() >= self.at
+    }
+
+    fn stop_token(&self) -> Option<u64> {
+        Some(FAKE_STOP_TOKEN)
     }
 }
 

@@ -6,6 +6,8 @@ mod launcher;
 mod macos_login;
 mod render;
 mod replicate;
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+mod stop_target;
 mod timespec;
 
 use anyhow::{Context, Result, bail};
@@ -41,7 +43,13 @@ enum Command {
     /// Start the recorder in the background.
     Start,
     /// Stop the background recorder.
-    Stop,
+    Stop {
+        /// Windows, for a recorder from rsRewind 0.1.2 or earlier only: send the stop signal those
+        /// versions share across the whole Windows session. It stops whichever such recorder runs
+        /// in this session at that moment, even one recording into another data folder.
+        #[arg(long)]
+        legacy_session: bool,
+    },
     /// Show whether rsRewind is recording, and what it has stored.
     Status {
         #[arg(long)]
@@ -275,7 +283,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Daemon => daemon(&data),
         Command::Start => start(&data),
-        Command::Stop => stop(&data),
+        Command::Stop { legacy_session } => stop(&data, legacy_session),
         Command::Status { json } => status(&data, json),
         Command::Pause {
             minutes,
@@ -423,8 +431,8 @@ fn start(data: &DataDir) -> Result<ExitCode> {
 }
 
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
-fn stop(data: &DataDir) -> Result<ExitCode> {
-    if !signal_stop(data)? {
+fn stop(data: &DataDir, legacy_session: bool) -> Result<ExitCode> {
+    if !signal_stop(data, legacy_session)? {
         println!("rsRewind is not recording in this session.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -439,33 +447,45 @@ fn stop(data: &DataDir) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Signals the stop event of the recorder whose pid this data folder's live heartbeat names, as
-/// Linux and macOS signal that pid. The event is named for that pid and exists only while that
-/// process runs, so if it exits between the heartbeat check and the signal, the signal reaches no
-/// one (before 2026-10-19 the event was one per session, and a recorder started in between, for
-/// any folder, received it; astra review).
+/// Signals the stop event of exactly the recorder run this data folder's live heartbeat names (by
+/// its random stop token). If that run exits between the heartbeat check and the signal, its
+/// event is gone and nothing is signalled; no other run has that event (before 2026-10-19 the
+/// event was one per session, and a recorder started in between, for any folder, received it;
+/// astra review). A 0.1.2 recorder publishes no token and is reached only with `legacy_session`.
 #[cfg(windows)]
-fn signal_stop(data: &DataDir) -> Result<bool> {
-    use rsrewind_daemon::win;
-    let Some(status) = live_status(data)? else {
-        return Ok(false);
-    };
-    if win::signal_stop(status.pid)? {
-        return Ok(true);
+fn signal_stop(data: &DataDir, legacy_session: bool) -> Result<bool> {
+    use stop_target::{StopOutcome, StopPort, stop_recorder};
+    struct Port<'a>(&'a DataDir);
+    impl StopPort for Port<'_> {
+        fn live_heartbeat(&mut self) -> Result<Option<RecorderStatus>> {
+            live_status(self.0)
+        }
+        fn signal_run(&mut self, token: u64) -> Result<bool> {
+            Ok(rsrewind_daemon::win::signal_stop(token)?)
+        }
+        fn signal_legacy_session(&mut self) -> Result<bool> {
+            Ok(rsrewind_daemon::win::signal_legacy_stop()?)
+        }
     }
-    // No event for that pid: the recorder has just exited, or it is from 0.1.2 or earlier, which
-    // listened on one event per session. Only such an older recorder can receive that one, and it
-    // is signalled only while the heartbeat's own process is still running.
-    if live_status(data)?.is_some_and(|now| now.pid == status.pid) && win::process_alive(status.pid)
-    {
-        return Ok(win::signal_legacy_stop()?);
+    match stop_recorder(&mut Port(data), legacy_session)? {
+        StopOutcome::Signalled => Ok(true),
+        StopOutcome::NotRunning => Ok(false),
+        StopOutcome::LegacyRecorder { pid } => bail!(
+            "the recorder recording into {} (pid {pid}) is from rsRewind 0.1.2 or earlier, which \
+             can only be stopped through one signal shared by the whole Windows session; nothing \
+             was sent. Run `rsrewind stop --legacy-session` to send it: it stops whichever 0.1.2 \
+             recorder runs in this session at that moment, even one recording into another folder",
+            data.root().display()
+        ),
     }
-    Ok(false)
 }
 
 /// SIGTERM to the pid in a live heartbeat. The recorder finishes its tick, flushes and exits.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn signal_stop(data: &DataDir) -> Result<bool> {
+fn signal_stop(data: &DataDir, legacy_session: bool) -> Result<bool> {
+    if legacy_session {
+        bail!("--legacy-session is for Windows recorders from 0.1.2 or earlier");
+    }
     let Some(status) = live_status(data)? else {
         return Ok(false);
     };
@@ -1363,7 +1383,7 @@ fn start(_: &DataDir) -> Result<ExitCode> {
     bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-fn stop(_: &DataDir) -> Result<ExitCode> {
+fn stop(_: &DataDir, _: bool) -> Result<ExitCode> {
     bail!("the recorder runs on Windows and KDE Plasma (Wayland) only")
 }
 

@@ -30,16 +30,19 @@ All notable changes to this project are documented in this file. The format foll
   since the last input, the recorder treats it as idle (as on Plasma and macOS) instead of as
   active, so it no longer keeps storing frames when it cannot tell whether anyone is there.
 - **Windows: `rsrewind --data-dir <other folder> stop` stopped the real recorder.** The stop signal
-  was one per Windows session, and `stop` sent it whatever folder it was given. It now requires a
-  live heartbeat in that folder and signals a stop event named for the pid in it, which exists
-  only while that recorder runs, as Linux and macOS signal that pid; if the recorder exits before
-  the signal, the signal reaches no one. A recorder from 0.1.2 or earlier still listens on the old
-  per-session event: `stop` uses it only when that folder's heartbeat is live and its pid still
-  runs. What remains is pid reuse: a recorder started in the instant between check and signal
-  with the very pid that just exited would be stopped; and if that folder's recorder crashed and,
-  within 20 seconds of its last heartbeat, its pid was reused while a 0.1.2 recorder records
-  another folder, that 0.1.2 recorder would be stopped. A 0.1.2 `rsrewind stop` cannot stop a
-  recorder from this version.
+  was one per Windows session, and `stop` sent it whatever folder it was given. Now each run of the
+  recorder picks a random 64-bit stop token, publishes it in its heartbeat (`stop_token` in
+  `status --json`'s counters) and listens on an event named for it, which exists only while that
+  run does. `stop` requires a live heartbeat in the given folder and signals exactly the event that
+  heartbeat names: if that run exits before the signal, or crashed and left a fresh heartbeat,
+  nothing is signalled, and no other run, whatever its pid, can receive it.
+  A recorder from 0.1.2 or earlier publishes no token and listens on the old per-session event.
+  `stop` no longer uses that event by itself: it says so and sends nothing.
+  `rsrewind stop --legacy-session` sends it on request, and it stops whichever 0.1.2 recorder runs
+  in the session at that moment, even one recording into another folder. A 0.1.2 `rsrewind stop`
+  cannot stop a recorder from this version. The installer never stops a recorder; the tray's Stop
+  and Quit run this version's `stop`, so they do not stop a 0.1.2 recorder still running after an
+  upgrade (use `--legacy-session`, or sign out).
 
 ### Added
 

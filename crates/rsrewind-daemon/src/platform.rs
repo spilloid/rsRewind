@@ -136,6 +136,13 @@ impl Clock for SystemClock {
 pub trait Lifecycle {
     /// True once a stop was requested (`rsrewind stop`, Ctrl+C, console close, a signal).
     fn stop_requested(&self) -> bool;
+
+    /// A random identifier for this run of the recorder, published in its heartbeat under
+    /// [`crate::counters::STOP_TOKEN_KEY`], when `rsrewind stop` reaches the recorder through an
+    /// event named for it (Windows). `None` where stop signals the heartbeat's pid instead.
+    fn stop_token(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// One recorder per user session. Windows: the `Local\rsRewind.Recorder` named mutex. Another

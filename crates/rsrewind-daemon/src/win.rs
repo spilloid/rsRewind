@@ -2,13 +2,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentThread, OpenEventW, OpenProcess,
-    PROCESS_SYNCHRONIZE, SetEvent, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
-    WaitForSingleObject,
+    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentThread, OpenEventW, SetEvent,
+    SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL, WaitForSingleObject,
 };
 use windows::core::{BOOL, HSTRING, PCWSTR, w};
 
@@ -16,17 +15,29 @@ use windows::core::{BOOL, HSTRING, PCWSTR, w};
 /// desktop, and another user's recorder on the same machine is not ours to stop.
 const INSTANCE_MUTEX: PCWSTR = w!("Local\\rsRewind.Recorder");
 /// The one stop event per session that recorders up to 0.1.2 created. Recorders from this version
-/// on never create it, so signalling it can only reach such an older recorder.
+/// on never create it, so signalling it can only reach such an older recorder, whichever folder it
+/// records into. `rsrewind stop` uses it only when asked to (`--legacy-session`).
 const LEGACY_STOP_EVENT: PCWSTR = w!("Local\\rsRewind.Stop");
 
 static CTRL_STOP: AtomicBool = AtomicBool::new(false);
 
-/// The stop event of the recorder with process id `pid`. Bound to that one process, so a stop
-/// aimed at a recorder that has since exited cannot reach a recorder started after it (astra
-/// review, 2026-10-19): the event goes away with its process, and another recorder's event has
-/// another name.
-fn stop_event_name(pid: u32) -> HSTRING {
-    HSTRING::from(format!("Local\\rsRewind.Stop.{pid}"))
+/// The stop event of one run of a recorder, named for the random token that run publishes in its
+/// heartbeat. A stop aimed at a run that has since exited cannot reach any other run (astra
+/// review, 2026-10-19): the event goes away with its process, and no other run has its name.
+fn stop_event_name(token: u64) -> HSTRING {
+    HSTRING::from(format!("Local\\rsRewind.Stop.{token:016x}"))
+}
+
+/// A fresh random token: std's `RandomState` is seeded from the OS's random source, mixed with
+/// the pid and the time. Uniqueness, not secrecy, is the point: anyone who can read the heartbeat
+/// can stop the recorder anyway.
+fn random_token() -> u64 {
+    use std::hash::BuildHasher;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::collections::hash_map::RandomState::new().hash_one((std::process::id(), now))
 }
 
 /// Owns a kernel handle and closes it on drop.
@@ -44,17 +55,18 @@ impl Drop for OwnedHandle {
 // SAFETY: kernel object handles are process-wide and usable from any thread.
 unsafe impl Send for OwnedHandle {}
 
-/// Creates (auto-reset, unsignalled) the stop event named for `pid`.
-fn create_stop_event(pid: u32) -> windows::core::Result<OwnedHandle> {
-    let name = stop_event_name(pid);
-    // SAFETY: `name` is a valid NUL-terminated wide string that outlives the call.
+/// Creates (auto-reset, unsignalled) the stop event for `token`. `Ok(None)` if an event of that
+/// name already exists, so a token is never shared with another run.
+fn create_stop_event(token: u64) -> windows::core::Result<Option<OwnedHandle>> {
+    let name = stop_event_name(token);
+    // SAFETY: `name` is a valid NUL-terminated wide string that outlives the call; GetLastError is
+    // read immediately after CreateEventW.
     unsafe {
-        Ok(OwnedHandle(CreateEventW(
-            None,
-            false,
-            false,
-            PCWSTR(name.as_ptr()),
-        )?))
+        let event = OwnedHandle(CreateEventW(None, false, false, PCWSTR(name.as_ptr()))?);
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            return Ok(None);
+        }
+        Ok(Some(event))
     }
 }
 
@@ -62,6 +74,7 @@ fn create_stop_event(pid: u32) -> windows::core::Result<OwnedHandle> {
 pub struct InstanceGuard {
     _mutex: OwnedHandle,
     stop_event: OwnedHandle,
+    stop_token: u64,
     /// The stop event is auto-reset, so the first wait that sees it also clears it. Latch it,
     /// or a check inside the sleep loop swallows the signal and the outer loop never stops.
     stop_seen: AtomicBool,
@@ -81,14 +94,24 @@ impl InstanceGuard {
             }
             mutex
         };
-        // Created before the first heartbeat and closed only when the process exits, after the
-        // last one: while this recorder's heartbeat is live and names its pid, the event exists.
-        let stop_event = create_stop_event(std::process::id())?;
-        Ok(Some(Self {
-            _mutex: mutex,
-            stop_event,
-            stop_seen: AtomicBool::new(false),
-        }))
+        // Created before the first heartbeat (which publishes the token) and closed only when the
+        // process exits, after the last one: while the heartbeat is live, the event exists.
+        loop {
+            let token = random_token();
+            if let Some(stop_event) = create_stop_event(token)? {
+                return Ok(Some(Self {
+                    _mutex: mutex,
+                    stop_event,
+                    stop_token: token,
+                    stop_seen: AtomicBool::new(false),
+                }));
+            }
+        }
+    }
+
+    /// This run's stop token, published in the heartbeat.
+    pub fn stop_token(&self) -> u64 {
+        self.stop_token
     }
 
     /// True once `rsrewind stop` signalled the event or Ctrl+C / console close arrived.
@@ -118,30 +141,18 @@ fn set_named_event(name: PCWSTR) -> windows::core::Result<bool> {
     }
 }
 
-/// Signals the recorder with process id `pid` (read from its data folder's heartbeat) to stop.
-/// `Ok(false)` if no recorder of this version or later with that pid runs in this session.
-pub fn signal_stop(pid: u32) -> windows::core::Result<bool> {
-    let name = stop_event_name(pid);
+/// Signals the recorder run whose heartbeat published `token` to stop. `Ok(false)` if that run is
+/// not running (any more) in this session.
+pub fn signal_stop(token: u64) -> windows::core::Result<bool> {
+    let name = stop_event_name(token);
     set_named_event(PCWSTR(name.as_ptr()))
 }
 
-/// Signals the session-wide stop event of a recorder from 0.1.2 or earlier, which named no pid.
-/// Only such a recorder can receive it. `Ok(false)` if none runs in this session.
+/// Signals the session-wide stop event of recorders from 0.1.2 or earlier. It reaches whichever
+/// such recorder runs in this session at that moment, whatever folder it records into.
+/// `Ok(false)` if none runs.
 pub fn signal_legacy_stop() -> windows::core::Result<bool> {
     set_named_event(LEGACY_STOP_EVENT)
-}
-
-/// Whether a process with this id is running (and visible to us).
-pub fn process_alive(pid: u32) -> bool {
-    // SAFETY: OpenProcess with a plain access mask; the handle is closed by OwnedHandle; a zero
-    // timeout never blocks.
-    unsafe {
-        let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
-            return false;
-        };
-        let process = OwnedHandle(process);
-        WaitForSingleObject(process.0, 0) == WAIT_TIMEOUT
-    }
 }
 
 unsafe extern "system" fn on_console_ctrl(_ctrl_type: u32) -> BOOL {
@@ -175,25 +186,22 @@ mod tests {
         unsafe { WaitForSingleObject(event.0, 0) == WAIT_OBJECT_0 }
     }
 
-    /// The stop signal reaches only the recorder whose pid was read from the folder's heartbeat.
-    /// The pids are ones no process can have (Windows pids are multiples of 4), so this cannot
-    /// touch a recorder running on this machine, nor the session-wide event older recorders use.
+    /// The stop signal reaches only the run whose token the folder's heartbeat published. Fresh
+    /// random tokens, so this cannot touch a recorder running on this machine, nor the
+    /// session-wide event older recorders use.
     #[test]
-    fn a_stop_reaches_only_the_recorder_it_names() -> windows::core::Result<()> {
-        let (exited, running) = (u32::MAX - 2, u32::MAX - 6);
-        let running_event = create_stop_event(running)?;
-        // The recorder that was checked has exited (its event is gone) and another one runs. A
-        // stop meant for the first must not reach the second: with one event per session, it did.
+    fn a_stop_reaches_only_the_run_it_names() -> Result<(), Box<dyn std::error::Error>> {
+        let (exited, running) = (random_token(), random_token());
+        assert_ne!(exited, running);
+        let running_event = create_stop_event(running)?.ok_or("token already in use")?;
+        // The run that was checked has exited (its event is gone) and another one runs. A stop
+        // meant for the first must not reach the second: with one event per session, it did.
         assert!(!signal_stop(exited)?);
         assert!(!signalled(&running_event));
         assert!(signal_stop(running)?);
         assert!(signalled(&running_event));
+        // A second run can never take a token that is in use.
+        assert!(create_stop_event(running)?.is_none());
         Ok(())
-    }
-
-    #[test]
-    fn only_a_running_process_is_alive() {
-        assert!(process_alive(std::process::id()));
-        assert!(!process_alive(u32::MAX - 2));
     }
 }

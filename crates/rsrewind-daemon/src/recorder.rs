@@ -179,6 +179,7 @@ pub(crate) fn run_with_queue(
                 started_at,
                 state.effective_at(clock.now()),
                 &counters,
+                lifecycle.stop_token(),
                 clock.now(),
             );
         }
@@ -219,6 +220,7 @@ pub(crate) fn run_with_queue(
         started_at,
         CaptureState::Stopped,
         &counters,
+        lifecycle.stop_token(),
         clock.now(),
     );
     tracing::info!("recorder stopped");
@@ -239,6 +241,7 @@ fn write_heartbeat(
     started_at: Timestamp,
     state: CaptureState,
     counters: &Counters,
+    stop_token: Option<u64>,
     now: Timestamp,
 ) {
     let status = RecorderStatus {
@@ -246,7 +249,13 @@ fn write_heartbeat(
         started_at,
         heartbeat_at: now,
         state,
-        counters: counters.snapshot(),
+        counters: {
+            let mut counters = counters.snapshot();
+            if let Some(token) = stop_token {
+                counters.insert(counters::STOP_TOKEN_KEY.to_string(), token);
+            }
+            counters
+        },
     };
     if let Err(error) = store.write_status(&status) {
         tracing::warn!(%error, "could not write heartbeat");

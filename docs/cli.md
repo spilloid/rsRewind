@@ -8,7 +8,7 @@ On Windows, the installer does not add the executable to PATH; in PowerShell use
 
 | Command | Purpose |
 |---|---|
-| `rsrewind start` / `stop` | Start the recorder in the background / stop it gracefully. |
+| `rsrewind start` / `stop` | Start the recorder in the background / stop it gracefully. Windows: `stop --legacy-session` stops a recorder from 0.1.2 or earlier, whichever one runs in the Windows session. |
 | `rsrewind daemon` | Run the recorder in this console (debugging). |
 | `rsrewind status [--json]` | Whether it is recording or paused, plus counters. Always available; there is no hidden mode. |
 | `rsrewind pause [--minutes N]` / `resume` | Pause capture, optionally for a fixed time. |
