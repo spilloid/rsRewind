@@ -439,16 +439,28 @@ fn stop(data: &DataDir) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Signals the session's stop event, but only when this data folder has a live recorder. The
-/// event is one per Windows session, not per data folder, so without that check `rsrewind
-/// --data-dir <other> stop` stopped whichever recorder was running (the user's real one), unlike
-/// Linux and macOS, which stop only the pid in that folder's heartbeat.
+/// Signals the stop event of the recorder whose pid this data folder's live heartbeat names, as
+/// Linux and macOS signal that pid. The event is named for that pid and exists only while that
+/// process runs, so if it exits between the heartbeat check and the signal, the signal reaches no
+/// one (before 2026-10-19 the event was one per session, and a recorder started in between, for
+/// any folder, received it; astra review).
 #[cfg(windows)]
 fn signal_stop(data: &DataDir) -> Result<bool> {
-    if live_status(data)?.is_none() {
+    use rsrewind_daemon::win;
+    let Some(status) = live_status(data)? else {
         return Ok(false);
+    };
+    if win::signal_stop(status.pid)? {
+        return Ok(true);
     }
-    Ok(rsrewind_daemon::win::signal_stop()?)
+    // No event for that pid: the recorder has just exited, or it is from 0.1.2 or earlier, which
+    // listened on one event per session. Only such an older recorder can receive that one, and it
+    // is signalled only while the heartbeat's own process is still running.
+    if live_status(data)?.is_some_and(|now| now.pid == status.pid) && win::process_alive(status.pid)
+    {
+        return Ok(win::signal_legacy_stop()?);
+    }
+    Ok(false)
 }
 
 /// SIGTERM to the pid in a live heartbeat. The recorder finishes its tick, flushes and exits.

@@ -1,8 +1,10 @@
 //! `rsrewind --data-dir <folder> stop` stops only a recorder recording into that folder.
 //!
-//! On Windows the stop signal is one named event per session. Before 2026-10-16 `stop` set it
+//! On Windows the stop signal was one named event per session. Before 2026-10-16 `stop` set it
 //! whatever `--data-dir` said, so stopping a test or scratch folder stopped the user's real
-//! recorder. The fix checks the folder's own heartbeat first, as Linux and macOS always did.
+//! recorder. The fix checks the folder's own heartbeat first, as Linux and macOS always did, and
+//! since 2026-10-19 signals an event named for the pid in that heartbeat (unit-tested in
+//! `rsrewind_daemon::win`, where the race between the check and the signal is exercised).
 //!
 //! Grading note: this test can only tell the two behaviours apart on a machine where another
 //! recorder is running in the same session (the old code then printed "Recorder stopped." after
