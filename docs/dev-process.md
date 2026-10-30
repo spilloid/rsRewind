@@ -215,3 +215,131 @@ errors from Windows-only dependencies) and `rsrewind-cli` has two dead-code warn
   ignored). Still not compiled: `macos.swift`, `capture/src/macos.rs`, `daemon/src/macos_platform.rs`,
   doctor's macOS block, tray `macos.rs`; `kwin.rs` and its new test (Linux-only) also not compiled
   here.
+
+### 2026-10-16 — Road to 1.0: reliability, privacy honesty, GIF export, platform parity
+
+- **Routing:** one Opus session as orchestrator and implementer (persist thread and health are
+  concurrency and privacy-adjacent: Opus tier per the table), branch `hardening/road-to-1.0`, on the
+  maintainer's Windows 11 box with the GNU toolchain. The installed, running v0.1.2 recorder and its
+  data folder were only inspected read-only (size, layout, ACL, `config.toml`). **No independent
+  adversarial review** of this round yet; it is owed one (Sonnet or Astra), aimed at the persist
+  streak/retry logic and the doc corrections.
+- **Baseline first:** `cargo fmt --check` and `cargo test --workspace` on `main` (e098329): 408
+  passed, 0 failed, 2 ignored.
+- **Found and fixed (reproduced first):** (1, high) after `forget` (or retention) deleted the
+  application/window rows of the app still in front, the persist thread kept its cached ids and
+  every later moment of that app failed with `ContextMissing` until restart, leaving invisible
+  files and rows. New end-to-end test red on `main` (`persist_errors` = 2, expected 0), green after.
+  (2, high) a failing disk read as "Recording": the capture loop counted a queued frame as saved,
+  and an unchanged screen was never offered again. Now a `persist_failing` gauge feeds a
+  `storage_failing` health, screens are re-offered while it lasts, and the warning is logged once
+  per streak. The end-to-end test replaces `media/` with a file mid-run; with the retry removed
+  (mutant) it shows exactly the old behaviour (`persist_failing` 1, health "saving"). (3) Windows
+  idle failure reported "active" (F4, open since 2026-10-01): now unknown, i.e. do not record.
+  (4) Windows `rsrewind --data-dir X stop` set the session-wide stop event and so stopped the real
+  recorder: now it requires a live heartbeat in X. **Not run red on purpose** (it would have
+  stopped the installed recorder); the new test only discriminates where another recorder runs.
+  (5) `doctor` free-space check was Windows-only: added `df -Pk` for Unix (parser unit-tested; the
+  call was not compiled here) and a storage-footprint line against `max_size_gb`.
+- **Docs that said something untrue, corrected:** PRIVACY.md said MCP logs the request id (it logs a
+  server call number); PRIVACY.md, `docs/macos.md` and `CLAUDE.md` said Mac exports carry the
+  `window_titles` tag (exports off Windows carry no tags, `replicate.rs`); a `backups\recall` path in
+  PRIVACY.md had been mangled into a line break. Added what was true but unsaid (soft cap and what
+  it does not count, custom Windows data folders keep their parent's ACL, Time Machine copies the
+  history, assistants with file access bypass MCP limits, no password/OTP detection).
+- **Tests added and graded:** GIF export (orientation/colour, letterboxing across monitor shapes,
+  odd and extreme sizes, empty/one/300/301 selections, size limits by monitor shape) and a shared
+  storage-encode/query-decode orientation test. Mutation-checked: flipping rows and swapping R/B in
+  `letterbox` each killed by the new GIF tests and by none of the old ones; reversing rows in
+  `encode_webp` killed by the orientation test and by none of storage's 69 tests. Both persist
+  fixes mutation-checked as above. Graded weak: the Windows idle change (no test can make
+  `GetLastInputInfo` fail) and the `stop` test (see above).
+- **Flaky tests (fixed 2026-10-19, after the session resumed):** `a_window_fault_message_never_reaches_a_log_line`
+  failed about 1 run in 6 under parallel runs (its scoped `tracing` subscriber missed lines while
+  other threads logged from the same callsites; a rebuild of the interest cache and a warm-up did
+  not help) and now uses one global subscriber writing to a per-thread buffer. This round's disk-full
+  test was also flaky (a fixed 50 ms wait, and a possible duplicate re-offer): it now waits for the
+  recovered picture and allows one duplicate. 0 failures in 40 consecutive daemon runs.
+- **Deliverables:** the 1.0 bar and pilot checklist (`ROADMAP.md`), `docs/platform-parity.md`.
+- **Verification after:** on Windows, `cargo fmt --check` clean, `cargo clippy --workspace
+  --all-targets --all-features -D warnings` clean, `cargo test --workspace` 418 passed, 0 failed, 2
+  ignored (2026-10-16; re-run on the final commit 2026-10-19). `scripts/check-docs.sh` could not
+  finish here: its XML check needs Python, which this box lacks. Not compiled: every `cfg(target_os = "macos")` and
+  `cfg(target_os = "linux")` path, including the new Unix `free_bytes`.
+
+### 2026-10-19 — Road to 1.0: astra review round
+
+- **Routing:** the review owed by the round above. Astra (Codex `gpt-6-astra`, high effort) did a
+  static adversarial review of the branch diff (no commands or tests run); verdict "ship after
+  fixes", test quality graded B−. Findings adjudicated per STD-001 ("a finding can be right about
+  the problem and wrong about the fix") by an Opus session that reproduced each one before
+  choosing and making the fix, on the maintainer's Windows box (GNU toolchain). Cost: Astra's
+  tokens and cost were not reported to this session (unknown); the Opus session's were not
+  measured either. The installed, running 0.1.2 recorder and its data folder were not touched:
+  every new test uses temp folders and stop-event names no real process can have.
+- **(1, high) Real.** The re-offer of unsaved screens hung on one global "failed since anything was
+  last written" streak, so monitor A's successful extension after monitor B's failed picture reset
+  it before the capture loop looked, and B's unchanged screen was never offered again. Reproduced
+  with a tick-level test that feeds the jobs to a real persist loop in a forced order (red:
+  `["extend DISPLAY1", "extend DISPLAY2"]`, expected B's picture re-offered). Fix (ours, close to
+  astra's): the persist thread marks the *monitor* (failed or fenced picture, extension whose
+  picture is missing or was deleted) in a set shared with the capture loop; only the capture loop
+  taking it, or that monitor's own saved picture, clears it. The streak now only drives health.
+  Side effect, intended: a static screen after `forget` or retention is offered again (closes
+  remediation F5's open item); PRIVACY.md now says recording goes on after `forget`.
+- **(2, high) Real.** A fenced picture's failed `remove_file` was ignored and the job treated as an
+  expected drop. Reproduced with an injected refused delete (red: `persist_errors` 0, file left).
+  Fix: a failed delete counts as a persist error, is logged, and is retried before every later job
+  and at shutdown; doctor's orphan listing remains the backstop. CHANGELOG/PRIVACY say exactly that.
+- **(3, medium) Real, fixed narrower than astra's proposal.** Windows `stop` checked the folder's
+  heartbeat and then set a per-session event; a recorder started in between, for any folder, got
+  the signal. Not run red against the old code: the old event name is the one the installed
+  recorder listens on. Fix: the event is named for the recorder's pid (`Local\rsRewind.Stop.<pid>`)
+  and `stop` signals the pid from the heartbeat, so an exited recorder's stop reaches no one. Unit
+  test with impossible pids; mutation-checked (one shared name instead of per-pid: red). A 0.1.2
+  recorder is still reached through the old per-session event, only while the heartbeat's pid runs.
+  What remains (in CHANGELOG): pid reuse in that instant, or after a crash within 20 s while a 0.1.2
+  recorder runs; an old `rsrewind stop` cannot stop a new recorder.
+- **(4, medium) Real.** `wait_for_states` synchronised on the row insert, before the observation,
+  the app/window rows and the gauge. Shown with a 300 ms pause injected after the insert: the old
+  disk-full test failed, and the old forget test passed even with the `ContextMissing` fix removed
+  (it no longer exercised it). Fix: hooks wait until the persist thread has handled every queued
+  job (queued/handled counts); the disk-full test now asserts the exact outcome (no duplicate
+  allowed) and the forget test that the observation existed before the forget. Both pass under the
+  same injected pause; the forget test then fails if the fix is removed.
+- **(5, low) Real.** `df` output was parsed by its English header under the user's locale. Fix:
+  `LC_ALL=C` on the subprocess; a test checks the command's environment (red without it). Not
+  observed live: this box's `df` has no translations. The Unix call itself is still not compiled
+  here.
+- **Rejected:** none. The review's remark that the media-as-file trick tests media failure, not
+  real volume exhaustion, stands (documented in the test); a real full-disk drill is on the 1.0 bar.
+- **Verification:** `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features
+  -D warnings` clean; `cargo test --workspace` 424 passed, 0 failed, 2 ignored; the daemon tests 30
+  consecutive runs and 60 runs four at a time with no failure.
+
+### 2026-10-19 — Road to 1.0: astra re-review of the fixes
+
+- **Routing:** Astra re-reviewed the five fix commits (static). Findings 1, 2, 4 and 5 resolved;
+  one remained, adjudicated and fixed by the same Opus session.
+- **(Medium) Real.** The automatic fallback to the 0.1.2 per-session stop event kept the original
+  check-then-signal race without any pid reuse (0.1.2 recorder A passes both checks, exits, 0.1.2
+  recorder B starts for another folder and gets the stop), and the CHANGELOG named pid reuse as the
+  only residue. Also real: a crashed run's fresh heartbeat plus a reused pid named the wrong process.
+  Reproduced on the CLI path: the decision was extracted into `stop_target::stop_recorder` over a
+  `StopPort` (behaviour unchanged), and a fake session that swaps recorders between the last check
+  and the signal failed ("stop for folder A stopped the recorder for folder B"). Not run against
+  the real per-session event: the installed 0.1.2 recorder listens on it.
+- **Fix:** each run picks a random 64-bit stop token, publishes it in the heartbeat (`stop_token`)
+  and creates `Local\rsRewind.Stop.<token>` (refusing a name that already exists); `stop` signals
+  exactly that event, so an exited or crashed run reaches no one, whatever pids do. The automatic
+  legacy fallback is gone: for a heartbeat without a token, `stop` sends nothing and names the
+  opt-in `stop --legacy-session`, documented as reaching whichever 0.1.2 recorder runs in the
+  session. Checked first: the installer has no stop step (MSI MajorUpgrade only) and the tray's
+  Stop/Quit run this version's `stop`; CHANGELOG says they do not stop a 0.1.2 recorder left
+  running across an upgrade. Tests: five `stop_target` cases (own recorder, legacy replaced, current
+  replaced, stale heartbeat with a reused pid, legacy with the flag), `win.rs` token test, an
+  end-to-end `stop_scope` test (gone run and legacy heartbeat signal nothing), and the fake run's
+  heartbeat carries its token. CHANGELOG, ARCHITECTURE, platform-parity and `docs/cli.md` state the
+  new guarantee.
+- **Verification:** see the commit; fmt, clippy `-D warnings` and `cargo test --workspace` green,
+  daemon and CLI stop tests looped.

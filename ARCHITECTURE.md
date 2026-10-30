@@ -137,10 +137,16 @@ The persist thread and the OCR thread each own their own `Store` (their own SQLi
 WAL mode plus a 5-second busy timeout make two writers from one process safe. See
 [Storage model](#storage-model).
 
-Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) on Windows (the
-`SingleInstance` trait of the [platform seam](#platform-seam-and-capabilities); another platform
-needs an equivalent, e.g. a lock file held for the process lifetime) so a second `rsrewind
-daemon`/`start` cannot run concurrently and corrupt or race on the same database.
+Single-instance enforcement uses a named mutex (`Local\rsRewind.Recorder`) on Windows, one per
+logon session whatever the data folder, and an advisory lock on `<data>/recorder.lock` on Linux and
+macOS, one per data folder (the `SingleInstance` trait of the
+[platform seam](#platform-seam-and-capabilities)), so a second `rsrewind daemon`/`start` cannot run
+concurrently and corrupt or race on the same database. `rsrewind stop` acts only on a recorder whose
+heartbeat is live in the data folder it was given, and signals the recorder that heartbeat names:
+on Linux and macOS its pid; on Windows the event `Local\rsRewind.Stop.<token>`, where the token is
+a random 64-bit value each run publishes in its heartbeat (`stop_token`) and the event exists only
+while that run does. A Windows recorder from 0.1.2 or earlier (no token) is signalled only by
+`stop --legacy-session`, through the old per-session event; see `docs/platform-parity.md`.
 
 ## Platform seam and capabilities
 
@@ -154,7 +160,7 @@ only through the traits in `rsrewind-daemon/src/platform.rs`:
 | `CaptureBackend` / `FrameSource` — one newest-frame-only source per display | `rsrewind-capture::MonitorCapturer` (Windows.Graphics.Capture) |
 | `IdleClock` — time since input, `None` = unknown | `rsrewind-capture::idle_millis` (`GetLastInputInfo`) |
 | `OcrBackend` (created on the OCR thread by an `OcrFactory`) | `rsrewind-ocr::OcrEngine` (Windows.Media.Ocr), thread priority lowered first |
-| `Lifecycle` / `SingleInstance` | `win::InstanceGuard`: `Local\rsRewind.Recorder` mutex, `rsrewind stop` event, console handler |
+| `Lifecycle` / `SingleInstance` | `win::InstanceGuard`: `Local\rsRewind.Recorder` mutex, per-run `rsrewind stop` event (named for the heartbeat's `stop_token`), console handler |
 | `Clock` — wall, monotonic, sleep | `SystemClock` |
 
 `run_with(options, Platform)` is the portable entry; `rsrewind_daemon::run` builds the host's

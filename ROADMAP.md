@@ -179,6 +179,85 @@ Everything above, proven together:
 - Documented architecture (`ARCHITECTURE.md`) and privacy model (`PRIVACY.md`), kept current with
   the shipped product.
 
+### The 1.0 bar (written 2026-10-16)
+
+The list above says what 1.0 *contains*. This says how we know it is ready, as checks someone can
+pass or fail. 1.0 is tagged when every line holds on the release candidate; until then releases stay
+0.x and patch whatever the pilot finds. Each check, when run, gets its date and result appended to the
+re-verify list in `CLAUDE.md` (STD-003 rule 4). Platform facts behind it: `docs/platform-parity.md`.
+
+**Reliability (the pilot)**
+
+1. **Four consecutive weeks** of daily work use on one Windows machine on one build line, during which:
+   no recorder crash other than an OS crash or power loss (no "recorder stopped unexpectedly" gap you
+   cannot explain), no "Nothing is being saved" fault you did not cause, `persist_errors` = 0 in
+   `rsrewind status --json` at the end of each week (or each one explained in an issue), and
+   `rsrewind doctor` shows the database check ok. A patch that touches capture, persist or storage
+   restarts the count; a docs or UI-only patch does not.
+2. **Retention at the cap**: a scratch data folder with `max_size_gb = 1` recorded for at least three
+   working days stays within 1 GB plus one hour of capture (retention runs hourly) by `rsrewind
+   doctor`'s footprint, and `retention_days = 1` removes day-old moments the next day.
+3. **Disk full**: recording into a small volume (a VHD or USB stick) until it is full shows "Recording ·
+   nothing saved: saving to disk is failing" in `status`, the window and the tray within a few
+   seconds; freeing space resumes saving without a restart; `doctor` then shows the database ok, and
+   the day's log is not flooded (one warning per failure streak).
+4. **Crash and kill**: ending the recorder from Task Manager / `kill -9` ten times during active
+   capture, and one hard power-off: after each restart the database check is ok, the gap reads
+   "recorder stopped unexpectedly", and no picture is half-written.
+5. **8-hour acceptance run** (v0.1.0's criterion) on each platform: working set flat within about 20 %
+   after the first hour; on Windows the handle count flat too.
+6. **Sleep, lock, displays**: 20 sleep/wake cycles, lock/unlock, unplug/replug a monitor, change
+   resolution and scaling, on each platform: capture resumes within 30 s, nothing of the lock screen
+   or a stale picture is stored, an excluded window still blanks the right monitor.
+7. **Clock changes**: on a scratch folder, set the clock back an hour and forward a day: no moment
+   deleted by retention that the configured horizon did not cover, no span shortened.
+
+**Privacy**
+
+8. Every statement in `PRIVACY.md` re-read against the release candidate within 14 days of tagging,
+   and any mismatch fixed in the doc or the code first.
+9. Exclusion drill per platform: a password manager on each monitor in turn skips exactly that
+   monitor (the media file count does not grow for it); on Windows the UAC prompt and the lock screen
+   leave nothing.
+10. Issue #12's recorder findings each closed or explicitly accepted in `PRIVACY.md`.
+11. Owner decisions made and written down: the macOS title-rule relaxation and the `window_titles`
+    export tag (`docs/macos.md`); the encryption-at-rest position for 1.0
+    (`docs/design/encryption-at-rest.md`); whether a custom Windows data folder gets an owner-only ACL.
+12. MCP verified off on a fresh install, and `get_screenshot` refused until `allow_screenshots = true`.
+
+**Exports**
+
+13. GIF export run by a person on real history: 2, 30 and 300 moments; moments from two monitors of
+    different sizes; each offered size; the files open in a browser and the OS image viewer and look
+    right (upright, correct colours, nothing stretched). PNG save and Copy image once per platform;
+    WebM once on Windows with `ffmpeg` installed.
+
+**Platforms and release**
+
+14. The real-Mac checklist in `docs/macos.md` run once on the candidate, dated, frames confirmed
+    upright; the Plasma recorder run once with two screens or across a KWin restart.
+15. Windows 10 either run once or removed from every support statement.
+16. Installer upgrade from the previous 0.x and uninstall re-tested (history kept), per
+    `docs/installer.md`.
+17. CI green on Windows, Ubuntu and macOS for the release commit, and no entry in `CLAUDE.md`'s
+    re-verify list older than 30 days at tagging without a fresh date.
+
+**Pilot checklist for the operator** (Windows work PC, one item per day or so; note the date and
+result in an issue or in `CLAUDE.md`):
+
+- [ ] End of each week: `rsrewind status --json` → note `persist_errors`, `capture_errors`,
+  `dropped_queue_full`; `rsrewind doctor` → database ok, disk footprint.
+- [ ] `rsrewind gaps --since 7d`: every "recorder stopped unexpectedly" gap has an explanation.
+- [ ] Forget the last 10 minutes from the tray while an app is in front, keep working in that app,
+  then check that new moments of it appear (the 0.1.2 bug fixed on `hardening/road-to-1.0`).
+- [ ] GIF: pick 2 moments → export at 960 → open it in a browser. Then 30 moments across both
+  monitors, then a long Shift-selection (it should refuse above 300 and say why), then each size.
+  Check: upright, colours right, the smaller monitor letterboxed, not stretched.
+- [ ] PNG save and Copy image into a ticket.
+- [ ] Lock the PC for 10 minutes, unplug a monitor, sleep the laptop overnight: the timeline shows
+  gaps, not frozen or wrong pictures.
+- [ ] Open a password manager on one monitor: that monitor's timeline has a gap, the other does not.
+
 ### macOS (2026-10-10; status 2026-10-11)
 
 The native Apple Silicon app has shipped with every release since 0.0.7 (ScreenCaptureKit capture,

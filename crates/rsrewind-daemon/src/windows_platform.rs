@@ -58,6 +58,10 @@ impl Lifecycle for InstanceGuard {
     fn stop_requested(&self) -> bool {
         InstanceGuard::stop_requested(self)
     }
+
+    fn stop_token(&self) -> Option<u64> {
+        Some(InstanceGuard::stop_token(self))
+    }
 }
 
 /// EnumDisplayMonitors / EnumWindows / GetForegroundWindow.
@@ -109,12 +113,12 @@ impl FrameSource for WgcFrames {
     }
 }
 
-/// `GetLastInputInfo`. It reports "active" when Windows will not say (remediation F4, open).
+/// `GetLastInputInfo`. Unknown when Windows will not say, which the recorder treats as idle.
 struct WindowsIdle;
 
 impl IdleClock for WindowsIdle {
     fn idle_millis(&mut self) -> Option<u64> {
-        Some(rsrewind_capture::idle_millis())
+        rsrewind_capture::idle_millis()
     }
 }
 

@@ -182,10 +182,12 @@ fn collect(data: &DataDir) -> Vec<Check> {
             }
             Err(error) => checks.push(check("media", Level::Warn, error.to_string())),
         }
+        if let Some(config) = &config {
+            checks.push(storage_check(store, config));
+        }
     }
 
-    // Disk space
-    #[cfg(windows)]
+    // Disk space (every platform: a full disk stops saving, see the "saving" check)
     match free_bytes(data.root()) {
         Some(free) => {
             let level = if free < 2 << 30 {
@@ -538,6 +540,48 @@ fn macos_checks(config: Option<&Config>) -> Vec<Check> {
     checks
 }
 
+/// What the size limit counts, against the limit. Retention runs hourly, so being up to an hour of
+/// capture over it is expected; well over it means retention is not keeping up or cannot delete.
+fn storage_check(store: &Store, config: &Config) -> Check {
+    const NAME: &str = "storage";
+    let used = match store.disk_bytes() {
+        Ok(used) => used,
+        Err(error) => return check(NAME, Level::Warn, error.to_string()),
+    };
+    let cap_gb = config.storage.max_size_gb;
+    let days = match config.storage.retention_days {
+        0 => "kept forever".to_string(),
+        n => format!("kept {n} days"),
+    };
+    let counted =
+        "recall.db, its WAL and media/; backups, exports, outbox, sources and logs are not counted";
+    if cap_gb <= 0.0 {
+        return check(
+            NAME,
+            Level::Ok,
+            format!(
+                "{} on disk, no size limit, {days} ({counted})",
+                crate::human_bytes(used)
+            ),
+        );
+    }
+    let cap = (f64::from(cap_gb) * 1024.0 * 1024.0 * 1024.0) as u64;
+    let level = if used > cap.saturating_add(cap / 10) {
+        Level::Warn
+    } else {
+        Level::Ok
+    };
+    check(
+        NAME,
+        level,
+        format!(
+            "{} on disk of a {} limit, {days} ({counted})",
+            crate::human_bytes(used),
+            crate::human_bytes(cap)
+        ),
+    )
+}
+
 /// Whether the running recorder is saving anything (issue #33), from its heartbeat. `None` from a
 /// recorder that predates the signal.
 fn saving_check(counters: &std::collections::BTreeMap<String, u64>) -> Option<Check> {
@@ -545,10 +589,11 @@ fn saving_check(counters: &std::collections::BTreeMap<String, u64>) -> Option<Ch
     let (state, since) = health::from_counters(counters)?;
     let count = |key: &str| counters.get(key).copied().unwrap_or(0);
     let tally = format!(
-        "{} tick(s) with the window list unknown, {} with idle/session unknown, {} capture error(s) so far",
+        "{} tick(s) with the window list unknown, {} with idle/session unknown, {} capture error(s), {} failed write(s) so far",
         count("window_list_unknown_ticks"),
         count("idle_unknown_ticks"),
-        count("capture_errors")
+        count("capture_errors"),
+        count("persist_errors")
     );
     let since = since
         .map(|t| format!(" since {}", t.to_local().format("%Y-%m-%d %H:%M:%S")))
@@ -586,6 +631,46 @@ fn free_bytes(path: &std::path::Path) -> Option<u64> {
     // `free` is a valid out-pointer.
     unsafe { GetDiskFreeSpaceExW(&path, Some(&mut free), None, None) }.ok()?;
     Some(free)
+}
+
+/// Free space on Linux and macOS, from POSIX `df -Pk` (no unsafe `statvfs` binding needed for one
+/// diagnostic line). `None` when `df` is missing or its output is not the POSIX format.
+#[cfg(unix)]
+fn free_bytes(path: &std::path::Path) -> Option<u64> {
+    let out = df_command(path).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_df_available(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `df -Pk <path>` in the POSIX locale: GNU `df` translates its header (German: "Verfügbar"), and
+/// the parser below finds the column by its English name.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn df_command(path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("df");
+    command
+        .arg("-Pk")
+        .arg(path)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
+}
+
+/// The "Available" column (1024-byte blocks) of `df -P`'s one data line, in bytes.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn parse_df_available(output: &str) -> Option<u64> {
+    let mut lines = output.lines();
+    let header = lines.next()?;
+    if !header.contains("Avail") {
+        return None;
+    }
+    // Filesystem, 1024-blocks, Used, Available, Capacity, Mounted on. A long device name never
+    // wraps with -P, but a mount point may contain spaces, so count from the left.
+    let line = lines.find(|l| !l.trim().is_empty())?;
+    let available: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
+    available.checked_mul(1024)
 }
 
 /// Sealed-segment backlog and whether history could be deleted before it is exported.
@@ -639,4 +724,45 @@ fn replication_check(data: &DataDir, store: &Store, config: Option<&Config>) -> 
             super::human_bytes(bytes)
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_df_available;
+
+    #[test]
+    fn df_output_gives_available_bytes() {
+        // GNU coreutils (Linux) and BSD (macOS) `df -Pk`.
+        let linux = "Filesystem     1024-blocks      Used Available Capacity Mounted on\n\
+                     /dev/nvme0n1p3   486853376 201234567 260000000      44% /home\n";
+        assert_eq!(parse_df_available(linux), Some(260_000_000 * 1024));
+        let macos = "Filesystem     1024-blocks      Used Available Capacity  Mounted on\n\
+                     /dev/disk3s5     971350180 512345678 400000000    57%    /System/Volumes/Data\n";
+        assert_eq!(parse_df_available(macos), Some(400_000_000 * 1024));
+        // A mount point with spaces does not move the column.
+        let spaced = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
+                      /dev/sdb1 1000 10 990 1% /media/My Disk\n";
+        assert_eq!(parse_df_available(spaced), Some(990 * 1024));
+        assert_eq!(parse_df_available(""), None);
+        assert_eq!(parse_df_available("garbage\n1 2 3 x\n"), None);
+        assert_eq!(parse_df_available("Filesystem Avail\n"), None);
+    }
+
+    /// astra review, 2026-10-19, finding 5: GNU `df` translates its header, which the parser
+    /// rejects, so `doctor` lost the free-space line on localized systems. `df` now runs in the
+    /// POSIX locale.
+    #[test]
+    fn df_runs_in_the_posix_locale() {
+        let german = "Dateisystem    1024-Blöcke  Benutzt Verfügbar Kapazität Eingehängt auf\n\
+                      /dev/sda1        100000    40000     60000       40% /\n";
+        assert_eq!(parse_df_available(german), None, "a translated header");
+        let command = super::df_command(std::path::Path::new("/data"));
+        let lc_all = command
+            .get_envs()
+            .find(|(key, _)| *key == "LC_ALL")
+            .and_then(|(_, value)| value);
+        assert_eq!(lc_all, Some(std::ffi::OsStr::new("C")));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["-Pk", "/data"]);
+    }
 }

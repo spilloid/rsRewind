@@ -4,6 +4,7 @@
 //! exact tick. The only wait is a condition variable on the OCR thread's progress.
 
 use super::fakes::*;
+use crate::persist::Handoff;
 use crate::recorder::run_with_queue;
 use crate::{RunOptions, run_with};
 use rsrewind_core::{
@@ -199,6 +200,7 @@ fn an_unknown_window_list_is_visible_in_the_heartbeat_and_recording_resumes() ->
         },
         platform(&desktop, Capabilities::WINDOWS, &clock, secs(9.0), None),
         64,
+        Arc::default(),
     )?;
 
     let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
@@ -300,6 +302,7 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
             Some(fake_ocr(probe.clone())),
         ),
         64,
+        Arc::default(),
     )?;
 
     // Shutdown order: by the time run_with returns, the OCR thread has finished (its backend is
@@ -312,6 +315,11 @@ fn records_searchable_history_with_privacy_and_pause_holes_and_stops_in_order() 
     let store = Store::open_existing(&data)?;
     let status = store.read_status()?.ok_or("no heartbeat")?;
     assert_eq!(status.state, CaptureState::Stopped);
+    // The run's stop token is published, so `rsrewind stop` can name exactly this run.
+    assert_eq!(
+        status.counters.get(crate::counters::STOP_TOKEN_KEY),
+        Some(&FAKE_STOP_TOKEN)
+    );
     assert_eq!(status.counters.get("persisted_states"), Some(&4));
     assert_eq!(status.counters.get("privacy_skips"), Some(&2));
     assert_eq!(status.counters.get("paused_ticks"), Some(&2));
@@ -386,4 +394,189 @@ fn walk(dir: &std::path::Path) -> Result<usize, Box<dyn std::error::Error>> {
         }
     }
     Ok(files)
+}
+
+/// Waits (real time, bounded) until the persist thread has handled every job queued so far, with
+/// all its effects visible: rows, observations, the failure gauge, the monitors it marked to be
+/// offered again. Hooks run on the recorder thread between ticks, so nothing is queued while this
+/// waits, and the next tick sees exactly what those jobs left behind.
+fn settle(handoff: &Handoff) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if handoff.settled() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    false
+}
+
+/// `forget` (or retention) deletes the application and window rows nothing references any more,
+/// which after "forget the last 10 minutes" is usually the app still in front. The persist thread
+/// must look them up again instead of failing every later moment of that app with
+/// `ContextMissing` until the recorder restarts (found 2026-10-16, road-to-1.0 audit).
+#[test]
+fn moments_after_a_forget_of_the_app_in_front_are_still_recorded() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("data"));
+    let clock = FakeClock::new();
+    let desktop = one_monitor_desktop();
+    let handoff = Arc::new(Handoff::default());
+    lock(&desktop).show(display(0), frame(1)); // t=0: stored, notepad / notes.txt
+    let forgot = Arc::new(Mutex::new(None));
+    {
+        let (d, data, forgot, handoff) = (
+            desktop.clone(),
+            data.clone(),
+            forgot.clone(),
+            handoff.clone(),
+        );
+        clock.at(secs(1.5), move || {
+            // `rsrewind forget` from another process: everything so far, notepad's rows with it.
+            // Only once the picture, its observation and notepad's rows are all written, or the
+            // forget could miss the rows the persist thread has cached.
+            if settle(&handoff)
+                && let Ok(store) = Store::open_existing(&data)
+                && let Ok(before) = store.stats()
+            {
+                *lock(&forgot) = store
+                    .delete_range(Timestamp(ms(0.0) - 1), Timestamp(ms(1.5)))
+                    .ok()
+                    .map(|r| (r.visual_states_deleted, before.observations));
+            }
+            lock(&d).show(display(0), frame(2)); // t=2: same app and window, new picture
+        });
+    }
+    {
+        let d = desktop.clone();
+        clock.at(secs(3.5), move || lock(&d).show(display(0), frame(3))); // t=4
+    }
+    run_with_queue(
+        RunOptions {
+            data: data.clone(),
+            config: config(false),
+        },
+        platform(&desktop, Capabilities::WINDOWS, &clock, secs(6.0), None),
+        64,
+        handoff,
+    )?;
+
+    assert_eq!(
+        *lock(&forgot),
+        Some((1, 1)),
+        "the forget did not run as scripted (one picture, after its observation was written)"
+    );
+    let store = Store::open_existing(&data)?;
+    let status = store.read_status()?.ok_or("no heartbeat")?;
+    assert_eq!(status.counters.get("persist_errors"), Some(&0));
+    let manifest = sealed(&data, FULL_TAGS)?;
+    let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
+    assert_eq!(captured, [ms(2.0), ms(4.0)]);
+    // Each stored picture is on the timeline (an observation shows it), credited to notepad.
+    for (index, state) in manifest.states.iter().enumerate() {
+        let shown = manifest.events.iter().any(|e| {
+            e.kind == "observation"
+                && e.state == u32::try_from(index).ok()
+                && e.application.is_some()
+        });
+        assert!(
+            shown,
+            "state at {} has no credited observation",
+            state.captured_at
+        );
+    }
+    Ok(())
+}
+
+/// A full disk (here: `media/` replaced by a file, so no picture can be written) must not read as
+/// "Recording" while nothing is saved: the heartbeat says `storage_failing`, and once writing works
+/// again the screen on display is saved without waiting for it to change (road-to-1.0 audit,
+/// 2026-10-16; before, the capture loop counted a queued frame as saved and never offered a
+/// static screen again). Every hook first waits for the persist thread to finish what was queued,
+/// so each tick sees the outcome of the one before and the run is exact (astra review, 2026-10-19).
+#[test]
+fn a_failing_disk_is_reported_and_recording_recovers_when_it_has_room() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let data = DataDir::new(tmp.path().join("data"));
+    let clock = FakeClock::new();
+    let desktop = one_monitor_desktop();
+    let handoff = Arc::new(Handoff::default());
+    lock(&desktop).show(display(0), frame(1)); // t=0: stored
+    let parked: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
+    {
+        let (d, data, parked, handoff) = (
+            desktop.clone(),
+            data.clone(),
+            parked.clone(),
+            handoff.clone(),
+        );
+        clock.at(secs(1.5), move || {
+            if settle(&handoff) {
+                *lock(&parked) = break_media(&data).ok();
+            }
+            lock(&d).show(display(0), frame(2)); // t=2..11: never stored
+        });
+    }
+    for t in 2..=12 {
+        let handoff = handoff.clone();
+        clock.at(secs(f64::from(t) + 0.5), move || {
+            settle(&handoff);
+        });
+    }
+    let seen: Arc<Mutex<Option<std::collections::BTreeMap<String, u64>>>> =
+        Arc::new(Mutex::new(None));
+    {
+        let (data, seen) = (data.clone(), seen.clone());
+        clock.at(secs(10.6), move || {
+            if let Ok(Some(status)) = Store::open_existing(&data).and_then(|s| s.read_status()) {
+                *lock(&seen) = Some(status.counters);
+            }
+        });
+    }
+    {
+        let (data, parked) = (data.clone(), parked.clone());
+        clock.at(secs(11.7), move || {
+            // Room again (after the t=11 picture failed). The screen still shows picture 2 and
+            // does not change.
+            if let Some(parked) = lock(&parked).take() {
+                let _ = restore_media(&data, &parked);
+            }
+        });
+    }
+    run_with_queue(
+        RunOptions {
+            data: data.clone(),
+            config: config(false),
+        },
+        platform(&desktop, Capabilities::WINDOWS, &clock, secs(16.0), None),
+        64,
+        handoff,
+    )?;
+
+    let mid = lock(&seen).clone().ok_or("no heartbeat read mid-run")?;
+    assert_eq!(
+        crate::health::from_counters(&mid).map(|(h, _)| h),
+        Some(crate::health::Health::StorageFailing),
+        "{mid:?}"
+    );
+    assert!(
+        mid.get("persist_errors").is_some_and(|&n| n >= 3),
+        "{mid:?}"
+    );
+
+    let store = Store::open_existing(&data)?;
+    let status = store.read_status()?.ok_or("no heartbeat")?;
+    assert_eq!(
+        crate::health::from_counters(&status.counters).map(|(h, _)| h),
+        Some(crate::health::Health::Saving),
+        "recovered"
+    );
+    assert_eq!(status.counters.get("persist_failing"), Some(&0));
+    // Picture 2 was offered on every tick from 2 to 11 and failed each time.
+    assert_eq!(status.counters.get("persist_errors"), Some(&10));
+    let manifest = sealed(&data, FULL_TAGS)?;
+    let captured: Vec<i64> = manifest.states.iter().map(|s| s.captured_at).collect();
+    // The unchanged screen is saved once there is room, exactly once.
+    assert_eq!(captured, [ms(0.0), ms(12.0)]);
+    Ok(())
 }

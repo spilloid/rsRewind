@@ -1129,4 +1129,235 @@ mod tests {
         assert_eq!(std::fs::read_dir(tmp.path())?.count(), 1);
         Ok(())
     }
+
+    // ----- GIF export under real-world shapes (road-to-1.0 audit, 2026-10-16) ------------------
+
+    const RED: [u8; 3] = [255, 0, 0];
+    const GREEN: [u8; 3] = [0, 255, 0];
+    const BLUE: [u8; 3] = [0, 0, 255];
+    const WHITE: [u8; 3] = [255, 255, 255];
+    const BLACK: [u8; 3] = [0, 0, 0];
+
+    /// BGRA picture whose quadrants are red (top left), green (top right), blue (bottom left) and
+    /// white (bottom right): a flipped, mirrored or channel-swapped frame cannot pass for it.
+    fn quadrants(w: u32, h: u32) -> Bgra {
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let [r, g, b] = match (x < w / 2, y < h / 2) {
+                    (true, true) => RED,
+                    (false, true) => GREEN,
+                    (true, false) => BLUE,
+                    (false, false) => WHITE,
+                };
+                pixels.extend_from_slice(&[b, g, r, 255]);
+            }
+        }
+        Bgra {
+            width: w,
+            height: h,
+            pixels,
+        }
+    }
+
+    fn frames_of(pictures: Vec<Bgra>, step_ms: i64) -> (Fake, Vec<Frame>) {
+        let mut map = HashMap::new();
+        let mut frames = Vec::new();
+        for (i, p) in pictures.into_iter().enumerate() {
+            let path = format!("q{i}");
+            map.insert(path.clone(), p);
+            frames.push(Frame {
+                source: None,
+                media_path: path,
+                at: Timestamp(1_790_000_000_000 + i as i64 * step_ms),
+            });
+        }
+        (Fake(map), frames)
+    }
+
+    struct Decoded {
+        width: u16,
+        height: u16,
+        /// One RGBA canvas per frame, with its delay in centiseconds.
+        frames: Vec<(Vec<u8>, u16)>,
+    }
+
+    fn decode(path: &Path) -> Result<Decoded, Box<dyn std::error::Error>> {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::RGBA);
+        let mut decoder = options.read_info(std::fs::File::open(path)?)?;
+        let (width, height) = (decoder.width(), decoder.height());
+        let mut frames = Vec::new();
+        while let Some(frame) = decoder.read_next_frame()? {
+            // Every frame the exporter writes covers the whole canvas.
+            assert_eq!((frame.left, frame.top), (0, 0));
+            assert_eq!((frame.width, frame.height), (width, height));
+            frames.push((frame.buffer.to_vec(), frame.delay));
+        }
+        Ok(Decoded {
+            width,
+            height,
+            frames,
+        })
+    }
+
+    fn assert_px(canvas: &[u8], width: u16, x: usize, y: usize, want: [u8; 3]) {
+        let i = (y * width as usize + x) * 4;
+        let got = &canvas[i..i + 3];
+        // NeuQuant palettes are close, not exact.
+        assert!(
+            got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 40),
+            "pixel ({x}, {y}) is {got:?}, expected about {want:?}"
+        );
+    }
+
+    fn gif(fake: &Fake, frames: &[Frame], max_dim: u32, dir: &Path) -> Result<PathBuf, String> {
+        clip(
+            fake,
+            frames,
+            ClipFormat::Gif,
+            max_dim,
+            dir,
+            None,
+            &Progress::default(),
+        )
+    }
+
+    /// The macOS 0.1.1 bug stored every frame upside down. Whatever a backend does, an export must
+    /// neither flip, mirror nor swap the channels of what was stored.
+    #[test]
+    fn a_gif_keeps_the_picture_upright_unmirrored_and_in_colour()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let (fake, frames) = frames_of(vec![quadrants(64, 40), quadrants(64, 40)], 500);
+        let decoded = decode(&gif(&fake, &frames, 32, tmp.path())?)?;
+        assert_eq!((decoded.width, decoded.height), (32, 20));
+        for (canvas, _) in &decoded.frames {
+            assert_px(canvas, 32, 3, 3, RED);
+            assert_px(canvas, 32, 28, 3, GREEN);
+            assert_px(canvas, 32, 3, 16, BLUE);
+            assert_px(canvas, 32, 28, 16, WHITE);
+        }
+        Ok(())
+    }
+
+    /// Moments picked across monitors of different shapes: the canvas is the first frame's shape,
+    /// every other frame is fitted inside it on black (never stretched, never enlarged).
+    #[test]
+    fn a_gif_across_monitors_of_different_shapes_letterboxes_them()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let (fake, frames) = frames_of(
+            vec![quadrants(320, 180), quadrants(100, 100), quadrants(40, 20)],
+            500,
+        );
+        let decoded = decode(&gif(&fake, &frames, 160, tmp.path())?)?;
+        assert_eq!((decoded.width, decoded.height), (160, 90));
+        assert_eq!(decoded.frames.len(), 3);
+
+        let wide = &decoded.frames[0].0;
+        assert_px(wide, 160, 2, 2, RED);
+        assert_px(wide, 160, 157, 87, WHITE);
+
+        // The square monitor: 90 x 90, centred (x 35..125), black bars left and right.
+        let square = &decoded.frames[1].0;
+        assert_px(square, 160, 10, 45, BLACK);
+        assert_px(square, 160, 150, 45, BLACK);
+        assert_px(square, 160, 40, 10, RED);
+        assert_px(square, 160, 120, 10, GREEN);
+        assert_px(square, 160, 40, 80, BLUE);
+        assert_px(square, 160, 120, 80, WHITE);
+
+        // A smaller picture is centred at its own size (x 60..100, y 35..55), not blown up.
+        let small = &decoded.frames[2].0;
+        assert_px(small, 160, 55, 45, BLACK);
+        assert_px(small, 160, 80, 30, BLACK);
+        assert_px(small, 160, 62, 37, RED);
+        assert_px(small, 160, 97, 52, WHITE);
+        Ok(())
+    }
+
+    /// Odd and extreme monitor sizes: every offered size gives an even canvas that keeps the shape,
+    /// and tiny or one-pixel-wide pictures still encode.
+    #[test]
+    fn odd_and_extreme_sizes_give_even_canvases_that_encode()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for &size in &CLIP_SIZES {
+            let (w, h) = fit(1365, 767, size);
+            assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h}");
+            assert_eq!(w.max(h), size.min(1364), "longest side at {size}");
+            let aspect = f64::from(w) / f64::from(h);
+            assert!((aspect - 1365.0 / 767.0).abs() < 0.02, "{w}x{h} at {size}");
+        }
+        assert_eq!(fit(767, 1365, 960), (538, 960), "portrait monitors too");
+        let tmp = tempfile::tempdir()?;
+        for (w, h, max_dim, canvas) in [
+            (1365, 767, 480, (480, 270)),
+            (3, 3, 480, (2, 2)),
+            (1, 7, 480, (2, 6)),
+            (4000, 1, 480, (480, 2)),
+        ] {
+            let (fake, frames) = frames_of(vec![quadrants(w, h), quadrants(w, h)], 400);
+            let decoded = decode(&gif(&fake, &frames, max_dim, tmp.path())?)?;
+            assert_eq!(
+                (u32::from(decoded.width), u32::from(decoded.height)),
+                canvas,
+                "{w}x{h} at {max_dim}"
+            );
+            assert_eq!(decoded.frames.len(), 2);
+        }
+        Ok(())
+    }
+
+    /// The selection limits: nothing or one moment is refused, 300 moments over almost an hour
+    /// make a clip of at most a minute, 301 are refused, and a refusal leaves no file.
+    #[test]
+    fn long_and_empty_selections_are_handled() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let none = gif(&Fake(HashMap::new()), &[], 32, tmp.path());
+        assert!(none.is_err_and(|e| e.contains("at least two")));
+        let (fake, one) = frames_of(vec![quadrants(16, 10)], 500);
+        assert!(gif(&fake, &one, 32, tmp.path()).is_err_and(|e| e.contains("at least two")));
+        let (fake, too_many) = frames_of(
+            (0..=MAX_CLIP_FRAMES).map(|_| quadrants(16, 10)).collect(),
+            10_000,
+        );
+        assert!(
+            gif(&fake, &too_many, 32, tmp.path()).is_err_and(|e| e.contains("more than a clip"))
+        );
+        assert_eq!(
+            std::fs::read_dir(tmp.path())?.count(),
+            0,
+            "refusals write nothing"
+        );
+
+        // 300 moments ten seconds apart: 50 minutes of history, played in about a minute.
+        let path = gif(&fake, &too_many[..MAX_CLIP_FRAMES], 16, tmp.path())?;
+        let decoded = decode(&path)?;
+        assert_eq!(decoded.frames.len(), MAX_CLIP_FRAMES);
+        let total_ms: i64 = decoded
+            .frames
+            .iter()
+            .map(|(_, cs)| i64::from(*cs) * 10)
+            .sum();
+        assert!(
+            total_ms <= MAX_CLIP_MS + 5 * MAX_CLIP_FRAMES as i64,
+            "{total_ms} ms"
+        );
+        assert!(total_ms > MAX_CLIP_MS / 2, "{total_ms} ms");
+        Ok(())
+    }
+
+    /// Which sizes a full 300-moment clip allows depends on the monitor's shape: 16:9 and 16:10
+    /// fit at the largest size, a 4:3 or 5:4 monitor has to step down. The refusal says what to do.
+    #[test]
+    fn a_full_clip_from_a_squarer_monitor_needs_a_smaller_size() {
+        let full = MAX_CLIP_FRAMES;
+        assert!(check_clip(full, fit(2560, 1440, 1280)).is_ok());
+        assert!(check_clip(full, fit(1920, 1200, 1280)).is_ok());
+        let squarer = check_clip(full, fit(1600, 1200, 1280));
+        assert!(squarer.is_err_and(|e| e.contains("smaller size")));
+        assert!(check_clip(full, fit(1600, 1200, 960)).is_ok());
+        assert!(check_clip(full, fit(1280, 1024, 960)).is_ok());
+    }
 }

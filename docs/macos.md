@@ -177,8 +177,11 @@ rules could not be checked on N tick(s)…", `status --json` carries `untitled_a
   stricter option may re-create #33 on Macs whose apps keep untitled helper windows on screen; the
   doctor counts and `untitled_app_window_ticks` on a real Mac are the evidence to decide on.
 - The macOS backend still declares the `window_titles` capability, so the recorder does not refuse
-  to start with title rules, sessions record titles as enforced, and **exported segments carry the
-  `window_titles` tag**, although title rules cannot match untitled windows. Flipping the capability
+  to start with title rules and sessions record titles as enforced, although title rules cannot
+  match untitled windows. (Correction 2026-10-16: exported segments from a Mac do **not** carry the
+  `window_titles` tag, or any tag: `rsrewind export` claims capability tags only on Windows, see
+  `docs/platform-parity.md`. Whether Mac and Linux exports should claim their session's tags, and
+  then whether `window_titles` is among them, is part of the same owner decision.) Flipping the capability
   would make the recorder refuse to start with title rules unless `privacy.unenforced_ok` is set;
   that is the owner's call, not made here.
 - Follow-up, not done: judge title availability **per owner** (an application that reports titles
@@ -188,7 +191,7 @@ rules could not be checked on N tick(s)…", `status --json` carries `untitled_a
 
 The recorder classifies every recording tick and publishes the result in its heartbeat. `rsrewind
 status` prints `⚠ Nothing is being saved since HH:MM:SS: window context unavailable` (or session
-state unknown, capture failing, no displays), `status --json` carries `not_saving` with a `reason`,
+state unknown, capture failing, no displays, saving to disk is failing), `status --json` carries `not_saving` with a `reason`,
 the window's chip reads "Recording · nothing saved: …", the menu bar headline says the same with a
 warning badge, and `doctor` has a "saving" line with how many ticks were skipped for each reason.
 The log gets one warning when the condition starts and one line when saving resumes. Idle and an

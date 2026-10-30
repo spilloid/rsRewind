@@ -6,6 +6,65 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **Moments of the app in front stopped being saved after a forget.** `forget` (and retention) delete
+  the application and window rows nothing references any more, which after "forget the last 10
+  minutes" usually includes the app still in front. The recorder kept using its cached ids, every
+  later moment of that app failed to save (`persist_errors` grew, nothing showed on the timeline)
+  until the recorder was restarted, and each failure left an invisible screenshot behind. It now
+  looks the rows up again. A frame queued just before a `forget` and refused by its fence is no
+  longer counted as an error, and its file is deleted at once; if the file cannot be deleted
+  (another program has it open), that is counted in `persist_errors`, logged, and retried after
+  each later write and at shutdown. If it still cannot be deleted, `rsrewind doctor` lists it as a
+  file without a row. A screen still on display after a `forget` (or after retention deleted its
+  picture) is saved again within a few seconds instead of on its next change.
+- **A full disk no longer looks like "Recording".** When writing fails (disk full, data folder not
+  writable), `rsrewind status`, `status --json` (`not_saving.reason = "storage_failing"`), `doctor`,
+  the window's chip and the tray now say "nothing saved: saving to disk is failing", a screen whose
+  picture failed to save is offered again as soon as the failure is known (tracked per monitor, so
+  another monitor's successful write does not cancel it), and saving resumes by itself, without
+  waiting for the screen to change, once there is room. The log gets one warning per failure streak
+  instead of one per second. New heartbeat gauge: `persist_failing`. No schema change.
+- **Windows: unknown idle time now means "do not record".** If Windows will not report the time
+  since the last input, the recorder treats it as idle (as on Plasma and macOS) instead of as
+  active, so it no longer keeps storing frames when it cannot tell whether anyone is there.
+- **Windows: `rsrewind --data-dir <other folder> stop` stopped the real recorder.** The stop signal
+  was one per Windows session, and `stop` sent it whatever folder it was given. Now each run of the
+  recorder picks a random 64-bit stop token, publishes it in its heartbeat (`stop_token` in
+  `status --json`'s counters) and listens on an event named for it, which exists only while that
+  run does. `stop` requires a live heartbeat in the given folder and signals exactly the event that
+  heartbeat names: if that run exits before the signal, or crashed and left a fresh heartbeat,
+  nothing is signalled, and no other run, whatever its pid, can receive it.
+  A recorder from 0.1.2 or earlier publishes no token and listens on the old per-session event.
+  `stop` no longer uses that event by itself: it says so and sends nothing.
+  `rsrewind stop --legacy-session` sends it on request, and it stops whichever 0.1.2 recorder runs
+  in the session at that moment, even one recording into another folder. A 0.1.2 `rsrewind stop`
+  cannot stop a recorder from this version. The installer never stops a recorder; the tray's Stop
+  and Quit run this version's `stop`, so they do not stop a 0.1.2 recorder still running after an
+  upgrade (use `--legacy-session`, or sign out).
+
+### Added
+
+- `rsrewind doctor` checks free disk space on Linux and macOS too (it was Windows-only), and prints
+  the storage footprint the size limit counts (`recall.db`, its WAL and `media/`) against
+  `max_size_gb`, with a warning when it is more than 10 % over. Its "saving" line also counts failed
+  writes.
+
+### Changed
+
+- `PRIVACY.md` now states what was true but unsaid: the size limit is soft (enforced hourly) and does
+  not count backups, exports, outbox, imported history or logs; a custom `--data-dir` on Windows
+  keeps its parent folder's permissions; Time Machine and other backups copy the history; any
+  program or assistant that can read your files can read it, whatever the MCP settings; nothing
+  detects passwords or one-time codes on screen. The encryption plan points at its design note.
+- Corrected: MCP logs do not record the client's request id (`PRIVACY.md` said they did); exports
+  made on macOS (and Linux) carry no capability tags at all (docs said Mac exports carry
+  `window_titles`); a garbled `backups/recall-v{N}-*.db` path in `PRIVACY.md`.
+- `ROADMAP.md` has an objective 1.0 bar (a four-week pilot, retention at the cap, disk-full,
+  crash, sleep/lock/display and clock drills, privacy and GIF export checks) and a pilot checklist;
+  `docs/platform-parity.md` lists what each platform does and how sure we are.
+
 ## [0.1.2] - 2026-10-16
 
 ### Fixed

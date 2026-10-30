@@ -1,6 +1,7 @@
 //! Operational counters, shared by all recorder threads and published in the heartbeat row.
-//! They count events, never content. Two are gauges rather than counts: `health` (a
-//! [`crate::health::Health`] code) and `health_since_ms` (when it began, Unix ms).
+//! They count events, never content. Three are gauges rather than counts: `health` (a
+//! [`crate::health::Health`] code), `health_since_ms` (when it began, Unix ms) and
+//! `persist_failing` (jobs the persist thread failed since it last wrote anything).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +46,13 @@ counters!(
     untitled_app_window_ticks,
     health,
     health_since_ms,
+    persist_failing,
 );
+
+/// Heartbeat key, not a counter: the recorder run's random stop token where `rsrewind stop`
+/// signals an event named for it (Windows; see [`crate::platform::Lifecycle::stop_token`]).
+/// Absent from heartbeats of recorders up to 0.1.2 and on other platforms.
+pub const STOP_TOKEN_KEY: &str = "stop_token";
 
 pub fn bump(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
@@ -68,7 +75,7 @@ mod tests {
         assert_eq!(snap.get("persisted_states"), Some(&1));
         assert_eq!(snap.get("ocr_ms_total"), Some(&40));
         assert_eq!(snap.get("ticks"), Some(&0));
-        assert_eq!(snap.len(), 22);
+        assert_eq!(snap.len(), 23);
         assert_eq!(snap.get(crate::health::HEALTH_KEY), Some(&0));
         assert_eq!(snap.get(crate::health::HEALTH_SINCE_KEY), Some(&0));
     }
