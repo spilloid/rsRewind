@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
+Hardening toward 1.0. Recording no longer stops after a forget, a full disk is reported instead
+of looking like "Recording", Windows `stop` reaches only the recorder of the folder it is given,
+and the privacy notes say exactly what protects recorded history. The 1.0 bar is now in
+`ROADMAP.md`.
+
 ### Fixed
 
 - **Moments of the app in front stopped being saved after a forget.** `forget` (and retention) delete
@@ -64,6 +71,21 @@ All notable changes to this project are documented in this file. The format foll
 - `ROADMAP.md` has an objective 1.0 bar (a four-week pilot, retention at the cap, disk-full,
   crash, sleep/lock/display and clock drills, privacy and GIF export checks) and a pilot checklist;
   `docs/platform-parity.md` lists what each platform does and how sure we are.
+
+### Known issues
+
+- Everything under 0.1.1 Known issues still applies.
+- The 1.0 pilot and drills in `ROADMAP.md` (four weeks, retention at the cap, disk-full, crash,
+  sleep/lock/display and clock) have not been run yet.
+
+### Upgrade notes
+
+- A 0.1.2 recorder still running after the upgrade can only be stopped with
+  `rsrewind stop --legacy-session` (or by signing out); the tray and plain `stop` send this
+  version's per-run signal, which a 0.1.2 recorder does not listen for.
+- Windows: if Windows cannot report idle time (some services, session 0 and RDP setups), the
+  recorder now records nothing instead of everything.
+- No schema change.
 
 ## [0.1.2] - 2026-10-16
 
